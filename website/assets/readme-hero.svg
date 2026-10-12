@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="420" viewBox="0 0 1280 420" role="img" aria-labelledby="title desc">
+  <title id="title">niko-shot</title>
+  <desc id="desc">把屏幕，变成作品。原生 macOS 截图工作流。</desc>
+  <rect width="1280" height="420" rx="24" fill="#0d1015"/>
+  <g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,sans-serif">
+    <text x="72" y="86" fill="#a5aebd" font-size="17" letter-spacing="3">MADE FOR YOUR MAC</text>
+    <text x="66" y="211" fill="#edf1f7" font-size="110" font-weight="600" letter-spacing="-7">niko-shot</text>
+    <text x="72" y="290" fill="#92b8fa" font-size="33" font-weight="500" letter-spacing="1">把屏幕，变成作品。</text>
+    <text x="72" y="359" fill="#a5aebd" font-size="18">截图 · 标注 · 录屏 · OCR · 翻译 · 长截图</text>
+  </g>
+  <g fill="none" stroke="#92b8fa" stroke-width="11" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M1010 104h-40v40m154-40h40v40m0 130v40h-40m-154-40v40h40"/>
+    <circle cx="1067" cy="209" r="47"/>
+  </g>
+  <circle cx="1067" cy="209" r="9" fill="#92b8fa"/>
+</svg>

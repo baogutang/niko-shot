@@ -1,0 +1,70 @@
+{
+  "providers" : [
+    {
+      "id" : "baidu",
+      "officialURLs" : [
+        "https://fanyi-api.baidu.com/product/11",
+        "https://fanyi-api.baidu.com/manage/developer",
+        "https://fanyi-api.baidu.com/doc/21",
+        "https://fanyi-api.baidu.com/access/0/1"
+      ],
+      "stepCount" : 3,
+      "title" : "开通百度通用翻译"
+    },
+    {
+      "id" : "google",
+      "officialURLs" : [
+        "https://cloud.google.com/translate",
+        "https://console.cloud.google.com/apis/credentials",
+        "https://docs.cloud.google.com/translate/docs/reference/rest/v2/translate",
+        "https://docs.cloud.google.com/translate/docs/setup",
+        "https://console.cloud.google.com/apis/enableflow?apiid=translate.googleapis.com",
+        "https://docs.cloud.google.com/docs/authentication/api-keys",
+        "https://docs.cloud.google.com/translate/docs/authentication"
+      ],
+      "stepCount" : 3,
+      "title" : "开通 Google Cloud Translation"
+    },
+    {
+      "id" : "youdao",
+      "officialURLs" : [
+        "https://ai.youdao.com/new/product-fanyi-text.s",
+        "https://ai.youdao.com/console/",
+        "https://ai.youdao.com/DOCSIRMA/html/trans/api/wbfy/index.html",
+        "https://ai.youdao.com/doc.s"
+      ],
+      "stepCount" : 3,
+      "title" : "开通有道智云文本翻译"
+    },
+    {
+      "id" : "deepl",
+      "officialURLs" : [
+        "https://www.deepl.com/en/developers",
+        "https://www.deepl.com/en/your-account/keys",
+        "https://developers.deepl.com/docs/getting-started/auth",
+        "https://support.deepl.com/hc/en-us/articles/360021200939-DeepL-API-plans",
+        "https://support.deepl.com/hc/en-us/articles/360020695820-API-key-for-DeepL-API"
+      ],
+      "stepCount" : 3,
+      "title" : "开通 DeepL API"
+    },
+    {
+      "id" : "custom",
+      "officialURLs" : [
+        "https://libretranslate.com/",
+        "https://platform.caiyunapp.com/",
+        "https://docs.libretranslate.com/guides/api_usage/",
+        "https://docs.caiyunapp.com/lingocloud-api/index.html",
+        "https://docs.caiyunapp.com/lingocloud-app/lingocloud-web/trans-api.html",
+        "https://portal.libretranslate.com/",
+        "https://docs.libretranslate.com/guides/installation/",
+        "https://docs.libretranslate.com/guides/manage_api_keys/"
+      ],
+      "stepCount" : 3,
+      "title" : "配置自定义 REST 翻译"
+    }
+  ],
+  "source" : "niko-shot/Core/Translate/ProviderSetupGuide.swift",
+  "sourceSHA256" : "9e788115d9b595b03f0f3d3897e6a1c7a56fb3ece782f5f18bc82f8881f3f5b0",
+  "verifiedDate" : "2026-10-13"
+}

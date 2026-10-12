@@ -1,0 +1,110 @@
+<!doctype html>
+<!-- Generated from ProviderSetupGuide.swift. Run the committed generator after changing official guides. -->
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark">
+  <title>翻译接入指南 | niko-shot</title>
+  <meta name="description" content="百度、Google Cloud、有道、DeepL、彩云与 LibreTranslate 的官方申请入口、凭据类型和配置步骤。与 niko-shot 应用内指南同步。">
+  <link rel="canonical" href="https://baogutang.github.io/niko-shot/guide.html">
+  <link rel="icon" type="image/png" href="assets/app-icon.png"><link rel="stylesheet" href="styles.css"><script src="site.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <header class="site-header"><nav class="nav-shell" aria-label="主导航">
+    <a class="wordmark" href="./" aria-label="niko-shot 首页"><img src="assets/app-icon.png" width="36" height="36" alt=""><span>niko-shot</span></a>
+    <div class="nav-links"><a href="./#experience">体验</a><a href="./#workflow">功能</a><a href="guide.html" aria-current="page">接入指南</a></div>
+    <div class="nav-actions"><button class="icon-button theme-toggle" aria-label="切换明暗外观" title="切换明暗外观"><svg aria-hidden="true"><use href="assets/icons.svg#sun"></use></svg></button><a class="icon-button github-link" href="https://github.com/baogutang/niko-shot" aria-label="查看 GitHub 仓库"><svg aria-hidden="true"><use href="assets/icons.svg#brand-github"></use></svg></a><a class="button nav-download" href="./#download">下载 <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div>
+  </nav></header>
+  <main id="main" class="shell">
+    <div class="guide-hero"><p class="eyebrow">连接你的翻译服务</p><h1>申请清楚。<br>配置顺手。</h1><p>选择服务，按步骤开通 API、填入凭据，再在应用里测试连接。所有申请入口均指向各家官方平台。</p><p class="verified-date">官方公开文档核对日期：2026-10-13 · 与应用内指南使用同一份源数据。</p></div>
+    <div class="guide-layout"><nav class="guide-nav" aria-label="翻译服务目录"><a href="#baidu">百度</a><a href="#google">Google</a><a href="#youdao">有道</a><a href="#deepl">DeepL</a><a href="#custom">自定义 REST</a></nav><div>
+      <section class="guide-card" id="baidu" aria-labelledby="title-baidu">
+  <h2 id="title-baidu">开通百度通用翻译</h2>
+  <p class="guide-summary">在百度翻译开放平台开通通用文本翻译 API，取得同一开发者账户的 APP ID 与密钥。</p>
+  <p class="credential-kind">所需凭据 · APP ID / 密钥</p>
+  <div class="guide-steps"><div class="guide-step"><h3>1. 申请服务</h3><p>登录百度翻译开放平台注册开发者，完善平台要求的资料。选择通用文本翻译 API 及服务版本，完成该版本需要的认证与开通。</p><a href="https://fanyi-api.baidu.com/access/0/1">服务开通 · 通用文本翻译 API <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div>
+<div class="guide-step"><h3>2. 填入凭据</h3><p>从同一开发者账户取得 APP ID 与密钥，确认通用文本翻译服务已生效；在本应用百度服务设置中分别填入这两项。</p><a href="https://fanyi-api.baidu.com/manage/developer">开发者控制台 · 百度翻译开放平台 <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div>
+<div class="guide-step"><h3>3. 测试连接</h3><p>保存后点击测试连接，实际请求 Hello, world! → 简体中文。成功时显示译文，失败时在当前服务显示原始错误码或 HTTP 状态。</p><a href="https://fanyi-api.baidu.com/doc/21">参考文档 · 百度通用文本翻译 API <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div></div>
+  <div class="guide-note" aria-label="接入注意事项"><p>本应用接入通用文本翻译 API；申请时请确认服务类型与上述产品一致。</p>
+<p>认证条件、计费和额度以所选服务版本及账户内的最新信息为准。</p>
+<p>如果设置了 IP 限制，需要允许这台 Mac 发送请求时使用的公网出口 IP。</p></div>
+  <h3 class="guide-subheading">官方入口</h3><div class="guide-step official-links"><a href="https://fanyi-api.baidu.com/product/11">产品介绍 · 百度通用文本翻译 API <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
+<a href="https://fanyi-api.baidu.com/manage/developer">开发者控制台 · 百度翻译开放平台 <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
+<a href="https://fanyi-api.baidu.com/doc/21">参考文档 · 百度通用文本翻译 API <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
+<a href="https://fanyi-api.baidu.com/access/0/1">服务开通 · 通用文本翻译 API <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div>
+</section>
+<section class="guide-card" id="google" aria-labelledby="title-google">
+  <h2 id="title-google">开通 Google Cloud Translation</h2>
+  <p class="guide-summary">本应用使用 Cloud Translation Basic v2，通过项目的 API Key 请求文本翻译。</p>
+  <p class="credential-kind">所需凭据 · API Key</p>
+  <div class="guide-steps"><div class="guide-step"><h3>1. 申请服务</h3><p>登录 Google Cloud，创建或选择有管理权限的项目，关联可用的结算账户，并在同一项目启用 Cloud Translation API。官方要求启用计费。</p><a href="https://docs.cloud.google.com/translate/docs/setup">开通指南 · 项目、计费与 API <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div>
+<div class="guide-step"><h3>2. 填入凭据</h3><p>在该项目创建 API Key，将 API 限制设为 Cloud Translation API，应用限制需允许本机 REST 请求。将完整 API Key 填入本应用 Google 服务设置。</p><a href="https://console.cloud.google.com/apis/credentials">凭据控制台 · Google Cloud <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div>
+<div class="guide-step"><h3>3. 测试连接</h3><p>保存后点击测试连接，实际请求 Hello, world! → 简体中文。成功时显示译文，失败时在当前服务显示原始错误码或 HTTP 状态。</p><a href="https://docs.cloud.google.com/translate/docs/reference/rest/v2/translate">参考文档 · Basic v2 translate <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div></div>
+  <div class="guide-note" aria-label="接入注意事项"><p>Basic v2 支持 API Key；Advanced v3 不支持这种认证方式。本应用此处只需要 API Key。</p>
+<p>密钥所属项目必须同时启用 Translation API 与计费；费用和使用额度以 Google Cloud 账户为准。</p>
+<p>网站 Referer、Android 和 iOS 的应用限制不适用于本应用的 macOS REST 请求。使用 IP 限制时填写公网出口 IP，网络变化后需重新核对。</p></div>
+  <h3 class="guide-subheading">官方入口</h3><div class="guide-step official-links"><a href="https://cloud.google.com/translate">产品介绍 · Google Cloud Translation <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
+<a href="https://console.cloud.google.com/apis/credentials">凭据控制台 · Google Cloud <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
+<a href="https://docs.cloud.google.com/translate/docs/reference/rest/v2/translate">参考文档 · Basic v2 translate <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
+<a href="https://docs.cloud.google.com/translate/docs/setup">开通指南 · 项目、计费与 API <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
+<a href="https://console.cloud.google.com/apis/enableflow?apiid=translate.googleapis.com">启用服务 · Cloud Translation API <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
+<a href="https://docs.cloud.google.com/docs/authentication/api-keys">凭据指南 · API Key 与访问限制 <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
+<a href="https://docs.cloud.google.com/translate/docs/authentication">认证说明 · Basic v2 与 Advanced v3 <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div>
+</section>
+<section class="guide-card" id="youdao" aria-labelledby="title-youdao">
+  <h2 id="title-youdao">开通有道智云文本翻译</h2>
+  <p class="guide-summary">在有道智云创建文本翻译的 API 应用，取得应用 ID（appKey）与应用密钥。</p>
+  <p class="credential-kind">所需凭据 · 应用 ID（appKey） / 应用密钥</p>
+  <div class="guide-steps"><div class="guide-step"><h3>1. 申请服务</h3><p>注册有道智云开发者账户并完善资料。创建应用时选择文本翻译服务与 API 接入方式，确认应用已绑定该服务。</p><a href="https://ai.youdao.com/doc.s">接入指南 · 有道智云 <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div>
+<div class="guide-step"><h3>2. 填入凭据</h3><p>从同一智云应用取得应用 ID（接口参数 appKey）及应用密钥，在本应用有道服务设置中分别填入这两项。</p><a href="https://ai.youdao.com/console/">开发者控制台 · 有道智云 <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div>
+<div class="guide-step"><h3>3. 测试连接</h3><p>保存后点击测试连接，实际请求 Hello, world! → 简体中文。成功时显示译文，失败时在当前服务显示原始错误码或 HTTP 状态。</p><a href="https://ai.youdao.com/DOCSIRMA/html/trans/api/wbfy/index.html">参考文档 · 有道文本翻译 API <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div></div>
+  <div class="guide-note" aria-label="接入注意事项"><p>应用 ID 与应用密钥来自智云 API 应用；有道词典会员或账户登录密码不能用于这些输入框。</p>
+<p>应用必须绑定文本翻译服务，并使用 API 接入方式。服务状态、计费及可用额度以智云控制台为准。</p></div>
+  <h3 class="guide-subheading">官方入口</h3><div class="guide-step official-links"><a href="https://ai.youdao.com/new/product-fanyi-text.s">产品介绍 · 有道智云文本翻译 <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
+<a href="https://ai.youdao.com/console/">开发者控制台 · 有道智云 <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
+<a href="https://ai.youdao.com/DOCSIRMA/html/trans/api/wbfy/index.html">参考文档 · 有道文本翻译 API <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
+<a href="https://ai.youdao.com/doc.s">接入指南 · 有道智云 <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div>
+</section>
+<section class="guide-card" id="deepl" aria-labelledby="title-deepl">
+  <h2 id="title-deepl">开通 DeepL API</h2>
+  <p class="guide-summary">选择面向开发者的 DeepL API 套餐并取得 API Auth Key；已有 API Free / Pro 账户可继续使用其有效密钥。</p>
+  <p class="credential-kind">所需凭据 · Auth Key</p>
+  <div class="guide-steps"><div class="guide-step"><h3>1. 申请服务</h3><p>阅读当前 API 套餐说明，选择 Developer API、Growth API 或 Enterprise API，按官方申请流程完成 API 账户开通。已有 API Free / Pro 账户可使用有效密钥。</p><a href="https://support.deepl.com/hc/en-us/articles/360021200939-DeepL-API-plans">申请与套餐说明 · DeepL API <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div>
+<div class="guide-step"><h3>2. 填入凭据</h3><p>在具备 API 权限的账户中创建或复制用于翻译的 API Auth Key，在本应用 DeepL 服务设置中粘贴完整密钥，保留原有后缀。</p><a href="https://www.deepl.com/en/your-account/keys">密钥管理 · DeepL API 账户 <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div>
+<div class="guide-step"><h3>3. 测试连接</h3><p>保存后点击测试连接，实际请求 Hello, world! → 简体中文。成功时显示译文，失败时在当前服务显示原始错误码或 HTTP 状态。</p><a href="https://developers.deepl.com/docs/getting-started/auth">参考文档 · API 端点与认证 <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div></div>
+  <div class="guide-note" aria-label="接入注意事项"><p>截至核对日期，官方说明 API Free 与 API Pro 不再接受新购买；新申请请查看当前 Developer / Growth / Enterprise API 套餐。</p>
+<p>DeepL 网页或桌面翻译订阅与 DeepL API 套餐是不同产品。需要取得具备 API 权限的密钥。</p>
+<p>应用按官方认证规则自动选择端点：以 :fx 结尾的完整密钥使用 api-free.deepl.com，其余使用 api.deepl.com；请勿自行添加或删除后缀。</p>
+<p>当前文档和官方 SDK 保留上述端点规则；新套餐实际发放的密钥后缀与真实账户连通性尚未在本应用中验证。</p></div>
+  <h3 class="guide-subheading">官方入口</h3><div class="guide-step official-links"><a href="https://www.deepl.com/en/developers">产品介绍 · DeepL API <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
+<a href="https://www.deepl.com/en/your-account/keys">密钥管理 · DeepL API 账户 <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
+<a href="https://developers.deepl.com/docs/getting-started/auth">参考文档 · API 端点与认证 <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
+<a href="https://support.deepl.com/hc/en-us/articles/360021200939-DeepL-API-plans">申请与套餐说明 · DeepL API <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
+<a href="https://support.deepl.com/hc/en-us/articles/360020695820-API-key-for-DeepL-API">凭据指南 · DeepL API Key <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div>
+</section>
+<section class="guide-card" id="custom" aria-labelledby="title-custom">
+  <h2 id="title-custom">配置自定义 REST 翻译</h2>
+  <p class="guide-summary">按所选服务申请自己的 API Key / Token，或连接允许免密访问的自托管实例。彩云、官方托管和自托管是不同接入路径，任选适用的一种。</p>
+  <p class="credential-kind">所需凭据 · API Key / Token（需要认证时）</p>
+  <div class="guide-steps"><div class="guide-step"><h3>1. 申请服务</h3><p>按所选服务任选一条路径：彩云在开发者平台注册并申请小译 API Token；LibreTranslate 官方托管在密钥门户购买 API Key；自托管连接自己的实例，有认证时向管理员领取密钥，无认证时可免密。各路径官方入口列在下方。</p><a href="https://docs.caiyunapp.com/lingocloud-api/index.html">申请与参考文档 · 彩云小译 API <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div>
+<div class="guide-step"><h3>2. 填入凭据</h3><p>新建自定义服务并选择预设，填写名称、URL、Headers、Body 与响应路径，需要认证时填入该实例的 API Key / Token。LibreTranslate 免密实例需删除 api_key 字段及模板中全部 $KEY 占位符，密钥可留空。</p><a href="https://platform.caiyunapp.com/">开发者控制台 · 彩云小译 API <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div>
+<div class="guide-step"><h3>3. 测试连接</h3><p>保存后点击测试连接，实际请求 Hello, world! → 简体中文。成功时显示译文，失败时显示原始错误码或 HTTP 状态；检查服务地址、认证、语言和响应路径。</p><a href="https://docs.libretranslate.com/guides/api_usage/">参考文档 · LibreTranslate API <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div></div>
+  <div class="guide-note" aria-label="接入注意事项"><p>彩云小译 App / 网页会员账户与小译 API Token 分属不同产品；请使用开发者平台发放的 API Token。</p>
+<p>LibreTranslate 官方托管密钥来自其官方门户；自托管实例的密钥由实例管理员管理，两者不能互换。</p>
+<p>LibreTranslate 自托管默认可不启用 API Key 验证。预设包含 api_key 和 $KEY；免密实例需删除这些认证内容，无需为本应用强行启用密钥验证。</p>
+<p>只有 URL、Headers 或 Body 模板包含 $KEY 时，本应用才要求该实例的密钥。密钥单独保存在系统钥匙串，不要直接写入模板。</p>
+<p>计费、可用语种和额度由所选服务或自托管实例决定。官方导航使用 HTTPS；本地自托管服务地址按你的部署填写。</p></div>
+  <h3 class="guide-subheading">官方入口</h3><div class="guide-step official-links"><a href="https://libretranslate.com/">产品介绍 · LibreTranslate <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
+<a href="https://platform.caiyunapp.com/">开发者控制台 · 彩云小译 API <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
+<a href="https://docs.libretranslate.com/guides/api_usage/">参考文档 · LibreTranslate API <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
+<a href="https://docs.caiyunapp.com/lingocloud-api/index.html">申请与参考文档 · 彩云小译 API <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
+<a href="https://docs.caiyunapp.com/lingocloud-app/lingocloud-web/trans-api.html">账户说明 · 彩云会员与 API Token <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
+<a href="https://portal.libretranslate.com/">密钥申请 · LibreTranslate 官方托管 <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
+<a href="https://docs.libretranslate.com/guides/installation/">部署指南 · LibreTranslate 自托管 <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
+<a href="https://docs.libretranslate.com/guides/manage_api_keys/">密钥管理 · LibreTranslate 自托管 <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div>
+</section>
+      <p class="guide-footer-note">本页只提供说明与导航，不读取或提交密钥。真实账号连通性仍需你在应用内验证；认证、服务状态、套餐和额度以官方账户当前信息为准。更多模板示例见 <a href="https://github.com/baogutang/niko-shot/blob/main/docs/TRANSLATION.md">翻译配置文档</a>。</p>
+    </div></div>
+  </main>
+  <footer class="site-footer shell"><div><a class="wordmark" href="./"><img src="assets/app-icon.png" width="28" height="28" alt=""><span>niko-shot</span></a><p>为你的下一张截图而做。</p></div><div class="footer-links"><a href="https://github.com/baogutang/niko-shot">GitHub</a><a href="guide.html">接入指南</a><a href="https://github.com/baogutang/niko-shot/issues">反馈问题</a></div><small>© 2026 niko-shot</small></footer>
+</body></html>
