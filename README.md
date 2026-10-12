@@ -2,6 +2,8 @@
 
 原生 macOS 菜单栏截图、录屏、OCR、翻译和滚动长截图工具。唯一功能规格是 [PROMPT.md](PROMPT.md)；B0–B9 均为必交付，阶段顺序用于构建依赖。Swift 6 严格并发，最低 macOS 14，运行时只使用系统框架，没有 WebView、ffmpeg、登录 Helper 或第三方二进制。
 
+当前为可构建、可运行的开发候选。149 项测试及实际干净克隆构建通过；§9 的冷启动和使用后 RSS 预算未达标，账号、外设及 Developer ID 分发验收未全部完成，整体 DoD 尚未通过。
+
 ## 构建与运行
 
 安装 Xcode 和 XcodeGen 后，从项目目录执行两步：
@@ -139,28 +141,30 @@ AppKit 与原生配置停留在 MainActor；像素渲染、识别、拼接、编
 
 | 指标 | 预算 | 当前实测 / 状态 |
 |---|---|---|
-| 冷启动至菜单可用 | <400ms | 修复签名后的最终候选 427.74ms，**这次未达标**；前一候选 415.30ms；旧候选三个独立启动为 348.87、353.98、381.22ms，保留全部原始结果 |
-| 空闲 RSS | <40MB | fresh idle 20/30 秒峰值 32,144 / 30,528 KiB；使用截图、OCR、录屏后关窗仍 381,984 KiB，**使用后未达标** |
-| 空闲 CPU | 0% | 上述短采样全部 0%；external ps，尚不是 Instruments Time Sampler 验收 |
+| 冷启动至菜单可用 | <400ms | 延迟初始化后的最终候选 414.24ms，**这次未达标**；前两候选 427.74ms、415.30ms；旧候选三个独立启动为 348.87、353.98、381.22ms，保留全部原始结果 |
+| 空闲 RSS | <40MB | 最终候选两小时 fresh idle 峰值 32,400 KiB；使用标注、OCR、贴图后关闭全部窗口并等待 15 秒，仍为 334,064 KiB（326.2MiB），**使用后未达标** |
+| 空闲 CPU | 0% | 最终候选两小时 121 次 external ps 采样全部 0%；尚不是 Instruments Time Sampler 验收 |
 | 热键至冻结覆盖窗 | <120ms，4K <200ms | 真实 5K 首次区域覆盖准备 403.91ms；非物理热键、非 4K，不宣称预算通过 |
 | 框选交互 | ProMotion 120fps | 75Hz 屏幕实际 CADisplayLink 74.82fps；120Hz 需对应设备 |
 | 常驻应用进程 | 1 | 重复启动及两个 CLI 同时冷启动后均只有 1 个常驻 PID；两个 CLI 返回相同 OCR 文本 |
 | Release 安装体积 | <15MB | 最终纯 Release universal 应用 6,168 KiB（6.32MB），ad hoc 开发 ZIP 3,116 KiB（3.19MB）；没有第三方运行时二进制 |
 | 1080p30 录屏 CPU | <8% | 真实 SCStream 1920×1080 HEVC/AAC，短 top 样本 4.2%；静态桌面 VFR 平均 23.31fps，持续动态 30fps 预算未验证 |
 | 10000px 长图拼接峰值 | <500MB | 1920×10000 编码约 42MB RSS；含完整 PNG 解码校验的独立进程约 366MB，需区分编码与测试校验 |
-| 退出后资源 | 0 窗口 / 监听 / 计时器 | 实际截图、OCR、录屏后正常退出统计全部 0；贴图和标注后台任务的新清理另有回归，最终候选核对中 |
-| 两小时空闲 | RSS 无增长 | 最终候选从 2026-10-12 23:48:51 开始 7200 秒采样，进行中；前一候选的 21 分钟记录因签名修复中断，不能代替此项 |
+| 退出后资源 | 0 窗口 / 监听 / 计时器 | 最终候选完成录屏设置取消、标注、OCR、贴图后正常退出，全部资源计数 0；PID 与采样器均已退出 |
+| 两小时空闲 | RSS 无增长 | 最终候选 2026-10-13 00:03:16–02:03:16，完整 7200.01 秒、121 次采样；RSS 从 32,352 降至 30,512 KiB，净变化 −1,840 KiB |
 
 `scripts/measure-idle.py` 用外部采样器记录真实进程的 MenuReady 时间、RSS 和 CPU，不向应用加入轮询。默认运行两小时，原始 JSON、终止统计与 display-link 时间戳存于 `build/evidence`。可另外使用 `xcrun xctrace` 的 Time Profiler、Allocations 和 App Launch 模板记录原始 Instruments trace。
 
 最终候选的干净构建与测试已完成：149 项、0 failures、0 编译警告。覆盖真实原生图片/音视频编码、Vision 混排、模板签名、真实本机 HTTP、跨进程自动化、窗口及任务生命周期；实际账号和外设验收范围保持独立。
+
+同一构建已复制至 `~/Applications/niko-shot.app`，主二进制哈希保持一致。原生登录启动开关实际完成启用及注销，最终恢复关闭；没有执行注销登录或重启系统。正常启动安装副本并重启 Shortcuts 后，系统发现全部五个正式动作，最近 OCR 动作在应用运行时和退出后均实际返回公开测试文字；前四个动作的完整捕获仍需对应权限和实机验收。
 
 ## 已知边界与后续
 
 - 系统 ImageIO 没有 WebP 编码，当前输出提供 PNG、JPEG、HEIF、TIFF 和原生 GIF。这是规格中明确的已知限制。
 - macOS 14 功能通过部署目标和严格类型检查覆盖；macOS 14 真机、双屏异 DPI、拔插屏、全屏 Spaces、VoiceOver 和 ProMotion 120Hz 仍必须分别实测。
 - 有效翻译账号和 Developer ID 证书由使用/分发环境提供，不能用 mock 响应或 ad hoc 签名宣称账号连通或公证成功。
-- 使用后空闲 RSS <40MB 目前未达标；独立原生 Vision 混排探针约 270.4MiB。已释放应用持有的图片、窗口和请求，但未找到经过验证的系统模型缓存卸载办法，不能用重启进程或 physical footprint 替换 RSS 指标。
+- 使用后空闲 RSS <40MB 目前未达标。独立原生 Vision 混排探针释放图片和请求后 15 秒，默认设备仍为 207.03MiB；GPU、CPU、Neural Engine 分别为 278.12、374.44、238.92MiB，均未达到预算。未找到经过验证的系统模型缓存卸载办法，不能用重启进程或 physical footprint 替换 RSS 指标。
 - 后续增量可以增加更多自定义 REST 预设、标注样式预设和可复用快捷指令示例。现有 B0–B9 功能保持交付范围，不以路线图替代当前验收。
 
 系统 API 依据：[App Intents](https://developer.apple.com/documentation/appintents/appintent)、[AppKit macOS 14 显示刷新接口](https://developer.apple.com/videos/play/wwdc2023/10054/)、[SMAppService](https://developer.apple.com/documentation/servicemanagement/smappservice)。
