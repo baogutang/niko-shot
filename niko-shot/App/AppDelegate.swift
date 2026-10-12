@@ -11,6 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let captureEngine = CaptureEngine()
     private let selectionSession = SelectionSession()
     private var captureTask: Task<Void, Never>?
+    private let windowList = WindowList()
+    private let countdown = CaptureCountdown()
+    private var lastRegion: CaptureContext?
     private let launchLog = OSLog(subsystem: "com.n1ko.niko-shot", category: "Lifecycle")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -48,13 +51,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             defer { self.captureTask = nil }
             do {
+                try await self.countdown.wait(seconds: AppSettings.shared.captureDelay)
                 let frames = try await self.captureEngine.freezeScreens()
-                self.selectionSession.start(frames: frames) { [weak self] image, context in self?.handleCapture(image, context: context) }
-            } catch { ErrorPresenter.show(error) }
+                let candidates = try await self.windowList.windows()
+                var initial: CaptureContext?
+                if action == .repeatRegion { initial = self.lastRegion ?? self.loadLastRegion(frames: frames) }
+                if action == .fullscreen, let frame = frames.first(where: { $0.screen.frame.contains(NSEvent.mouseLocation) }) ?? frames.first {
+                    initial = CaptureContext(screen: frame.screen, localRect: frame.screen.localBounds, kind: "fullscreen")
+                }
+                self.selectionSession.start(frames: frames, candidates: candidates, kind: action.rawValue, initial: initial) { [weak self] image, context in self?.handleCapture(image, context: context) }
+            } catch is CancellationError {} catch { ErrorPresenter.show(error) }
         }
     }
 
     func handleCapture(_ image: CGImage, context: CaptureContext) {
+        lastRegion = context
+        UserDefaults.standard.set(["screen": Double(context.screen.id), "x": context.localRect.minX, "y": context.localRect.minY, "width": context.localRect.width, "height": context.localRect.height], forKey: "lastRegion")
         Task {
             do {
                 let png = try await Task.detached(priority: .userInitiated) { try ImageUtilities.png(image) }.value
@@ -62,6 +74,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSPasteboard.general.setData(png, forType: .png)
             } catch { ErrorPresenter.show(error) }
         }
+    }
+
+    private func loadLastRegion(frames: [FrozenFrame]) -> CaptureContext? {
+        guard let saved = UserDefaults.standard.dictionary(forKey: "lastRegion") as? [String: Double],
+              let screen = saved["screen"], let x = saved["x"], let y = saved["y"], let width = saved["width"], let height = saved["height"],
+              let frame = frames.first(where: { Double($0.screen.id) == screen }) else { return nil }
+        return CaptureContext(screen: frame.screen, localRect: CGRect(x: x, y: y, width: width, height: height))
     }
 
     func applicationWillTerminate(_ notification: Notification) {

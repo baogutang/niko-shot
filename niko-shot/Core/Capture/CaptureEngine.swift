@@ -37,4 +37,17 @@ final class CaptureEngine {
         guard !result.isEmpty else { throw AppError.imageCreation }
         return result
     }
+
+    /// Captures a preselected window for automation without an overlay or a second capture.
+    func captureWindow(id: UInt32) async throws -> CGImage {
+        try requirePermission()
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        guard let window = content.windows.first(where: { $0.windowID == id && $0.owningApplication?.processID != ProcessInfo.processInfo.processIdentifier }) else { throw AppError.file("窗口已关闭或不可捕获。") }
+        let filter = SCContentFilter(desktopIndependentWindow: window)
+        let config = SCStreamConfiguration()
+        config.width = Int((window.frame.width * CGFloat(filter.pointPixelScale)).rounded())
+        config.height = Int((window.frame.height * CGFloat(filter.pointPixelScale)).rounded())
+        config.showsCursor = false
+        return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+    }
 }

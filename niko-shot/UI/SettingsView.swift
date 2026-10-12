@@ -8,6 +8,9 @@ public struct SettingsView: View {
     @Bindable private var settings: AppSettings
     @Bindable private var hotkeys: HotkeyCenter
     @State private var section: SettingsSection? = .general
+    @State private var presetName = "自定义"
+    @State private var presetWidth = 800
+    @State private var presetHeight = 600
 
     /// Creates a settings shell sharing the application's live preferences and hotkeys.
     public init(settings: AppSettings = .shared, hotkeys: HotkeyCenter) {
@@ -65,9 +68,10 @@ public struct SettingsView: View {
                 }
                 Section("预设尺寸") {
                     ForEach(settings.presetSizes) { preset in
-                        LabeledContent(preset.name, value: "\(Int(preset.width)) × \(Int(preset.height)) pt")
-                            .monospacedDigit()
+                        HStack { LabeledContent(preset.name, value: "\(Int(preset.width)) × \(Int(preset.height)) pt").monospacedDigit(); Button("删除", systemImage: "minus.circle") { settings.presetSizes.removeAll { $0.id == preset.id } }.labelStyle(.iconOnly).accessibilityLabel("删除\(preset.name)") }
                     }
+                    TextField("名称", text: $presetName)
+                    HStack { TextField("宽", value: $presetWidth, format: .number); Text("×"); TextField("高", value: $presetHeight, format: .number); Button("添加") { settings.presetSizes.append(CaptureSizePreset(name: presetName, width: Double(presetWidth), height: Double(presetHeight))) }.disabled(presetWidth <= 0 || presetHeight <= 0 || presetName.isEmpty) }
                 }
             }
         case .annotation:
