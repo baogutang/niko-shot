@@ -50,4 +50,43 @@ final class CaptureEngine {
         config.showsCursor = false
         return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
     }
+
+    /// Prepares one cropped display filter for the active scrolling session instead of enumerating every frame.
+    func regionCapture(screen: ScreenGeometry, rect: CGRect) async throws -> RegionSnapshot {
+        try requirePermission()
+        let clipped = rect.standardized.intersection(screen.localBounds)
+        let pixels = CoordinateSpace.imagePixelRect(fromSelection: clipped, screen: screen)
+        guard !clipped.isNull, pixels.width >= 2, pixels.height >= 2 else { throw AppError.imageCreation }
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        guard let display = content.displays.first(where: { $0.displayID == screen.id }) else {
+            throw AppError.file("目标显示器已断开。")
+        }
+        let own = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
+        let filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
+        let configuration = SCStreamConfiguration()
+        configuration.width = Int(pixels.width); configuration.height = Int(pixels.height)
+        configuration.sourceRect = CGRect(x: pixels.minX / screen.scale, y: pixels.minY / screen.scale,
+                                          width: pixels.width / screen.scale, height: pixels.height / screen.scale)
+        configuration.showsCursor = false; configuration.captureResolution = .best
+        configuration.colorSpaceName = CGColorSpace.sRGB
+        return RegionSnapshot(filter: filter, configuration: configuration)
+    }
+}
+
+/// A session-owned ScreenCaptureKit request; native configuration never crosses actors.
+@MainActor
+final class RegionSnapshot {
+    private let filter: SCContentFilter
+    private let configuration: SCStreamConfiguration
+    init(filter: SCContentFilter, configuration: SCStreamConfiguration) {
+        self.filter = filter; self.configuration = configuration
+    }
+
+    /// Captures a fresh viewport without retaining previous samples or installing any listener.
+    func capture() async throws -> CGImage {
+        try Task.checkCancellation()
+        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+        try Task.checkCancellation()
+        return image
+    }
 }

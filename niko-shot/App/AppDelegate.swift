@@ -25,6 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var ocrWindow: UtilityWindow?
     private var latestOCRText = ""
     private lazy var recording = RecordingCoordinator(engine: captureEngine, selection: selectionSession, windows: windowList)
+    private lazy var scrolling = ScrollCoordinator(engine: captureEngine, selection: selectionSession, windows: windowList,
+                                                   onCapture: { [weak self] image, context in self?.handleCapture(image, context: context) })
     private let launchLog = OSLog(subsystem: "com.n1ko.niko-shot", category: "Lifecycle")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -67,8 +69,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func perform(_ action: CaptureAction) {
         if action == .pins { showPins(); return }
         if action == .togglePins { pinManager.toggleVisibility(); return }
-        guard captureTask == nil, selectionSession.state == .idle, !recording.isBusy else { return }
+        guard captureTask == nil, selectionSession.state == .idle, !recording.isBusy, !scrolling.isBusy else { return }
         if action == .record { recording.showSetup(); return }
+        if action == .scroll { scrolling.select(); return }
         captureTask = Task { [weak self] in
             guard let self else { return }
             defer { self.captureTask = nil }
@@ -87,8 +90,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func handleCapture(_ image: CGImage, context: CaptureContext) {
-        lastRegion = context
-        UserDefaults.standard.set(["screen": Double(context.screen.id), "x": context.localRect.minX, "y": context.localRect.minY, "width": context.localRect.width, "height": context.localRect.height], forKey: "lastRegion")
+        if selectionSession.outputAction == .scroll {
+            if context.screen.id == 0 { scrolling.select() }
+            else { scrolling.showSetup(image: image, context: context) }
+            return
+        }
+        if context.screen.id != 0 {
+            lastRegion = context
+            UserDefaults.standard.set(["screen": Double(context.screen.id), "x": context.localRect.minX, "y": context.localRect.minY, "width": context.localRect.width, "height": context.localRect.height], forKey: "lastRegion")
+        }
         let action = selectionSession.outputAction
         Task {
             do {
@@ -197,8 +207,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard recording.isBusy else { return .terminateNow }
-        Task { await recording.finishForTermination(); NSApp.reply(toApplicationShouldTerminate: true) }
+        guard recording.isBusy || scrolling.isBusy else { return .terminateNow }
+        Task {
+            if recording.isBusy { await recording.finishForTermination() }
+            if scrolling.isBusy { await scrolling.cancel() }
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
         return .terminateLater
     }
 

@@ -31,6 +31,7 @@ targets:
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
     dependencies:
       - sdk: libsqlite3.tbd
+      - sdk: libz.tbd
   NikoShotTests:
     type: bundle.unit-test
     platform: macOS
