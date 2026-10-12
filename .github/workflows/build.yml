@@ -1,0 +1,223 @@
+# Verifies every change and publishes public, traceable development candidates from main only.
+name: Build and publish candidate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: candidate-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+
+jobs:
+  build:
+    name: Clean tests and universal Release
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify toolchain and install XcodeGen
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          set -euo pipefail
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version
+          xcrun swift -version
+          brew install xcodegen
+          xcodegen --version
+          mkdir -p build/evidence
+          xcodegen generate 2>&1 | tee build/evidence/ci-generate.log
+
+      - name: Clean build and hosted tests with strict Swift 6 concurrency
+        run: |
+          set -euo pipefail
+          xcodebuild -scheme niko-shot -configuration Debug -destination 'platform=macOS' \
+            -derivedDataPath build/CI-Debug -resultBundlePath build/evidence/ci-tests.xcresult \
+            -parallel-testing-enabled NO SWIFT_VERSION=6.0 SWIFT_STRICT_CONCURRENCY=complete \
+            SWIFT_TREAT_WARNINGS_AS_ERRORS=YES GCC_TREAT_WARNINGS_AS_ERRORS=YES \
+            CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= \
+            clean build test 2>&1 | tee build/evidence/ci-tests.log
+
+      - name: Prepare optional Developer ID and notarization credentials
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          DEVELOPER_ID_APPLICATION: ${{ secrets.DEVELOPER_ID_APPLICATION }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$CERTIFICATE_P12_BASE64" ]]; then
+            if [[ -n "${CERTIFICATE_PASSWORD}${DEVELOPER_ID_APPLICATION}${APPLE_ID}${APPLE_APP_PASSWORD}${APPLE_TEAM_ID}" ]]; then
+              echo 'Signing credentials are incomplete: configure the P12 certificate or remove the partial configuration.' >&2
+              exit 1
+            fi
+            echo 'No Developer ID configured: this candidate will be ad hoc signed and not notarized.'
+            exit 0
+          fi
+          [[ "$DEVELOPER_ID_APPLICATION" == 'Developer ID Application:'* ]]
+          signing_team="${DEVELOPER_ID_APPLICATION##*\(}"
+          signing_team="${signing_team%\)}"
+          [[ "$signing_team" =~ ^[A-Z0-9]{10}$ ]]
+          signing_dir="$(mktemp -d "$RUNNER_TEMP/niko-shot-signing.XXXXXX")"
+          signing_keychain="$signing_dir/signing.keychain-db"
+          printf 'CI_SIGNING_DIR=%s\nCI_SIGNING_KEYCHAIN=%s\n' "$signing_dir" "$signing_keychain" >> "$GITHUB_ENV"
+          keychain_password="$(openssl rand -hex 32)"
+          echo "::add-mask::$keychain_password"
+          printf '%s' "$CERTIFICATE_P12_BASE64" | base64 -D > "$signing_dir/certificate.p12"
+          chmod 600 "$signing_dir/certificate.p12"
+          security create-keychain -p "$keychain_password" "$signing_keychain"
+          security set-keychain-settings -lut 21600 "$signing_keychain"
+          security unlock-keychain -p "$keychain_password" "$signing_keychain"
+          security import "$signing_dir/certificate.p12" -P "$CERTIFICATE_PASSWORD" -t cert -f pkcs12 \
+            -k "$signing_keychain" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$signing_keychain" >/dev/null
+          security list-keychains -d user -s "$signing_keychain" "$HOME/Library/Keychains/login.keychain-db"
+          rm "$signing_dir/certificate.p12"
+          printf 'CI_SIGNING_IDENTITY=%s\nCI_SIGNING_TEAM=%s\n' "$DEVELOPER_ID_APPLICATION" "$signing_team" >> "$GITHUB_ENV"
+          if [[ -n "${APPLE_ID}${APPLE_APP_PASSWORD}${APPLE_TEAM_ID}" ]]; then
+            : "${APPLE_ID:?Missing APPLE_ID}" "${APPLE_APP_PASSWORD:?Missing APPLE_APP_PASSWORD}" "${APPLE_TEAM_ID:?Missing APPLE_TEAM_ID}"
+            xcrun notarytool store-credentials niko-shot-ci --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+              --password "$APPLE_APP_PASSWORD" --keychain "$signing_keychain" >/dev/null
+            echo 'NOTARY_PROFILE=niko-shot-ci' >> "$GITHUB_ENV"
+          fi
+
+      - name: Build an optimized arm64 and x86_64 application
+        run: |
+          set -euo pipefail
+          xcodebuild -scheme niko-shot -configuration Release -destination 'generic/platform=macOS' \
+            -derivedDataPath build/CI-Release ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO \
+            SWIFT_VERSION=6.0 SWIFT_STRICT_CONCURRENCY=complete SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
+            GCC_TREAT_WARNINGS_AS_ERRORS=YES ENABLE_TESTABILITY=NO CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="${CI_SIGNING_IDENTITY:--}" DEVELOPMENT_TEAM="${CI_SIGNING_TEAM:-}" \
+            CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            clean build 2>&1 | tee build/evidence/ci-release.log
+
+      - name: Verify and package ZIP, DMG, checksums and provenance
+        run: scripts/ci-package.sh build/CI-Release/Build/Products/Release/niko-shot.app build/ci-dist
+
+      - name: Delete temporary signing material
+        if: always()
+        run: |
+          if [[ -n "${CI_SIGNING_KEYCHAIN:-}" && -f "$CI_SIGNING_KEYCHAIN" ]]; then
+            security delete-keychain "$CI_SIGNING_KEYCHAIN"
+          fi
+          if [[ -n "${CI_SIGNING_DIR:-}" && -d "$CI_SIGNING_DIR" ]]; then
+            rm -rf "$CI_SIGNING_DIR"
+          fi
+
+      - name: Preserve build and test evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/evidence/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload tested installation packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: installation-packages
+          path: build/ci-dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish public development candidate
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download this run's tested packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: installation-packages
+          path: distribution
+
+      - name: Verify checksums and write factual release notes
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          (cd distribution && sha256sum --check SHA256SUMS)
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          info = json.loads(Path('distribution/release-info.json').read_text())
+          assert info['commit'] == os.environ['RELEASE_SHA']
+          if info['notarized']:
+              signing = 'Developer ID 签名；Apple 公证已接受，应用与 DMG 均已 staple 并校验。'
+          elif info['signing'] == 'developer-id':
+              signing = 'Developer ID 签名，但未公证；Gatekeeper 仍可能阻止首次打开。'
+          else:
+              signing = 'ad hoc 开发签名，未取得 Developer ID 签名或 Apple 公证。macOS 首次打开可能拦截。'
+          repository = os.environ['RELEASE_REPOSITORY']
+          notes = f'''原生 macOS 开发候选；macOS 14 或更新，Apple Silicon 与 Intel 通用版本。
+
+          {signing}
+
+          下载 DMG 后把 niko-shot.app 拖入 Applications，或解压 ZIP 后复制应用。若首次打开被阻止，请核对来源与 SHA256 后，按 [Apple 官方说明](https://support.apple.com/102445)在系统设置「隐私与安全性」中允许本次打开；不要关闭系统整体安全检查。
+
+          - 应用版本：{info['version']}，构建号 {info['build']}。
+          - 完整提交：[{info['commit']}](https://github.com/{repository}/commit/{info['commit']})。
+          - 干净构建、测试和 universal Release：[本次运行]({info['runUrl']})。
+          - ZIP / DMG 的校验值见 SHA256SUMS；签名、架构与二进制哈希见 release-info.json。
+
+          自动测试通过不代表完整产品验收通过。冷启动、使用后内存及部分账号、外设与系统版本验收仍有边界，见 [验收记录](https://github.com/{repository}/blob/{info['commit']}/docs/ACCEPTANCE.md)。
+
+          每次成功运行另有独立 candidate 标签保留原始资产；nightly 指向 main 的最近成功候选。它们都是预发布，不是已通过整体 DoD 的正式版。
+          '''
+          Path('release-notes.md').write_text(notes)
+          PY
+
+      - name: Preserve this candidate and update nightly downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_RUN_NUMBER: ${{ github.run_number }}
+          RELEASE_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          short_sha="${RELEASE_SHA:0:12}"
+          version="$(python3 -c 'import json; print(json.load(open("distribution/release-info.json"))["version"])')"
+          candidate="candidate-${RELEASE_RUN_NUMBER}-${RELEASE_RUN_ATTEMPT}-${short_sha}"
+          gh release create "$candidate" distribution/* --target "$RELEASE_SHA" --prerelease --latest=false \
+            --title "niko-shot $version candidate $short_sha" --notes-file release-notes.md
+          current_main="$(gh api "repos/$GH_REPO/commits/main" --jq .sha)"
+          if [[ "$current_main" != "$RELEASE_SHA" ]]; then
+            echo 'A newer main commit exists; preserved this candidate without replacing nightly.'
+            exit 0
+          fi
+          if gh release view nightly >/dev/null 2>&1; then
+            gh release upload nightly distribution/* --clobber
+            gh api --method PATCH "repos/$GH_REPO/git/refs/tags/nightly" -f sha="$RELEASE_SHA" -F force=true >/dev/null
+            gh release edit nightly --target "$RELEASE_SHA" --prerelease --latest=false \
+              --title "niko-shot $version nightly $short_sha" --notes-file release-notes.md
+          else
+            gh release create nightly distribution/* --target "$RELEASE_SHA" --prerelease --latest=false \
+              --title "niko-shot $version nightly $short_sha" --notes-file release-notes.md
+          fi
