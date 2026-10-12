@@ -49,15 +49,15 @@ public struct YoudaoProvider: TranslationService {
         return network
     }
     /// Parses result lines and preserves Youdao's numeric errorCode exactly.
-    public static func parseResponse(_ data: Data, statusCode: Int = 200) throws -> TranslationResult {
+    public static func parseResponse(_ data: Data, statusCode: Int = 200, redacting credentials: [String] = []) throws -> TranslationResult {
         if let object = try? TranslationHTTP.json(data), let code = TranslationHTTP.code(object["errorCode"]), code != "0" {
             let fallback: [String: String] = ["108": "应用 ID 无效", "110": "应用无权限", "111": "开发者账号无效",
                                              "202": "签名校验失败", "203": "访问 IP 不在白名单内",
                                              "205": "接口与应用平台类型不一致", "206": "时间戳无效导致签名校验失败",
                                              "207": "重复请求", "411": "访问频率受限", "412": "长请求过于频繁"]
-            throw TranslationError.provider(code: code, message: object["errorMsg"] as? String ?? object["error_msg"] as? String ?? fallback[code] ?? "有道翻译服务错误")
+            throw TranslationHTTP.providerError(code: code, message: object["errorMsg"] as? String ?? object["error_msg"] as? String ?? fallback[code] ?? "有道翻译服务错误", redacting: credentials)
         }
-        try TranslationHTTP.requireSuccess(statusCode, data: data)
+        try TranslationHTTP.requireSuccess(statusCode, data: data, redacting: credentials)
         let object = try TranslationHTTP.json(data)
         guard TranslationHTTP.code(object["errorCode"]) == "0", let lines = object["translation"] as? [String], !lines.isEmpty else { throw TranslationError.decode }
         let source = (object["l"] as? String)?.components(separatedBy: "2").first
@@ -67,8 +67,11 @@ public struct YoudaoProvider: TranslationService {
     /// Calls the classic Youdao API once, without fallback.
     public func translate(_ request: TranslationRequest) async throws -> TranslationResult {
         guard let appKey = credentials.get("youdao.appKey"), let secret = credentials.get("youdao.appSecret") else { throw TranslationError.unconfigured }
-        let network = try Self.makeRequest(request, appKey: appKey, secret: secret)
-        let (data, response) = try await TranslationHTTP.execute(network, session: session)
-        return try Self.parseResponse(data, statusCode: response.statusCode)
+        let values = [appKey, secret]
+        return try await TranslationHTTP.withRedactedErrors(credentials: values) {
+            let network = try Self.makeRequest(request, appKey: appKey, secret: secret)
+            let (data, response) = try await TranslationHTTP.execute(network, session: session)
+            return try Self.parseResponse(data, statusCode: response.statusCode, redacting: values)
+        }
     }
 }

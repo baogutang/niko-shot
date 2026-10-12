@@ -35,9 +35,9 @@ public struct DeepLProvider: TranslationService {
         return network
     }
     /// Supports DeepL's actual detected_source_language field and legacy detect_source samples.
-    public static func parseResponse(_ data: Data, statusCode: Int = 200) throws -> TranslationResult {
+    public static func parseResponse(_ data: Data, statusCode: Int = 200, redacting credentials: [String] = []) throws -> TranslationResult {
         let object = try? TranslationHTTP.json(data)
-        try TranslationHTTP.requireSuccess(statusCode, data: data, message: object?["message"] as? String)
+        try TranslationHTTP.requireSuccess(statusCode, data: data, message: object?["message"] as? String, redacting: credentials)
         guard let results = object?["translations"] as? [[String: Any]], let first = results.first,
               let text = first["text"] as? String else { throw TranslationError.decode }
         return TranslationResult(text: text,
@@ -46,8 +46,10 @@ public struct DeepLProvider: TranslationService {
     /// Calls the selected DeepL endpoint exactly once.
     public func translate(_ request: TranslationRequest) async throws -> TranslationResult {
         guard let key = credentials.get("deepl.key") else { throw TranslationError.unconfigured }
-        let network = try Self.makeRequest(request, key: key)
-        let (data, response) = try await TranslationHTTP.execute(network, session: session)
-        return try Self.parseResponse(data, statusCode: response.statusCode)
+        return try await TranslationHTTP.withRedactedErrors(credentials: [key]) {
+            let network = try Self.makeRequest(request, key: key)
+            let (data, response) = try await TranslationHTTP.execute(network, session: session)
+            return try Self.parseResponse(data, statusCode: response.statusCode, redacting: [key])
+        }
     }
 }

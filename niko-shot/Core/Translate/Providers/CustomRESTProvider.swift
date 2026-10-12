@@ -170,8 +170,8 @@ public struct CustomRESTProvider: TranslationService {
         return network
     }
     /// Extracts a string at a dotted path and retains a status plus 200-character body for HTTP errors.
-    public static func parseResponse(_ data: Data, statusCode: Int = 200, responsePath: String) throws -> TranslationResult {
-        try TranslationHTTP.requireSuccess(statusCode, data: data)
+    public static func parseResponse(_ data: Data, statusCode: Int = 200, responsePath: String, redacting credentials: [String] = []) throws -> TranslationResult {
+        try TranslationHTTP.requireSuccess(statusCode, data: data, redacting: credentials)
         guard var value = try? JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed) else { throw TranslationError.decode }
         let components = responsePath.split(separator: ".", omittingEmptySubsequences: false)
         for component in components {
@@ -185,9 +185,11 @@ public struct CustomRESTProvider: TranslationService {
     /// Calls exactly this configured instance once.
     public func translate(_ request: TranslationRequest) async throws -> TranslationResult {
         let key = credentials.get(configuration.keyAccount) ?? ""
-        let network = try Self.makeRequest(request, configuration: configuration, key: key)
-        let (data, response) = try await TranslationHTTP.execute(network, session: session)
-        return try Self.parseResponse(data, statusCode: response.statusCode, responsePath: configuration.responsePath)
+        return try await TranslationHTTP.withRedactedErrors(credentials: [key]) {
+            let network = try Self.makeRequest(request, configuration: configuration, key: key)
+            let (data, response) = try await TranslationHTTP.execute(network, session: session)
+            return try Self.parseResponse(data, statusCode: response.statusCode, responsePath: configuration.responsePath, redacting: [key])
+        }
     }
     private static func replacing(_ template: String, values: [String: String]) -> String {
         // Scan only the original template. Substituted user text containing "$KEY" stays literal.

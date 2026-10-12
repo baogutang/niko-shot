@@ -27,12 +27,12 @@ public struct GoogleProvider: TranslationService {
         return network
     }
     /// Reads Google's plain text result and displays its structured error message for HTTP failures.
-    public static func parseResponse(_ data: Data, statusCode: Int = 200) throws -> TranslationResult {
+    public static func parseResponse(_ data: Data, statusCode: Int = 200, redacting credentials: [String] = []) throws -> TranslationResult {
         let object = try? TranslationHTTP.json(data)
         let error = object?["error"] as? [String: Any]
-        try TranslationHTTP.requireSuccess(statusCode, data: data, message: error?["message"] as? String)
+        try TranslationHTTP.requireSuccess(statusCode, data: data, message: error?["message"] as? String, redacting: credentials)
         if let error {
-            throw TranslationError.provider(code: TranslationHTTP.code(error["code"]) ?? "unknown", message: error["message"] as? String ?? "Google 翻译服务错误")
+            throw TranslationHTTP.providerError(code: TranslationHTTP.code(error["code"]) ?? "unknown", message: error["message"] as? String ?? "Google 翻译服务错误", redacting: credentials)
         }
         guard let body = object?["data"] as? [String: Any], let results = body["translations"] as? [[String: Any]],
               let first = results.first, let text = first["translatedText"] as? String else { throw TranslationError.decode }
@@ -41,8 +41,10 @@ public struct GoogleProvider: TranslationService {
     /// Calls Google's Basic v2 API exactly once.
     public func translate(_ request: TranslationRequest) async throws -> TranslationResult {
         guard let key = credentials.get("google.key") else { throw TranslationError.unconfigured }
-        let network = try Self.makeRequest(request, key: key)
-        let (data, response) = try await TranslationHTTP.execute(network, session: session)
-        return try Self.parseResponse(data, statusCode: response.statusCode)
+        return try await TranslationHTTP.withRedactedErrors(credentials: [key]) {
+            let network = try Self.makeRequest(request, key: key)
+            let (data, response) = try await TranslationHTTP.execute(network, session: session)
+            return try Self.parseResponse(data, statusCode: response.statusCode, redacting: [key])
+        }
     }
 }

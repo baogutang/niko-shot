@@ -35,11 +35,11 @@ public struct BaiduProvider: TranslationService {
         return network
     }
     /// Parses every result line while preserving Baidu's error code and message.
-    public static func parseResponse(_ data: Data, statusCode: Int = 200) throws -> TranslationResult {
+    public static func parseResponse(_ data: Data, statusCode: Int = 200, redacting credentials: [String] = []) throws -> TranslationResult {
         if let object = try? TranslationHTTP.json(data), let code = TranslationHTTP.code(object["error_code"]), code != "0" {
-            throw TranslationError.provider(code: code, message: object["error_msg"] as? String ?? "百度翻译服务错误")
+            throw TranslationHTTP.providerError(code: code, message: object["error_msg"] as? String ?? "百度翻译服务错误", redacting: credentials)
         }
-        try TranslationHTTP.requireSuccess(statusCode, data: data)
+        try TranslationHTTP.requireSuccess(statusCode, data: data, redacting: credentials)
         let object = try TranslationHTTP.json(data)
         guard let results = object["trans_result"] as? [[String: Any]], !results.isEmpty else { throw TranslationError.decode }
         let lines = try results.map { result -> String in
@@ -52,8 +52,11 @@ public struct BaiduProvider: TranslationService {
     /// Calls the selected Baidu API once without retries.
     public func translate(_ request: TranslationRequest) async throws -> TranslationResult {
         guard let appid = credentials.get("baidu.appid"), let secret = credentials.get("baidu.secret") else { throw TranslationError.unconfigured }
-        let network = try Self.makeRequest(request, appid: appid, secret: secret)
-        let (data, response) = try await TranslationHTTP.execute(network, session: session)
-        return try Self.parseResponse(data, statusCode: response.statusCode)
+        let values = [appid, secret]
+        return try await TranslationHTTP.withRedactedErrors(credentials: values) {
+            let network = try Self.makeRequest(request, appid: appid, secret: secret)
+            let (data, response) = try await TranslationHTTP.execute(network, session: session)
+            return try Self.parseResponse(data, statusCode: response.statusCode, redacting: values)
+        }
     }
 }
