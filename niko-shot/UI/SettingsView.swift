@@ -124,7 +124,14 @@ public struct SettingsView: View {
                         Text("HEVC · 更小体积").tag("hevc")
                         Text("H.264 · 广泛兼容").tag("h264")
                     }.accessibilityLabel("视频编码")
+                    Slider(value: $settings.recordingQuality, in: 0...1) { Text("编码质量") }.accessibilityLabel("录屏编码质量")
                     Toggle("显示光标", isOn: $settings.showsCursor)
+                    Toggle("摄像头画中画", isOn: $settings.recordingCamera)
+                }
+                Section("GIF") {
+                    TextField("最大宽度（像素）", value: $settings.gifWidth, format: .number)
+                    Picker("采样帧率", selection: $settings.gifFPS) { ForEach([5, 10, 15, 24, 30], id: \.self) { Text("\($0) fps").tag($0) } }
+                    Text("默认最多 800px、15fps；导出面板显示预估体积。").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("音频") {
                     Toggle("录制系统声音", isOn: $settings.systemAudio)

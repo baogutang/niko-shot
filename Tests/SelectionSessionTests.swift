@@ -36,4 +36,23 @@ final class SelectionSessionTests: XCTestCase {
         XCTAssertNil(weakSession)
     }
 
+    func testRecordingSelectionCancelIsReportedOnceAndLeavesNoResources() throws {
+        let context = try ImageUtilities.context(width: 64, height: 64)
+        let image = try XCTUnwrap(context.makeImage())
+        let geometry = ScreenGeometry(id: 1, frame: CGRect(x: 0, y: 0, width: 32, height: 32), scale: 2)
+        let session = SelectionSession()
+        session.start(frames: [FrozenFrame(screen: geometry, image: image)],
+                      initial: CaptureContext(screen: geometry, localRect: CGRect(x: 2, y: 2, width: 20, height: 20)),
+                      autoConfirm: false, confirmationTitle: "开始录制") { _, _ in XCTFail("Cancellation produced capture output") }
+        var completions: [Bool] = []
+        session.onFinish = { completions.append($0) }
+        session.beginAnnotation(tool: .rectangle)
+        XCTAssertEqual(session.state, .selected)
+        session.finish(); session.finish()
+        XCTAssertEqual(completions, [false])
+        XCTAssertEqual(session.windowCount, 0)
+        XCTAssertEqual(session.monitorCount, 0)
+        XCTAssertEqual(session.frameCount, 0)
+    }
+
 }

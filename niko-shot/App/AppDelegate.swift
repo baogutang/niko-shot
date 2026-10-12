@@ -8,7 +8,7 @@ import ImageIO
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menu: MainMenuExtra?
-    private var settingsWindow: NSWindow?
+    private var settingsWindow: UtilityWindow?
     private var hotkeys: HotkeyCenter?
     private let captureEngine = CaptureEngine()
     private let selectionSession = SelectionSession()
@@ -19,11 +19,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let pinManager = PinWindowManager()
     private let menuModel = MenuModel()
     private var historyStore: HistoryStore?
-    private var historyWindow: NSWindow?
-    private var pinsWindow: NSWindow?
+    private var historyWindow: UtilityWindow?
+    private var pinsWindow: UtilityWindow?
     private let ocrEngine = OCREngine()
-    private var ocrWindow: NSWindow?
+    private var ocrWindow: UtilityWindow?
     private var latestOCRText = ""
+    private lazy var recording = RecordingCoordinator(engine: captureEngine, selection: selectionSession, windows: windowList)
     private let launchLog = OSLog(subsystem: "com.n1ko.niko-shot", category: "Lifecycle")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -51,11 +52,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func showSettings() {
         if settingsWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 860, height: 620), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
+            let window = UtilityWindow(contentRect: NSRect(x: 0, y: 0, width: 860, height: 620), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
             window.title = "niko-shot 设置"
             window.isReleasedWhenClosed = false
             if let hotkeys { window.contentView = NSHostingView(rootView: SettingsView(hotkeys: hotkeys)) }
             window.center()
+            window.onClose = { [weak self] in self?.settingsWindow = nil }
             settingsWindow = window
         }
         settingsWindow?.makeKeyAndOrderFront(nil)
@@ -65,7 +67,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func perform(_ action: CaptureAction) {
         if action == .pins { showPins(); return }
         if action == .togglePins { pinManager.toggleVisibility(); return }
-        guard captureTask == nil, selectionSession.state == .idle else { return }
+        guard captureTask == nil, selectionSession.state == .idle, !recording.isBusy else { return }
+        if action == .record { recording.showSetup(); return }
         captureTask = Task { [weak self] in
             guard let self else { return }
             defer { self.captureTask = nil }
@@ -128,6 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if historyWindow == nil {
                 let window = makeUtilityWindow(title: "截图历史")
                 window.contentView = NSHostingView(rootView: HistoryView(store: store, onOCR: { [weak self] record in self?.reOCR(record) }, onPin: { [weak self] record in self?.openHistoryImage(record, pin: true) }, onEdit: { [weak self] record in self?.openHistoryImage(record, pin: false) }))
+                window.onClose = { [weak self] in self?.historyWindow = nil }
                 historyWindow = window
             }
             historyWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
@@ -135,11 +139,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     func showPins() {
         pinManager.load()
-        if pinsWindow == nil { let window = makeUtilityWindow(title: "贴图库"); window.contentView = NSHostingView(rootView: PinLibraryView(manager: pinManager)); pinsWindow = window }
+        if pinsWindow == nil { let window = makeUtilityWindow(title: "贴图库"); window.contentView = NSHostingView(rootView: PinLibraryView(manager: pinManager)); window.onClose = { [weak self] in self?.pinsWindow = nil }; pinsWindow = window }
         pinsWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
-    private func makeUtilityWindow(title: String) -> NSWindow {
-        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 820, height: 600), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
+    private func makeUtilityWindow(title: String) -> UtilityWindow {
+        let window = UtilityWindow(contentRect: CGRect(x: 0, y: 0, width: 820, height: 600), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
         window.title = title; window.isReleasedWhenClosed = false; window.center(); return window
     }
     private func openHistoryImage(_ record: HistoryRecord, pin: Bool) {
@@ -170,7 +174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     private func presentOCR(_ model: OCRViewModel) {
-        if ocrWindow == nil { ocrWindow = makeUtilityWindow(title: "识别与翻译") }
+        if ocrWindow == nil { let window = makeUtilityWindow(title: "识别与翻译"); window.onClose = { [weak self] in self?.ocrWindow = nil }; ocrWindow = window }
         ocrWindow?.contentView = NSHostingView(rootView: OCRView(model: model))
         ocrWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
@@ -192,9 +196,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return CaptureContext(screen: frame.screen, localRect: CGRect(x: x, y: y, width: width, height: height))
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard recording.isBusy else { return .terminateNow }
+        Task { await recording.finishForTermination(); NSApp.reply(toApplicationShouldTerminate: true) }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         hotkeys?.stop()
         captureTask?.cancel()
+        countdown.cancel()
         selectionSession.finish()
         pinManager.closeAll()
     }

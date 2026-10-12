@@ -62,6 +62,14 @@ public final class AppSettings {
     public var recordingFPS: Int { didSet { defaults.set(recordingFPS, forKey: "recordingFPS") } }
     /// AVFoundation codec identifier: hevc or h264.
     public var recordingCodec: String { didSet { defaults.set(recordingCodec, forKey: "recordingCodec") } }
+    /// Resolution-scaled recording bitrate quality, from zero to one.
+    public var recordingQuality: Double { didSet { defaults.set(recordingQuality, forKey: "recordingQuality") } }
+    /// Enables camera preview and video compositing only for an active recording.
+    public var recordingCamera: Bool { didSet { defaults.set(recordingCamera, forKey: "recordingCamera") } }
+    /// Maximum GIF output width in pixels.
+    public var gifWidth: Int { didSet { defaults.set(gifWidth, forKey: "gifWidth") } }
+    /// GIF sampling frames per second.
+    public var gifFPS: Int { didSet { defaults.set(gifFPS, forKey: "gifFPS") } }
     /// Includes system sound in a recording.
     public var systemAudio: Bool { didSet { defaults.set(systemAudio, forKey: "systemAudio") } }
     /// Includes microphone audio only when explicitly enabled.
@@ -106,6 +114,11 @@ public final class AppSettings {
         let fps = defaults.integer(forKey: "recordingFPS")
         recordingFPS = [15, 24, 30, 60].contains(fps) ? fps : 30
         recordingCodec = defaults.string(forKey: "recordingCodec") == "h264" ? "h264" : "hevc"
+        recordingQuality = defaults.object(forKey: "recordingQuality") == nil ? 0.65 : min(1, max(0, defaults.double(forKey: "recordingQuality")))
+        recordingCamera = defaults.bool(forKey: "recordingCamera")
+        gifWidth = defaults.object(forKey: "gifWidth") == nil ? 800 : min(4096, max(64, defaults.integer(forKey: "gifWidth")))
+        let gifRate = defaults.integer(forKey: "gifFPS")
+        gifFPS = [5, 10, 15, 24, 30].contains(gifRate) ? gifRate : 15
         systemAudio = defaults.bool(forKey: "systemAudio")
         microphone = defaults.bool(forKey: "microphone")
         showsCursor = defaults.bool(forKey: "showsCursor")

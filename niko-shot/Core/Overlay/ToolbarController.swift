@@ -61,6 +61,7 @@ final class ToolbarController {
     private let onAction: (ToolbarAction) -> Void
     private let onColor: (NSColor) -> Void
     private let onWidth: (CGFloat) -> Void
+    private let confirmationTitle: String?
 
     /// Number of panels retained by the controller, for session teardown assertions.
     var windowCount: Int { panel == nil ? 0 : 1 }
@@ -69,7 +70,8 @@ final class ToolbarController {
     init(onTool: @escaping (AnnotationTool) -> Void,
          onAction: @escaping (ToolbarAction) -> Void,
          onColor: @escaping (NSColor) -> Void,
-         onWidth: @escaping (CGFloat) -> Void) {
+         onWidth: @escaping (CGFloat) -> Void, confirmationTitle: String? = nil) {
+        self.confirmationTitle = confirmationTitle
         self.onTool = onTool
         self.onAction = onAction
         self.onColor = onColor
@@ -104,7 +106,7 @@ final class ToolbarController {
                 }
                 if action == .close { self.close() }
                 self.onAction(action)
-            }, onColor: { [weak self] in self?.onColor($0) }, onWidth: { [weak self] in self?.onWidth($0) })
+            }, onColor: { [weak self] in self?.onColor($0) }, onWidth: { [weak self] in self?.onWidth($0) }, confirmationTitle: confirmationTitle)
             let window = HUDPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             window.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
             window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -223,7 +225,7 @@ private final class HUDContentView: NSVisualEffectView {
     private var configuredSize = CGSize.zero
 
     init(onTool: @escaping (AnnotationTool) -> Void, onAction: @escaping (ToolbarAction) -> Void,
-         onColor: @escaping (NSColor) -> Void, onWidth: @escaping (CGFloat) -> Void) {
+         onColor: @escaping (NSColor) -> Void, onWidth: @escaping (CGFloat) -> Void, confirmationTitle: String? = nil) {
         super.init(frame: .zero)
         material = .hudWindow
         blendingMode = .behindWindow
@@ -243,6 +245,7 @@ private final class HUDContentView: NSVisualEffectView {
             column.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             column.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
         ])
+        if confirmationTitle == nil {
         let tools = Array(AnnotationTool.allCases)
         for start in stride(from: 0, to: tools.count, by: 4) {
             var group: [NSView] = []
@@ -270,11 +273,14 @@ private final class HUDContentView: NSVisualEffectView {
         }
         commandGroups.append(colorButtons)
         commandGroups.append([StrokeWidthControl(onChange: onWidth)])
-        for group in [[ToolbarAction.undo, .redo], [.selection], [.copy, .save, .pin, .ocr, .scroll], [.close]] {
+        }
+        let groups: [[ToolbarAction]] = confirmationTitle == nil ? [[.undo, .redo], [.selection], [.copy, .save, .pin, .ocr, .scroll], [.close]] : [[.copy], [.close]]
+        for group in groups {
             var views: [NSView] = []
             for action in group {
-                let button = HUDIconButton(symbol: action.symbol, title: action.title)
-                button.toolTip = action.keyHint.map { "\(action.title) · \($0)" } ?? action.title
+                let title = action == .copy ? (confirmationTitle ?? action.title) : action.title
+                let button = HUDIconButton(symbol: action == .copy && confirmationTitle != nil ? "checkmark.circle" : action.symbol, title: title)
+                button.toolTip = action.keyHint.map { "\(title) · \($0)" } ?? title
                 button.onPress = { onAction(action) }
                 actionButtons[action] = button
                 views.append(button)

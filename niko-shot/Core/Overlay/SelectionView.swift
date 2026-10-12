@@ -148,6 +148,7 @@ final class SelectionView: NSView {
         hoverLayer.path = CGPath(rect: CGRect(origin: origin, size: candidate.frame.size).intersection(bounds), transform: nil)
     }
     override func mouseDown(with event: NSEvent) {
+        if windowMode { selection = .zero }
         if selection.isEmpty { mouseMoved(with: event) }
         window?.makeFirstResponder(self)
         let point = bounded(convert(event.locationInWindow, from: nil))
@@ -164,7 +165,9 @@ final class SelectionView: NSView {
         loupe.isHidden = true
     }
     override func mouseDragged(with event: NSEvent) {
+        guard !windowMode else { return }
         guard let anchor else { return }
+        selectedWindow = nil; hoverLayer.path = nil
         let point = bounded(convert(event.locationInWindow, from: nil))
         let aspect: CGFloat? = event.modifierFlags.contains(.shift) ? (originalRect.isEmpty ? 1 : originalRect.width / max(1, originalRect.height)) : nil
         if moving { selection = SelectionGeometry.clamp(originalRect.offsetBy(dx: point.x - anchor.x, dy: point.y - anchor.y), bounds: bounds) }

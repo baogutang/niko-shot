@@ -6,6 +6,7 @@ struct CaptureContext: Sendable {
     let localRect: CGRect
     var kind: String = "region"
     var appBundleID: String = ""
+    var windowID: UInt32?
     var globalRect: CGRect { CoordinateSpace.localToGlobal(localRect, screen: screen) }
 }
 
@@ -21,7 +22,9 @@ final class SelectionSession {
     private var activeScreen: UInt32?
     private var completion: ((CGImage, CaptureContext) -> Void)?
     private var captureKind = "region"
+    private var confirmationTitle: String?
     private var appBundleID = ""
+    private var windowID: UInt32?
     private var toolbar: ToolbarController?
     private var canvas: AnnotationCanvasView?
     private var editorContext: CaptureContext?
@@ -29,6 +32,7 @@ final class SelectionSession {
     private var generation = UUID()
     private var resumedDocument: AnnotationDocument?
     private var resumedContext: CaptureContext?
+    var onFinish: ((Bool) -> Void)?
     var outputAction: ToolbarAction = .copy
     private var annotationColor = AnnotationColor.red
     private var annotationWidth: CGFloat = 3
@@ -68,12 +72,13 @@ final class SelectionSession {
     }
 
     /// Starts a snapshot-only session, injectable so teardown can be tested without TCC.
-    func start(frames: [FrozenFrame], candidates: [WindowCandidate] = [], kind: String = "region", initial: CaptureContext? = nil, autoConfirm: Bool = true, completion: @escaping (CGImage, CaptureContext) -> Void) {
+    func start(frames: [FrozenFrame], candidates: [WindowCandidate] = [], kind: String = "region", initial: CaptureContext? = nil, autoConfirm: Bool = true, confirmationTitle: String? = nil, completion: @escaping (CGImage, CaptureContext) -> Void) {
         finish()
         self.completion = completion
         generation = UUID()
         outputAction = .copy
         captureKind = kind
+        self.confirmationTitle = confirmationTitle
         store.replace(frames)
         state = .frozen
         for frame in frames {
@@ -82,12 +87,15 @@ final class SelectionSession {
             view.windowMode = kind == "window"
             view.onSelection = { [weak self, weak view] rect in
                 self?.appBundleID = view?.selectedWindow?.appBundleID ?? ""
+                self?.windowID = view?.selectedWindow?.id
                 self?.select(frame: frame, rect: rect)
             }
             view.onConfirm = { [weak self] in self?.confirm() }
             view.onCancel = { [weak self] in self?.finish() }
-            view.onAnnotate = { [weak self] in self?.beginAnnotation(tool: .rectangle) }
-            view.onSave = { [weak self] in self?.outputAction = .save; self?.confirm() }
+            if confirmationTitle == nil {
+                view.onAnnotate = { [weak self] in self?.beginAnnotation(tool: .rectangle) }
+                view.onSave = { [weak self] in self?.outputAction = .save; self?.confirm() }
+            } else { view.setAccessibilityLabel("选择区域，Enter \(confirmationTitle ?? "确认")，Escape 取消") }
             let window = OverlayWindow(screen: frame.screen, view: view)
             windows.append(window)
             window.makeKeyAndOrderFront(nil)
@@ -114,7 +122,7 @@ final class SelectionSession {
         for window in windows { window.ignoresMouseEvents = (window.contentView as? SelectionView)?.frameInfo.screen.id != activeScreen }
         selected = (frame, rect)
         state = rect.isEmpty ? .selecting : .selected
-        if !rect.isEmpty { showToolbar(context: CaptureContext(screen: frame.screen, localRect: rect, kind: captureKind, appBundleID: appBundleID)) }
+        if !rect.isEmpty { showToolbar(context: CaptureContext(screen: frame.screen, localRect: rect, kind: captureKind, appBundleID: appBundleID, windowID: windowID)) }
     }
 
     private func showToolbar(context: CaptureContext) {
@@ -123,7 +131,7 @@ final class SelectionSession {
                 guard let rgb = color.usingColorSpace(.deviceRGB) else { return }
                 let value = AnnotationColor(red: rgb.redComponent, green: rgb.greenComponent, blue: rgb.blueComponent, alpha: rgb.alphaComponent)
                 self?.annotationColor = value; self?.canvas?.color = value
-            }, onWidth: { [weak self] width in self?.annotationWidth = width; self?.canvas?.strokeWidth = width })
+            }, onWidth: { [weak self] width in self?.annotationWidth = width; self?.canvas?.strokeWidth = width }, confirmationTitle: confirmationTitle)
         }
         if let window = imageEditorWindow { toolbar?.show(near: window.frame, screenFrame: window.screen?.frame ?? NSScreen.main?.frame ?? window.frame) }
         else { toolbar?.show(near: context.globalRect, screenFrame: context.screen.frame) }
@@ -131,12 +139,13 @@ final class SelectionSession {
 
     /// Crops, archives and releases the full-screen backing images before native annotation.
     func beginAnnotation(tool: AnnotationTool) {
+        guard confirmationTitle == nil else { return }
         if let canvas { canvas.tool = tool; toolbar?.setSelectedTool(tool); return }
         if imageEditorWindow != nil, state == .selected { applyEditorCrop(tool: tool); return }
         guard let (frame, rect) = selected, state == .selected else { return }
         state = .annotating
         let token = generation
-        let context = CaptureContext(screen: frame.screen, localRect: rect, kind: captureKind, appBundleID: appBundleID)
+        let context = CaptureContext(screen: frame.screen, localRect: rect, kind: captureKind, appBundleID: appBundleID, windowID: windowID)
         let pixels = CoordinateSpace.imagePixelRect(fromSelection: rect, screen: frame.screen)
         Task { [weak self] in
             do {
@@ -251,7 +260,7 @@ final class SelectionSession {
                 do {
                     let image = try await Task.detached(priority: .userInitiated) { try AnnotationRenderer.render(base: base, document: document, scale: scale) }.value
                     guard let self, self.generation == token, self.state == .exporting else { return }
-                    self.finish(); callback?(image, context)
+                    self.finish(completed: true); callback?(image, context)
                 } catch { self?.finish(); ErrorPresenter.show(error) }
             }
             return
@@ -262,17 +271,18 @@ final class SelectionSession {
         state = .exporting
         let callback = completion
         let token = generation
-        let context = CaptureContext(screen: frame.screen, localRect: rect, kind: captureKind, appBundleID: appBundleID)
+        let context = CaptureContext(screen: frame.screen, localRect: rect, kind: captureKind, appBundleID: appBundleID, windowID: windowID)
         Task { [weak self] in
             let image = await Task.detached(priority: .userInitiated) { frame.image.cropping(to: pixels) }.value
             guard let self, self.generation == token, self.state == .exporting else { return }
-            self.finish()
+            self.finish(completed: image != nil)
             if let image { callback?(image, context) }
         }
     }
 
     /// Closes all overlays and removes listeners; also used for cancellation and display changes.
-    func finish() {
+    func finish(completed: Bool = false) {
+        let didFinish = onFinish; onFinish = nil
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
         if let view = (imageEditorWindow?.contentView as? NSScrollView)?.documentView as? SelectionView {
@@ -292,6 +302,7 @@ final class SelectionSession {
         store.clear()
         selected = nil
         activeScreen = nil
+        appBundleID = ""; windowID = nil; confirmationTitle = nil
         completion = nil
         monitorCount = 0
         toolbar?.close(); toolbar = nil
@@ -301,5 +312,6 @@ final class SelectionSession {
         archive = nil
         generation = UUID()
         state = .idle
+        didFinish?(completed)
     }
 }

@@ -28,6 +28,14 @@ enum ErrorPresenter {
         alert.informativeText = error.localizedDescription
         alert.alertStyle = .warning
         alert.addButton(withTitle: "好")
-        alert.runModal()
+        let permission: String?
+        if let native = error as? AppError, case .permission(let name) = native { permission = name }
+        else if let recording = error as? RecordingError, case .permission(let name) = recording { permission = name }
+        else { permission = nil }
+        if permission != nil { alert.addButton(withTitle: "打开系统设置") }
+        if alert.runModal() == .alertSecondButtonReturn, let permission {
+            let pane = permission.contains("摄像头") ? "Camera" : permission.contains("麦克风") ? "Microphone" : permission.contains("辅助功能") ? "Accessibility" : "ScreenCapture"
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_\(pane)") { NSWorkspace.shared.open(url) }
+        }
     }
 }
