@@ -27,6 +27,9 @@
   const updatePreview = () => {
     if (!nativeImage) return;
     nativeImage.src = `assets/app-${preview}${isDark() ? "-dark" : ""}.png`;
+    const stem = `assets/app-${preview}${isDark() ? "-dark" : ""}`;
+    nativeImage.srcset = `${stem}-compact.png ${previewImages[preview].width / 2}w, ${stem}.png ${previewImages[preview].width}w`;
+    nativeImage.sizes = "(max-width: 720px) calc(100vw - 88px), (max-width: 980px) calc(100vw - 152px), 1080px";
     nativeImage.alt = previewImages[preview].alt;
     nativeImage.width = previewImages[preview].width;
     nativeImage.height = previewImages[preview].height;
@@ -277,8 +280,18 @@
   });
   source.onload = () => { announce("拖动框选，按 A 画箭头，Enter 确认。"); requestDraw(); };
   source.onerror = () => { announce("演示图片暂时无法载入，请刷新页面。下载和接入指南仍可使用。"); sizeLabel.textContent = "图片载入失败"; document.querySelectorAll(".lab-toolbar button").forEach(button => button.disabled = true); playButton.disabled = true; };
-  source.src = "assets/capture-sculpture.png";
+  // Load the full-resolution demo when it enters view; the hero has its own responsive source.
+  let imageObserver = null;
+  if ("IntersectionObserver" in window) {
+    imageObserver = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) {
+        source.src = "assets/capture-sculpture.jpg";
+        imageObserver.disconnect();
+      }
+    });
+    imageObserver.observe(lab);
+  } else source.src = "assets/capture-sculpture.jpg";
   document.addEventListener("visibilitychange", () => { if (document.hidden) stopDemo(); });
   reducedMotion.addEventListener("change", () => { if (reducedMotion.matches) stopDemo(); });
-  window.addEventListener("pagehide", () => { stopDemo(); if (frame) cancelAnimationFrame(frame); }, { once: true });
+  window.addEventListener("pagehide", () => { stopDemo(); imageObserver?.disconnect(); if (frame) cancelAnimationFrame(frame); }, { once: true });
 })();

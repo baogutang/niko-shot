@@ -54,6 +54,11 @@ class Page(HTMLParser):
         for name in ("href", "src"):
             if name in attrs:
                 self.references.append(attrs[name])
+        for name in ("srcset", "imagesrcset"):
+            for item in attrs.get(name, "").split(","):
+                tokens = item.split()
+                if tokens:
+                    self.references.append(tokens[0])
         for target in attrs.get("aria-controls", "").split():
             self.references.append("#" + target)
         if tag == "a" and attrs.get("target") == "_blank":
@@ -121,6 +126,16 @@ for preview in ("ocr", "settings", "recording", "scroll"):
         require((SITE / "assets" / f"app-{preview}{theme}.png").is_file(), f"Missing native {preview}{theme} preview")
 require((SITE / "assets/TABLER-LICENSE.txt").is_file(), "Bundled icons need their original license")
 require((SITE / "assets/readme-hero.svg").is_file(), "README brand banner missing")
+for variant, limit in (("", 260_000), ("-800", 80_000)):
+    image = SITE / "assets" / f"capture-sculpture{variant}.jpg"
+    require(image.is_file(), f"Missing responsive hero image: {image.name}")
+    if image.is_file():
+        require(image.read_bytes().startswith(b"\xff\xd8\xff"), f"Invalid hero JPEG: {image.name}")
+        require(image.stat().st_size < limit, f"Hero exceeds delivery size budget: {image.name}")
+for preview in ("ocr", "settings", "recording", "scroll", "annotation"):
+    for theme in (("",) if preview == "annotation" else ("", "-dark")):
+        require((SITE / "assets" / f"app-{preview}{theme}-compact.png").is_file(),
+                f"Missing compact native {preview}{theme} preview")
 css = (SITE / "styles.css").read_text()
 for accommodation in ("prefers-reduced-motion:reduce", "prefers-reduced-transparency:reduce", '[data-theme="dark"]', ":focus-visible"):
     require(accommodation in css, f"Missing appearance/accessibility accommodation: {accommodation}")

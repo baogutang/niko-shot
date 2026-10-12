@@ -16,7 +16,7 @@
 
 ## 素材与动效
 
-- `website/assets/capture-sculpture.png`：为本项目生成的原创光学雕塑视觉，亦用作画布公开样例。
+- `docs/website/capture-sculpture-source.png`：为本项目生成的原创光学雕塑源图；网页仅编码为完整 / 800px JPEG，分别 213,068 / 60,379 字节，不改变视觉内容。首屏按视口取图，完整画布图片进入视口后才加载。
 - `app-*.png`：当前 AppKit / SwiftUI 窗口离屏预览，浅深色成对；不含个人屏幕或账号信息。
 - `app-icon.png` 与 `readme-hero.svg`：应用图标和项目字标横幅。
 - `icons.svg`：Tabler 官方图标，许可证随文件存放在 `TABLER-LICENSE.txt`。
