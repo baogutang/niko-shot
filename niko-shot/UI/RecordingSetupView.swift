@@ -34,8 +34,9 @@ struct RecordingSetupView: View {
     private let onCancel: () -> Void
 
     /// Creates a recording setup form without requesting permissions during preference editing.
-    init(settings: AppSettings = .shared, onStart: @escaping (RecordingSelectionMode) -> Void, onCancel: @escaping () -> Void) {
+    init(settings: AppSettings = .shared, onStart: @escaping (RecordingSelectionMode) -> Void, onCancel: @escaping () -> Void, initialMode: RecordingSelectionMode = .region) {
         self.settings = settings
+        _mode = State(initialValue: initialMode)
         self.onStart = onStart
         self.onCancel = onCancel
     }

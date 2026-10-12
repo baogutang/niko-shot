@@ -6,9 +6,11 @@
 |---|---|---|
 | 百度 | APP ID、密钥 | [百度通用翻译 API](https://fanyi-api.baidu.com/doc_bd/21)；启用通用翻译服务，使用原始 UTF-8 文本计算 MD5 签名 |
 | Google | API Key | [Cloud Translation Basic v2](https://docs.cloud.google.com/translate/docs/reference/rest/v2/translate)；项目启用 API 与计费，密钥允许 Translation API；使用经典 `nmt` 模型 |
-| 有道 | 应用 ID（appKey）、应用密钥 | [智云文本翻译](https://ai.youdao.com/DOCSIRMA/html/transapi/trans/api/wbfy/index.html)；应用绑定文本翻译服务，使用 v3 SHA256 签名 |
+| 有道 | 应用 ID（appKey）、应用密钥 | [智云文本翻译](https://ai.youdao.com/DOCSIRMA/html/trans/api/wbfy/index.html)；应用绑定文本翻译服务，使用 v3 SHA256 签名 |
 | DeepL | Auth Key | [DeepL API](https://www.deepl.com/en/developers)；以 `:fx` 结尾自动使用 Free 接口，其余使用 Pro 接口；繁体中文目标码为 `ZH-HANT`；请求显式选择 `latency_optimized` |
 | 自定义 REST | 模板及独立 API Key | 支持任意 HTTP/HTTPS REST 翻译服务；内置彩云小译与 LibreTranslate 模板，可编辑服务地址与语言约定 |
+
+有道签名采用[官方 Python3 示例](https://download.ydstatic.com/ead/TranslateDemo-py1.zip)中 `AuthV3Util.py` 的 Unicode 码点计数与切片：原文超过 20 个码点时，取前 10 个码点、十进制码点总数和后 10 个码点拼接；其余使用完整原文，再按 UTF-8 计算 SHA256。组合字符分别计数，原文不做 NFC/NFD 转换。官方网页的 JavaScript 示例采用 UTF-16 代码单元，因此超 BMP 字符（如部分 Emoji）与 Python3 示例的签名可能不同；本应用选择保留有效 UTF-8 的 Python3 规则。这些输入仍须使用真实有道账号验证，离线向量通过不表示 Emoji 已经在真实服务上翻译成功。
 
 所有凭据写入系统钥匙串，服务名为 `com.n1ko.niko-shot`。设置不会回显已存密钥；输入框的 `••••` 仅表示已有凭据。空输入不会覆盖已有值，删除使用单独按钮。复制密钥是显式操作，请按需要使用。模板及语言偏好保存在 UserDefaults，密钥不进入模板持久化或历史数据库。
 

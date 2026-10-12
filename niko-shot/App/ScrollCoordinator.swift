@@ -26,18 +26,47 @@ final class ScrollCoordinator {
     private var previewFile: URL?
     private var screenObserver: NSObjectProtocol?
     private var manualReason: String?
+    private var automationID: UUID?
+    private var automationCompletion: ((Result<(CGImage, CaptureContext), Error>) -> Void)?
     private(set) var isBusy = false
     var resourceCounts: [String: Int] {
         ["operation": operationTask == nil ? 0 : 1, "loop": loopTask == nil ? 0 : 1,
          "cleanup": cleanupTask == nil ? 0 : 1, "capture": capture == nil ? 0 : 1,
          "worker": session == nil ? 0 : 1, "pendingImage": pendingImage == nil ? 0 : 1,
          "setup": setupWindow == nil ? 0 : 1, "controls": controls?.windowCount ?? 0,
-         "displayObserver": screenObserver == nil ? 0 : 1]
+         "displayObserver": screenObserver == nil ? 0 : 1,
+         "automation": automationCompletion == nil ? 0 : 1]
     }
 
     init(engine: CaptureEngine, selection: SelectionSession, windows: WindowList,
          onCapture: @escaping (CGImage, CaptureContext) -> Void) {
         self.engine = engine; self.selection = selection; self.windows = windows; self.onCapture = onCapture
+    }
+
+    /// Selects, stitches and edits through the regular native workflow, resuming on output or cancellation.
+    func captureForAutomation() async throws -> (CGImage, CaptureContext) {
+        guard !isBusy, selection.state == .idle, automationCompletion == nil else {
+            throw AppError.file("已有长截图或截图会话正在进行。")
+        }
+        try Task.checkCancellation()
+        let id = UUID(); automationID = id
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                automationCompletion = { continuation.resume(with: $0) }
+                select()
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                guard let self, self.automationID == id else { return }
+                await self.cancel()
+            }
+        }
+    }
+
+    private func completeAutomation(_ result: Result<(CGImage, CaptureContext), Error>) {
+        let callback = automationCompletion
+        automationCompletion = nil; automationID = nil
+        callback?(result)
     }
 
     /// Starts the same frozen-frame region selector used by screenshots.
@@ -60,7 +89,9 @@ final class ScrollCoordinator {
                     }
                     self?.showSetup(image: image, context: selected)
                 }
-                self.selection.onFinish = { [weak self] completed in if !completed { self?.isBusy = false } }
+                self.selection.onFinish = { [weak self] completed in
+                    if !completed { self?.isBusy = false; self?.completeAutomation(.failure(CancellationError())) }
+                }
             } catch is CancellationError { await self.cleanup(token: token) }
             catch { await self.fail(error, token: token) }
         }
@@ -73,10 +104,15 @@ final class ScrollCoordinator {
         let window = UtilityWindow(contentRect: CGRect(x: 0, y: 0, width: 640, height: 740),
                                    styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "滚动长截图"; window.isReleasedWhenClosed = false
-        window.onClose = { [weak self] in self?.setupWindow = nil; self?.isBusy = false }
+        window.onClose = { [weak self] in
+            self?.setupWindow = nil; self?.isBusy = false
+            self?.completeAutomation(.failure(CancellationError()))
+        }
         window.contentView = NSHostingView(rootView: ScrollSetupView(image: image, scale: context.screen.scale,
             automaticAllowed: AutoScroller.isAuthorized, onStart: { [weak self] mode, top, bottom in
-                self?.setupWindow?.close(); self?.start(context: context, mode: mode, top: top, bottom: bottom)
+                guard let self else { return }
+                self.setupWindow?.onClose = nil; self.setupWindow?.close(); self.setupWindow = nil; self.isBusy = false
+                self.start(context: context, mode: mode, top: top, bottom: bottom)
             }, onOpenAccessibility: { AutoScroller.openSettings() }, onCancel: { [weak self] in self?.setupWindow?.close() }))
         setupWindow = window; window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
@@ -323,10 +359,15 @@ final class ScrollCoordinator {
                 self.selection.edit(image: image, pointSize: CGSize(width: CGFloat(image.width) / context.screen.scale,
                     height: CGFloat(image.height) / context.screen.scale), kind: "scroll") { [weak self] edited, editedContext in
                     var editedContext = editedContext; editedContext.appBundleID = context.appBundleID
-                    self?.onCapture(edited, editedContext)
+                    guard let self else { return }
+                    if self.automationCompletion != nil { self.completeAutomation(.success((edited, editedContext))) }
+                    else { self.onCapture(edited, editedContext) }
                 }
                 // The preview is eagerly decoded, so its temporary source can be removed when the editor closes.
-                self.selection.onFinish = { _ in try? FileManager.default.removeItem(at: output) }
+                self.selection.onFinish = { [weak self] completed in
+                    try? FileManager.default.removeItem(at: output)
+                    if !completed { self?.completeAutomation(.failure(CancellationError())) }
+                }
                 CompletionNotifications.post(title: "长截图拼接完成", message: "已进入标注预览，可复制或保存。", file: output)
             } catch is CancellationError { await self.cleanup(token: token) }
             catch { await self.fail(error, token: token) }
@@ -350,14 +391,16 @@ final class ScrollCoordinator {
 
     private func fail(_ error: Error, token: UUID) async {
         guard generation == token, !Task.isCancelled else { return }
+        let automated = automationCompletion != nil
         let ended = UUID()
-        await cleanup(token: token, replacement: ended)
+        await cleanup(token: token, replacement: ended, error: error)
+        if automated { return }
         // Cancellation or a newer session can arrive while the disk worker releases its chunks.
         guard generation == ended, !Task.isCancelled, cleanupTask == nil else { return }
         ErrorPresenter.show(error)
     }
 
-    private func cleanup(token: UUID, keepBusy: Bool = false, replacement: UUID = UUID()) async {
+    private func cleanup(token: UUID, keepBusy: Bool = false, replacement: UUID = UUID(), error: Error? = nil) async {
         guard generation == token else { return }
         generation = replacement; loopID = UUID()
         let worker = session
@@ -374,6 +417,7 @@ final class ScrollCoordinator {
         manualReason = nil
         state.isPaused = false; state.isMatching = false; state.correlation = nil
         isBusy = keepBusy
+        completeAutomation(.failure(error ?? CancellationError()))
     }
 
     private func removeScreenObserver() {

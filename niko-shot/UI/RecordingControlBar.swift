@@ -11,17 +11,20 @@ final class RecordingControlBarController {
     private let onStop: () -> Void
     private let onCancel: () -> Void
     private let onCamera: (Bool) -> Void
+    private let format: String
 
     /// Live HUD window count for coordinator teardown assertions.
     var windowCount: Int { panel == nil ? 0 : 1 }
 
     /// Creates controls without a window or any independent duration timer.
     init(session: RecordingSession, onStop: @escaping () -> Void,
-         onCancel: @escaping () -> Void, onCamera: @escaping (Bool) -> Void) {
+         onCancel: @escaping () -> Void, onCamera: @escaping (Bool) -> Void,
+         format: String = "mp4") {
         self.session = session
         self.onStop = onStop
         self.onCancel = onCancel
         self.onCamera = onCamera
+        self.format = format.lowercased() == "gif" ? "GIF" : "MP4"
     }
 
     deinit {
@@ -51,6 +54,7 @@ final class RecordingControlBarController {
         window.becomesKeyOnlyIfNeeded = false
         window.isMovableByWindowBackground = true
         window.setAccessibilityLabel("录屏控制条")
+        window.setAccessibilityHelp("当前录制格式 \(format)")
         let effect = RecordingHUDMaterial(frame: CGRect(origin: .zero, size: size))
         effect.material = .hudWindow
         effect.blendingMode = .behindWindow
@@ -58,7 +62,7 @@ final class RecordingControlBarController {
         effect.wantsLayer = true
         effect.layer?.cornerRadius = 22
         effect.layer?.masksToBounds = true
-        let hosting = NSHostingView(rootView: RecordingControlBar(session: session,
+        let hosting = NSHostingView(rootView: RecordingControlBar(session: session, format: format,
                                                                  onStop: { [weak self] in self?.onStop() },
                                                                  onCancel: { [weak self] in self?.onCancel() },
                                                                  onCamera: { [weak self] in self?.onCamera($0) },
@@ -107,6 +111,7 @@ final class RecordingControlBarController {
 @MainActor
 private struct RecordingControlBar: View {
     @Bindable var session: RecordingSession
+    let format: String
     let onStop: () -> Void
     let onCancel: () -> Void
     let onCamera: (Bool) -> Void
@@ -123,7 +128,8 @@ private struct RecordingControlBar: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(durationLabel).font(.system(size: 15, weight: .medium, design: .monospaced)).monospacedDigit()
                             .accessibilityLabel("录制时长 \(durationLabel)")
-                        Text(stateTitle).font(.caption2).foregroundStyle(.secondary)
+                        Text("\(format) · \(stateTitle)").font(.caption2).foregroundStyle(.secondary)
+                            .accessibilityLabel("录制格式 \(format)，\(stateTitle)")
                     }
                 }.frame(width: 115, alignment: .leading)
                 Divider().frame(height: 26).padding(.horizontal, 3)

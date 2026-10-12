@@ -13,7 +13,7 @@ final class SelectionView: NSView {
     var candidates: [WindowCandidate] = []
     var windowMode = false
     var selectedWindow: WindowCandidate?
-    var selection: CGRect = .zero { didSet { updateLayers() } }
+    var selection: CGRect = .zero { didSet { updateAccessibilitySize(); displayUpdates?.markDirty() } }
     private var anchor: CGPoint?
     private let dim = CAShapeLayer()
     private let border = CAShapeLayer()
@@ -31,6 +31,14 @@ final class SelectionView: NSView {
     private var resizeHandle: Int?
     private var moving = false
     private var colorTask: Task<Void, Never>?
+    private var displayUpdates: ActiveDisplayLink?
+    private var lastDisplayStatistics = ActiveDisplayLink.Statistics()
+    private var hoverRect: CGRect?
+    private var loupeVisible = false
+    /// Active native display links; a detached or finished selection owns none.
+    var displayLinkCount: Int { displayUpdates?.isActive == true ? 1 : 0 }
+    /// Real callback timing retained after explicit teardown for session measurements.
+    var displayLinkStatistics: ActiveDisplayLink.Statistics { displayUpdates?.statistics ?? lastDisplayStatistics }
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
 
@@ -58,7 +66,8 @@ final class SelectionView: NSView {
         hoverLayer.strokeColor = NSColor.controlAccentColor.cgColor
         hoverLayer.lineWidth = 1 / frameInfo.screen.scale
         hoverLayer.shadowColor = NSColor.controlAccentColor.cgColor
-        hoverLayer.shadowOpacity = 0.7; hoverLayer.shadowRadius = 5
+        hoverLayer.shadowOpacity = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.7
+        hoverLayer.shadowRadius = 5
         loupe.bounds = CGRect(x: 0, y: 0, width: 112, height: 112)
         loupe.cornerRadius = 12; loupe.masksToBounds = true
         loupe.contents = frameInfo.image
@@ -76,6 +85,38 @@ final class SelectionView: NSView {
     }
     required init?(coder: NSCoder) { return nil }
 
+    deinit { colorTask?.cancel() }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil else { stopDisplayUpdates(); return }
+        if displayUpdates == nil { displayUpdates = ActiveDisplayLink { [weak self] in self?.updateLayers() } }
+        displayUpdates?.start(in: self)
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { stopDisplayUpdates() }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    /// Stops native frame callbacks and pending pixel sampling before a window or stage is released.
+    func stopDisplayUpdates() {
+        if let displayUpdates {
+            lastDisplayStatistics = displayUpdates.statistics
+            displayUpdates.invalidate()
+        }
+        displayUpdates = nil
+        colorTask?.cancel()
+        colorTask = nil
+    }
+
+    private var sizeLabel: String {
+        let scale = AppSettings.shared.showsPixels ? frameInfo.screen.scale : 1
+        return "\(Int((selection.width * scale).rounded())) × \(Int((selection.height * scale).rounded())) \(scale == 1 ? "pt" : "px")"
+    }
+
+    private func updateAccessibilitySize() { setAccessibilityValue(sizeLabel) }
+
     private func updateLayers() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -88,11 +129,18 @@ final class SelectionView: NSView {
         if !selection.isEmpty { for point in SelectionGeometry.handles(selection) { handlePath.addEllipse(in: CGRect(x: point.x - 3, y: point.y - 3, width: 6, height: 6)) } }
         handlesLayer.path = handlePath
         badge.isHidden = selection.isEmpty
-        let scale = AppSettings.shared.showsPixels ? frameInfo.screen.scale : 1
-        let size = "\(Int((selection.width * scale).rounded())) × \(Int((selection.height * scale).rounded())) \(scale == 1 ? "pt" : "px")"
-        badge.string = size
+        badge.string = sizeLabel
         badge.frame = CGRect(x: min(max(8, selection.midX - 78), bounds.width - 164), y: max(frameInfo.screen.safeTop + 8, selection.minY - 34), width: 156, height: 26)
-        setAccessibilityValue(size)
+        hoverLayer.path = hoverRect.map { CGPath(rect: $0, transform: nil) }
+        loupe.isHidden = !loupeVisible
+        if loupeVisible {
+            let scale = frameInfo.screen.scale
+            let image = frameInfo.image
+            loupe.frame.origin = CGPoint(x: min(lastPoint.x + 22, bounds.width - 120), y: max(frameInfo.screen.safeTop + 4, min(lastPoint.y + 22, bounds.height - 120)))
+            loupe.contentsRect = CGRect(x: (lastPoint.x * scale - 7) / CGFloat(image.width), y: (lastPoint.y * scale - 7) / CGFloat(image.height), width: 14 / CGFloat(image.width), height: 14 / CGFloat(image.height))
+            loupeLabel.string = hexColor
+        }
+        updateAccessibilitySize()
         CATransaction.commit()
     }
 
@@ -111,7 +159,12 @@ final class SelectionView: NSView {
         }
     }
     override func mouseMoved(with event: NSEvent) {
+        displayUpdates?.recordInputEvent()
         let point = bounded(convert(event.locationInWindow, from: nil))
+        updatePointer(at: point)
+    }
+
+    private func updatePointer(at point: CGPoint) {
         lastPoint = point
         if selection.isEmpty {
             let global = CGPoint(x: frameInfo.screen.frame.minX + point.x, y: frameInfo.screen.frame.maxY - point.y)
@@ -121,11 +174,8 @@ final class SelectionView: NSView {
         }
         let image = frameInfo.image
         let scale = frameInfo.screen.scale
-        CATransaction.begin(); CATransaction.setDisableActions(true)
-        loupe.isHidden = false
-        loupe.frame.origin = CGPoint(x: min(point.x + 22, bounds.width - 120), y: max(frameInfo.screen.safeTop + 4, min(point.y + 22, bounds.height - 120)))
-        loupe.contentsRect = CGRect(x: (point.x * scale - 7) / CGFloat(image.width), y: (point.y * scale - 7) / CGFloat(image.height), width: 14 / CGFloat(image.width), height: 14 / CGFloat(image.height))
-        CATransaction.commit()
+        loupeVisible = true
+        displayUpdates?.markDirty()
         guard colorTask == nil else { return }
         colorTask = Task { [weak self] in
             let value = await Task.detached(priority: .userInitiated) { () -> String in
@@ -134,24 +184,27 @@ final class SelectionView: NSView {
                 guard let bytes = context.data?.assumingMemoryBound(to: UInt8.self) else { return "#000000" }
                 return String(format: "#%02X%02X%02X", bytes[0], bytes[1], bytes[2])
             }.value
-            guard let self else { return }
+            guard !Task.isCancelled, let self else { return }
             self.colorTask = nil
             guard self.lastPoint == point else { return }
-            self.hexColor = value; self.loupeLabel.string = value
+            self.hexColor = value
+            self.displayUpdates?.markDirty()
         }
     }
     private func highlightWindow() {
-        guard !hitWindows.isEmpty else { hoverLayer.path = nil; selectedWindow = nil; return }
+        defer { displayUpdates?.markDirty() }
+        guard !hitWindows.isEmpty else { hoverRect = nil; selectedWindow = nil; return }
         let candidate = hitWindows[hoverIndex % hitWindows.count]
         selectedWindow = candidate
         let origin = CoordinateSpace.globalPointToScreenLocal(CGPoint(x: candidate.frame.minX, y: candidate.frame.maxY), screen: frameInfo.screen)
-        hoverLayer.path = CGPath(rect: CGRect(origin: origin, size: candidate.frame.size).intersection(bounds), transform: nil)
+        hoverRect = CGRect(origin: origin, size: candidate.frame.size).intersection(bounds)
     }
     override func mouseDown(with event: NSEvent) {
-        if windowMode { selection = .zero }
-        if selection.isEmpty { mouseMoved(with: event) }
-        window?.makeFirstResponder(self)
+        displayUpdates?.recordInputEvent()
         let point = bounded(convert(event.locationInWindow, from: nil))
+        if windowMode { selection = .zero }
+        if selection.isEmpty { updatePointer(at: point) }
+        window?.makeFirstResponder(self)
         anchor = point; originalRect = selection
         resizeHandle = selection.isEmpty ? nil : SelectionGeometry.handles(selection).firstIndex(where: { hypot($0.x - point.x, $0.y - point.y) <= 9 })
         if resizeHandle == nil, !selection.isEmpty {
@@ -162,12 +215,14 @@ final class SelectionView: NSView {
         }
         moving = resizeHandle == nil && selection.contains(point)
         if !moving, resizeHandle == nil { selection = .zero }
-        loupe.isHidden = true
+        loupeVisible = false
+        displayUpdates?.markDirty()
     }
     override func mouseDragged(with event: NSEvent) {
+        displayUpdates?.recordInputEvent()
         guard !windowMode else { return }
         guard let anchor else { return }
-        selectedWindow = nil; hoverLayer.path = nil
+        selectedWindow = nil; hoverRect = nil
         let point = bounded(convert(event.locationInWindow, from: nil))
         let aspect: CGFloat? = event.modifierFlags.contains(.shift) ? (originalRect.isEmpty ? 1 : originalRect.width / max(1, originalRect.height)) : nil
         if moving { selection = SelectionGeometry.clamp(originalRect.offsetBy(dx: point.x - anchor.x, dy: point.y - anchor.y), bounds: bounds) }
@@ -177,6 +232,7 @@ final class SelectionView: NSView {
         onSelection?(selection)
     }
     override func mouseUp(with event: NSEvent) {
+        displayUpdates?.recordInputEvent()
         if selection.isEmpty, let selectedWindow {
             let origin = CoordinateSpace.globalPointToScreenLocal(CGPoint(x: selectedWindow.frame.minX, y: selectedWindow.frame.maxY), screen: frameInfo.screen)
             selection = CGRect(origin: origin, size: selectedWindow.frame.size).intersection(bounds)
@@ -187,6 +243,7 @@ final class SelectionView: NSView {
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
     }
     override func keyDown(with event: NSEvent) {
+        displayUpdates?.recordInputEvent()
         if event.modifierFlags.contains(.option), event.charactersIgnoringModifiers?.lowercased() == "c" {
             NSPasteboard.general.clearContents(); NSPasteboard.general.setString(hexColor, forType: .string); return
         }
@@ -200,7 +257,7 @@ final class SelectionView: NSView {
             let delta: CGFloat = (event.modifierFlags.contains(.shift) ? 10 : 1) / frameInfo.screen.scale
             selection = SelectionGeometry.clamp(selection.offsetBy(dx: event.keyCode == 123 ? -delta : event.keyCode == 124 ? delta : 0, dy: event.keyCode == 126 ? -delta : event.keyCode == 125 ? delta : 0), bounds: bounds)
             onSelection?(selection)
-        case 32: AppSettings.shared.showsPixels.toggle(); updateLayers()
+        case 32: AppSettings.shared.showsPixels.toggle(); updateAccessibilitySize(); displayUpdates?.markDirty()
         case 35: showSizePanel()
         default: super.keyDown(with: event)
         }

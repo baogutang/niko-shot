@@ -3,6 +3,23 @@ import XCTest
 @testable import NikoShot
 
 final class HistoryStoreTests: XCTestCase {
+    func testLastOCRSurvivesReopeningAndSkipsNewUnrecognizedCaptures() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let database = folder.appendingPathComponent("history.sqlite")
+        let first = try HistoryStore(url: database)
+        let empty = try await first.lastOCRText()
+        XCTAssertEqual(empty, "")
+        for index in 0..<3 {
+            try await first.insert(HistoryRecord(id: UUID(), createdAt: Date(timeIntervalSince1970: Double(index)),
+                path: "", thumbnail: Data(repeating: 9, count: 1024), width: 40, height: 20,
+                appBundleID: "test", captureKind: "region", ocrText: index == 2 ? "" : "结果 \(index)"))
+        }
+        let reopened = try HistoryStore(url: database)
+        let text = try await reopened.lastOCRText()
+        XCTAssertEqual(text, "结果 1")
+    }
+
     func testChineseSearchAndPagination() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }

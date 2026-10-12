@@ -11,11 +11,15 @@ public struct SettingsView: View {
     @State private var presetName = "自定义"
     @State private var presetWidth = 800
     @State private var presetHeight = 600
+    @State private var launchAtLogin = LaunchAtLogin()
+    private let onShowWizard: () -> Void
 
     /// Creates a settings shell sharing the application's live preferences and hotkeys.
-    public init(settings: AppSettings = .shared, hotkeys: HotkeyCenter) {
+    public init(settings: AppSettings = .shared, hotkeys: HotkeyCenter,
+                onShowWizard: @escaping () -> Void = {}) {
         self.settings = settings
         self.hotkeys = hotkeys
+        self.onShowWizard = onShowWizard
     }
 
     public var body: some View {
@@ -25,6 +29,7 @@ public struct SettingsView: View {
                     .accessibilityLabel(item.title)
             }
             .listStyle(.sidebar)
+            .accessibilityLabel("设置分类")
             .navigationSplitViewColumnWidth(min: 165, ideal: 180, max: 220)
             .toolbar {
                 ToolbarItem(placement: .automatic) {
@@ -34,12 +39,14 @@ public struct SettingsView: View {
         } detail: {
             VStack(alignment: .leading, spacing: 0) {
                 Text((section ?? .general).title).font(.largeTitle.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
                     .padding(.horizontal, 28).padding(.top, 24).padding(.bottom, 8)
                 content.formStyle(.grouped)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(minWidth: 700, minHeight: 500)
+        .onAppear { launchAtLogin.refresh() }
     }
 
     @ViewBuilder private var content: some View {
@@ -52,6 +59,42 @@ public struct SettingsView: View {
                     Text("从菜单栏或全局快捷键开始。截图过程中按 Esc 取消，按 Enter 复制。")
                         .font(.callout).foregroundStyle(.secondary)
                 }
+                Section("登录启动") {
+                    Toggle("登录时打开 niko-shot", isOn: Binding(
+                        get: { launchAtLogin.isEnabled },
+                        set: { enabled in Task { await launchAtLogin.setEnabled(enabled) } }
+                    ))
+                    .disabled(launchAtLogin.isUpdating)
+                    .accessibilityLabel("登录时自动打开 niko-shot")
+                    if launchAtLogin.isUpdating {
+                        ProgressView("正在更新登录项…").controlSize(.small)
+                            .accessibilityLabel("正在更新登录启动设置")
+                    }
+                    Label(launchAtLogin.statusDescription, systemImage: launchAtLogin.requiresApproval ? "clock" : "info.circle")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .accessibilityLabel("登录启动状态：\(launchAtLogin.statusDescription)")
+                    if let message = launchAtLogin.errorMessage {
+                        Label(message, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.red)
+                            .accessibilityLabel(message)
+                    }
+                    HStack {
+                        Button("打开登录项设置") { launchAtLogin.openSettings() }
+                            .accessibilityLabel("打开系统设置中的登录项")
+                        Button("刷新状态") { launchAtLogin.refresh() }
+                            .disabled(launchAtLogin.isUpdating).accessibilityLabel("刷新登录启动状态")
+                    }
+                }
+                Section("使用向导与权限") {
+                    Button("重新查看使用向导", action: onShowWizard)
+                        .keyboardShortcut("h", modifiers: [.command, .shift])
+                        .accessibilityLabel("打开三步使用和权限向导")
+                    Button("屏幕录制权限设置") { openPrivacySettings("Privacy_ScreenCapture") }
+                        .accessibilityLabel("打开屏幕录制权限系统设置")
+                    Button("辅助功能权限设置") { openPrivacySettings("Privacy_Accessibility") }
+                        .accessibilityLabel("打开自动滚动使用的辅助功能权限系统设置")
+                    Text("截图与录屏使用屏幕录制权限；辅助功能只用于长截图自动滚动，未授权时可手动滚动。麦克风和摄像头仅在录制时按需授权。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
         case .hotkeys:
             hotkeyForm
@@ -63,15 +106,27 @@ public struct SettingsView: View {
                         ForEach(1...10, id: \.self) { Text("\($0) 秒").tag($0) }
                     }.accessibilityLabel("截图延时")
                     Toggle("显示像素尺寸", isOn: $settings.showsPixels)
+                        .accessibilityLabel("框选时显示实际像素尺寸")
                     Text("关闭后以屏幕点数显示；导出按屏幕实际缩放倍率计算。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("预设尺寸") {
                     ForEach(settings.presetSizes) { preset in
-                        HStack { LabeledContent(preset.name, value: "\(Int(preset.width)) × \(Int(preset.height)) pt").monospacedDigit(); Button("删除", systemImage: "minus.circle") { settings.presetSizes.removeAll { $0.id == preset.id } }.labelStyle(.iconOnly).accessibilityLabel("删除\(preset.name)") }
+                        HStack {
+                            LabeledContent(preset.name, value: "\(Int(preset.width)) × \(Int(preset.height)) pt").monospacedDigit()
+                            Button("删除", systemImage: "minus.circle") { settings.presetSizes.removeAll { $0.id == preset.id } }
+                                .labelStyle(.iconOnly).accessibilityLabel("删除截图尺寸预设\(preset.name)").help("删除\(preset.name)")
+                        }
                     }
-                    TextField("名称", text: $presetName)
-                    HStack { TextField("宽", value: $presetWidth, format: .number); Text("×"); TextField("高", value: $presetHeight, format: .number); Button("添加") { settings.presetSizes.append(CaptureSizePreset(name: presetName, width: Double(presetWidth), height: Double(presetHeight))) }.disabled(presetWidth <= 0 || presetHeight <= 0 || presetName.isEmpty) }
+                    TextField("名称", text: $presetName).accessibilityLabel("截图尺寸预设名称")
+                    HStack {
+                        TextField("宽", value: $presetWidth, format: .number).accessibilityLabel("预设宽度，单位屏幕点")
+                        Text("×").accessibilityHidden(true)
+                        TextField("高", value: $presetHeight, format: .number).accessibilityLabel("预设高度，单位屏幕点")
+                        Button("添加") { settings.presetSizes.append(CaptureSizePreset(name: presetName, width: Double(presetWidth), height: Double(presetHeight))) }
+                            .disabled(presetWidth <= 0 || presetHeight <= 0 || presetName.isEmpty)
+                            .keyboardShortcut(.return, modifiers: .command).accessibilityLabel("添加截图尺寸预设")
+                    }
                 }
             }
         case .annotation:
@@ -107,9 +162,14 @@ public struct SettingsView: View {
             Form {
                 Section("文字识别") {
                     Toggle("自动识别截图以供历史搜索", isOn: $settings.autoOCR)
+                        .accessibilityLabel("自动识别截图文字，用于历史搜索")
                     Toggle("精确识别", isOn: $settings.accurateOCR)
+                        .accessibilityLabel("使用精确文字识别")
+                    Text("快速模式用于系统支持的拉丁语言；启用中文或日文时仍使用精确识别，保留这些语言的识别能力。")
+                        .font(.caption).foregroundStyle(.secondary)
                     ForEach([("zh-Hans", "简体中文"), ("en-US", "英语"), ("ja-JP", "日语")], id: \.0) { code, name in
                         Toggle(name, isOn: Binding(get: { settings.ocrLanguages.contains(code) }, set: { selected in if selected { if !settings.ocrLanguages.contains(code) { settings.ocrLanguages.append(code) } } else if settings.ocrLanguages.count > 1 { settings.ocrLanguages.removeAll { $0 == code } } }))
+                            .accessibilityLabel("识别语言：\(name)").help("至少保留一种文字识别语言")
                     }
                 }
                 TranslationSettingsView(settings: settings)
@@ -126,16 +186,22 @@ public struct SettingsView: View {
                     }.accessibilityLabel("视频编码")
                     Slider(value: $settings.recordingQuality, in: 0...1) { Text("编码质量") }.accessibilityLabel("录屏编码质量")
                     Toggle("显示光标", isOn: $settings.showsCursor)
+                        .accessibilityLabel("在录制视频中显示光标")
                     Toggle("摄像头画中画", isOn: $settings.recordingCamera)
+                        .accessibilityLabel("录制摄像头画中画")
                 }
                 Section("GIF") {
                     TextField("最大宽度（像素）", value: $settings.gifWidth, format: .number)
+                        .accessibilityLabel("GIF 最大宽度，单位像素")
                     Picker("采样帧率", selection: $settings.gifFPS) { ForEach([5, 10, 15, 24, 30], id: \.self) { Text("\($0) fps").tag($0) } }
+                        .accessibilityLabel("GIF 采样帧率")
                     Text("默认最多 800px、15fps；导出面板显示预估体积。").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("音频") {
                     Toggle("录制系统声音", isOn: $settings.systemAudio)
+                        .accessibilityLabel("在录屏中包含系统声音")
                     Toggle("录制麦克风", isOn: $settings.microphone)
+                        .accessibilityLabel("在录屏中包含麦克风声音")
                     Text("仅在开启麦克风录制时请求麦克风权限。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -154,6 +220,7 @@ public struct SettingsView: View {
                 Section {
                     HStack(spacing: 16) {
                         Image(systemName: "camera.viewfinder").font(.system(size: 42)).foregroundStyle(.tint)
+                            .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 4) {
                             Text("niko-shot").font(.title2.weight(.semibold))
                             Text("版本 \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0")")
@@ -167,6 +234,10 @@ public struct SettingsView: View {
                 }
             }
         }
+    }
+
+    private func openPrivacySettings(_ pane: String) {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") { NSWorkspace.shared.open(url) }
     }
 
     private var hotkeyForm: some View {

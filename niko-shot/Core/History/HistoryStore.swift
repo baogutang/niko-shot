@@ -99,6 +99,16 @@ actor HistoryStore {
         return result
     }
 
+    /// Retrieves persisted OCR without loading capture thumbnails or full history pages.
+    func lastOCRText() throws -> String {
+        let stmt = try statement("SELECT ocr_text FROM captures WHERE ocr_text<>'' ORDER BY created_at DESC,id DESC LIMIT 1")
+        defer { sqlite3_finalize(stmt) }
+        let status = sqlite3_step(stmt)
+        if status == SQLITE_DONE { return "" }
+        guard status == SQLITE_ROW else { throw failure() }
+        return sqlite3_column_text(stmt, 0).map { String(cString: $0) } ?? ""
+    }
+
     func delete(id: UUID) throws {
         let lookup = try statement("SELECT path FROM captures WHERE id=?")
         bind(id.uuidString, at: 1, to: lookup)

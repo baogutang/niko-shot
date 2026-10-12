@@ -38,21 +38,51 @@ final class SelectionSession {
     private var annotationWidth: CGFloat = 3
     private var imageEditorWindow: NSWindow?
     private var imageEditorSource: FrozenFrame?
+    private var completedDisplayStatistics: [ActiveDisplayLink.Statistics] = []
+    private var operations: [UUID: Task<Void, Never>] = [:]
+    private var retiringCanvases: [UUID: Task<Void, Never>] = [:]
+    private let afterImageOperation: (@Sendable () async -> Void)?
+    /// Allows real background completion to be gated in cancellation regression tests.
+    init(afterImageOperation: (@Sendable () async -> Void)? = nil) { self.afterImageOperation = afterImageOperation }
+    /// Cancelled work stays owned until the underlying renderer actually returns.
+    var resourceCounts: [String: Int] {
+        ["selectionTasks": operations.count, "retiringCanvases": retiringCanvases.count,
+         "annotationPreview": canvas?.resourceCounts["preview"] ?? 0,
+         "annotationTextAlert": canvas?.resourceCounts["textAlert"] ?? 0]
+    }
     var windowCount: Int { windows.count + (imageEditorWindow == nil ? 0 : 1) + (toolbar?.windowCount ?? 0) }
     var frameCount: Int { store.frames.count }
+    /// Native display links currently owned by attached selection views; zero after finish.
+    var displayLinkCount: Int { selectionViews.reduce(0) { $0 + $1.displayLinkCount } }
+    /// Actual per-display callbacks, including snapshots saved before a stage or session ends.
+    var displayLinkStatistics: [ActiveDisplayLink.Statistics] {
+        completedDisplayStatistics + selectionViews.filter { $0.displayLinkCount > 0 }.map(\.displayLinkStatistics)
+    }
+    private var selectionViews: [SelectionView] {
+        var views = windows.compactMap { $0.contentView as? SelectionView }
+        if let view = (imageEditorWindow?.contentView as? NSScrollView)?.documentView as? SelectionView { views.append(view) }
+        return views
+    }
+    private func stopDisplayUpdates(_ view: SelectionView) {
+        if view.displayLinkCount > 0 { completedDisplayStatistics.append(view.displayLinkStatistics) }
+        view.stopDisplayUpdates()
+    }
 
     /// Reuses the annotation editor for history images and completed long screenshots.
     func edit(image: CGImage, pointSize: CGSize, kind: String = "edited", completion: @escaping (CGImage, CaptureContext) -> Void) {
-        finish(); generation = UUID(); state = .annotating; outputAction = .copy; self.completion = completion
+        finish(); completedDisplayStatistics.removeAll(); generation = UUID(); state = .annotating; outputAction = .copy; self.completion = completion
         let screen = NSScreen.main?.frame ?? CGRect(x: 0, y: 0, width: 1200, height: 800)
-        let geometry = ScreenGeometry(id: 0, frame: CGRect(origin: screen.origin, size: pointSize), scale: CGFloat(image.width) / max(1, pointSize.width))
+        let viewport = CGSize(width: min(900, screen.width - 80), height: min(650, screen.height - 100))
+        let factor = max(1, pointSize.width / max(1, viewport.width - 16))
+        let canvasSize = CGSize(width: pointSize.width / factor, height: pointSize.height / factor)
+        let geometry = ScreenGeometry(id: 0, frame: CGRect(origin: screen.origin, size: canvasSize), scale: CGFloat(image.width) / max(1, canvasSize.width))
         captureKind = kind; imageEditorSource = FrozenFrame(screen: geometry, image: image)
-        let context = CaptureContext(screen: geometry, localRect: CGRect(origin: .zero, size: pointSize), kind: kind)
+        let context = CaptureContext(screen: geometry, localRect: CGRect(origin: .zero, size: canvasSize), kind: kind)
         editorContext = context
-        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: min(900, screen.width - 80), height: min(650, screen.height - 100)), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: CGRect(origin: .zero, size: viewport), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "niko-shot 标注"; window.isReleasedWhenClosed = false
         let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.hasHorizontalScroller = true; scroll.autoresizingMask = [.width, .height]
-        let canvas = AnnotationCanvasView(image: image, size: pointSize)
+        let canvas = AnnotationCanvasView(image: image, size: canvasSize)
         configure(canvas)
         self.canvas = canvas; scroll.documentView = canvas; window.contentView = scroll
         window.center(); imageEditorWindow = window; window.makeKeyAndOrderFront(nil); window.makeFirstResponder(canvas); NSApp.activate(ignoringOtherApps: true)
@@ -66,14 +96,27 @@ final class SelectionSession {
         let remainingWindows = windows
         let remainingToolbar = toolbar
         let remainingEditor = imageEditorWindow
+        let remainingCanvas = canvas
+        for operation in operations.values { operation.cancel() }
+        for operation in retiringCanvases.values { operation.cancel() }
         if let archive { try? FileManager.default.removeItem(at: archive.url) }
         // Sessions are owned and released by the main-actor app coordinator.
-        MainActor.assumeIsolated { remainingToolbar?.close(); remainingEditor?.close(); for window in remainingWindows { window.orderOut(nil); window.close() } }
+        MainActor.assumeIsolated {
+            remainingCanvas?.prepareForFinish()
+            remainingToolbar?.close()
+            ((remainingEditor?.contentView as? NSScrollView)?.documentView as? SelectionView)?.stopDisplayUpdates()
+            remainingEditor?.close()
+            for window in remainingWindows {
+                (window.contentView as? SelectionView)?.stopDisplayUpdates()
+                window.orderOut(nil); window.close()
+            }
+        }
     }
 
     /// Starts a snapshot-only session, injectable so teardown can be tested without TCC.
     func start(frames: [FrozenFrame], candidates: [WindowCandidate] = [], kind: String = "region", initial: CaptureContext? = nil, autoConfirm: Bool = true, confirmationTitle: String? = nil, completion: @escaping (CGImage, CaptureContext) -> Void) {
         finish()
+        completedDisplayStatistics.removeAll()
         self.completion = completion
         generation = UUID()
         outputAction = .copy
@@ -119,7 +162,10 @@ final class SelectionSession {
         guard state != .exporting else { return }
         if let activeScreen, activeScreen != frame.screen.id { return }
         activeScreen = frame.screen.id
-        for window in windows { window.ignoresMouseEvents = (window.contentView as? SelectionView)?.frameInfo.screen.id != activeScreen }
+        for window in windows {
+            window.ignoresMouseEvents = (window.contentView as? SelectionView)?.frameInfo.screen.id != activeScreen
+            if window.ignoresMouseEvents, let view = window.contentView as? SelectionView { stopDisplayUpdates(view) }
+        }
         selected = (frame, rect)
         state = rect.isEmpty ? .selecting : .selected
         if !rect.isEmpty { showToolbar(context: CaptureContext(screen: frame.screen, localRect: rect, kind: captureKind, appBundleID: appBundleID, windowID: windowID)) }
@@ -147,13 +193,14 @@ final class SelectionSession {
         let token = generation
         let context = CaptureContext(screen: frame.screen, localRect: rect, kind: captureKind, appBundleID: appBundleID, windowID: windowID)
         let pixels = CoordinateSpace.imagePixelRect(fromSelection: rect, screen: frame.screen)
-        Task { [weak self] in
+        let gate = afterImageOperation
+        runOperation { [weak self] in
             do {
-                let result = try await Task.detached(priority: .userInitiated) { () -> (CGImage, ArchivedFrame) in
+                let result = try await Self.imageWork(after: gate) { () -> (CGImage, ArchivedFrame) in
                     guard let crop = frame.image.cropping(to: pixels) else { throw AppError.imageCreation }
                     return (crop, try SnapshotArchive.write(frame))
-                }.value
-                guard let self, self.generation == token, self.state == .annotating else { try? FileManager.default.removeItem(at: result.1.url); return }
+                }
+                guard !Task.isCancelled, let self, self.generation == token, self.state == .annotating else { try? FileManager.default.removeItem(at: result.1.url); return }
                 self.archive = result.1; self.editorContext = context
                 let stage = AnnotationStageView(frame: frame.screen.localBounds)
                 stage.wantsLayer = true; stage.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.5).cgColor
@@ -170,13 +217,17 @@ final class SelectionSession {
                 stage.addSubview(canvas)
                 self.canvas = canvas
                 for window in self.windows {
+                    if let view = window.contentView as? SelectionView { self.stopDisplayUpdates(view) }
                     if (window.contentView as? SelectionView)?.frameInfo.screen.id == frame.screen.id {
                         window.contentView = stage; window.makeKeyAndOrderFront(nil); window.makeFirstResponder(canvas)
                     } else { window.close(); window.contentView = nil }
                 }
                 self.store.clear(); self.selected = nil
                 self.toolbar?.setSelectedTool(tool)
-            } catch { self?.finish(); ErrorPresenter.show(error) }
+            } catch {
+                guard !Task.isCancelled, let self, self.generation == token else { return }
+                self.finish(); ErrorPresenter.show(error)
+            }
         }
     }
 
@@ -189,13 +240,17 @@ final class SelectionSession {
             if imageEditorWindow != nil { toggleEditorSelection(); return }
             guard let archive else { return }
             let callback = completion, kind = captureKind, savedDocument = canvas?.document, savedContext = editorContext, token = generation
-            Task { [weak self] in
+            let gate = afterImageOperation
+            runOperation { [weak self] in
                 do {
-                    let frame = try await Task.detached(priority: .userInitiated) { try SnapshotArchive.read(archive) }.value
-                    guard let self, self.generation == token, let callback else { return }
+                    let frame = try await Self.imageWork(after: gate) { try SnapshotArchive.read(archive) }
+                    guard !Task.isCancelled, let self, self.generation == token, let callback else { return }
                     self.start(frames: [frame], kind: kind, initial: savedContext, autoConfirm: false, completion: callback)
                     self.resumedDocument = savedDocument; self.resumedContext = savedContext
-                } catch { ErrorPresenter.show(error) }
+                } catch {
+                    guard !Task.isCancelled, self?.generation == token else { return }
+                    ErrorPresenter.show(error)
+                }
             }
         default: outputAction = action; confirm()
         }
@@ -213,6 +268,7 @@ final class SelectionSession {
         if state == .selected { applyEditorCrop(); return }
         guard let canvas, state == .annotating else { return }
         resumedDocument = canvas.document; resumedContext = editorContext
+        retire(canvas)
         canvas.onAction = nil; canvas.onDocumentChange = nil; canvas.onToolChange = nil
         self.canvas = nil
         let view = SelectionView(frameInfo: source)
@@ -234,13 +290,15 @@ final class SelectionSession {
         let savedDocument = document
         let pixels = CoordinateSpace.imagePixelRect(fromSelection: rect, screen: frame.screen)
         state = .annotating
-        Task { [weak self, weak window, weak scroll] in
-            let image = await Task.detached(priority: .userInitiated) { frame.image.cropping(to: pixels) }.value
-            guard let self, self.generation == token, self.state == .annotating, let image, let window, let scroll else { return }
+        let gate = afterImageOperation
+        runOperation { [weak self, weak window, weak scroll] in
+            guard let image = try? await Self.imageWork(after: gate, { frame.image.cropping(to: pixels) }) else { return }
+            guard !Task.isCancelled, let self, self.generation == token, self.state == .annotating, let window, let scroll else { return }
             let view = AnnotationCanvasView(image: image, size: rect.size)
             if let savedDocument { view.document = savedDocument; view.refresh() }
             view.tool = tool; self.configure(view); self.canvas = view
             self.editorContext = CaptureContext(screen: frame.screen, localRect: rect, kind: self.captureKind)
+            if let old = scroll.documentView as? SelectionView { self.stopDisplayUpdates(old) }
             self.selected = nil; scroll.documentView = view; window.makeFirstResponder(view)
             self.toolbar?.setSelectedTool(tool)
             self.toolbar?.setUndoAvailability(canUndo: view.document.canUndo, canRedo: view.document.canRedo)
@@ -256,12 +314,16 @@ final class SelectionSession {
             let document = canvas.document, base = canvas.base, callback = completion
             let token = generation
             let scale = CGFloat(base.width) / max(1, document.canvasSize.width)
-            Task { [weak self] in
+            let gate = afterImageOperation
+            runOperation { [weak self] in
                 do {
-                    let image = try await Task.detached(priority: .userInitiated) { try AnnotationRenderer.render(base: base, document: document, scale: scale) }.value
-                    guard let self, self.generation == token, self.state == .exporting else { return }
+                    let image = try await Self.imageWork(after: gate) { try AnnotationRenderer.render(base: base, document: document, scale: scale) }
+                    guard !Task.isCancelled, let self, self.generation == token, self.state == .exporting else { return }
                     self.finish(completed: true); callback?(image, context)
-                } catch { self?.finish(); ErrorPresenter.show(error) }
+                } catch {
+                    guard !Task.isCancelled, let self, self.generation == token else { return }
+                    self.finish(); ErrorPresenter.show(error)
+                }
             }
             return
         }
@@ -272,9 +334,10 @@ final class SelectionSession {
         let callback = completion
         let token = generation
         let context = CaptureContext(screen: frame.screen, localRect: rect, kind: captureKind, appBundleID: appBundleID, windowID: windowID)
-        Task { [weak self] in
-            let image = await Task.detached(priority: .userInitiated) { frame.image.cropping(to: pixels) }.value
-            guard let self, self.generation == token, self.state == .exporting else { return }
+        let gate = afterImageOperation
+        runOperation { [weak self] in
+            let image = try? await Self.imageWork(after: gate) { frame.image.cropping(to: pixels) }
+            guard !Task.isCancelled, let self, self.generation == token, self.state == .exporting else { return }
             self.finish(completed: image != nil)
             if let image { callback?(image, context) }
         }
@@ -283,14 +346,18 @@ final class SelectionSession {
     /// Closes all overlays and removes listeners; also used for cancellation and display changes.
     func finish(completed: Bool = false) {
         let didFinish = onFinish; onFinish = nil
+        for operation in operations.values { operation.cancel() }
+        if let canvas { retire(canvas) }
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
         if let view = (imageEditorWindow?.contentView as? NSScrollView)?.documentView as? SelectionView {
+            stopDisplayUpdates(view)
             view.onSelection = nil; view.onConfirm = nil; view.onCancel = nil; view.onAnnotate = nil; view.onSave = nil
         }
         imageEditorWindow?.close(); imageEditorWindow?.contentView = nil; imageEditorWindow = nil; imageEditorSource = nil
         for window in windows {
             if let view = window.contentView as? SelectionView {
+                stopDisplayUpdates(view)
                 view.onSelection = nil; view.onConfirm = nil; view.onCancel = nil
                 view.onAnnotate = nil; view.onSave = nil
             }
@@ -312,6 +379,53 @@ final class SelectionSession {
         archive = nil
         generation = UUID()
         state = .idle
+        persistDisplayStatisticsIfRequested()
         didFinish?(completed)
+    }
+
+    /// Completes native rendering and preview cancellation before application termination.
+    func finishAndDrain() async {
+        finish()
+        while !operations.isEmpty || !retiringCanvases.isEmpty {
+            let pending = Array(operations.values) + Array(retiringCanvases.values)
+            for operation in pending { await operation.value }
+        }
+    }
+
+    private func retire(_ view: AnnotationCanvasView) {
+        view.prepareForFinish()
+        let id = UUID()
+        retiringCanvases[id] = Task { [weak self] in
+            await view.finishAndDrain()
+            self?.retiringCanvases.removeValue(forKey: id)
+        }
+    }
+
+    private func runOperation(_ work: @escaping @MainActor @Sendable () async -> Void) {
+        let id = UUID()
+        operations[id] = Task { [weak self] in
+            defer { self?.operations.removeValue(forKey: id) }
+            guard !Task.isCancelled else { return }
+            await work()
+        }
+    }
+
+    private nonisolated static func imageWork<Value: Sendable>(after: (@Sendable () async -> Void)?,
+        _ work: @escaping @Sendable () throws -> Value) async throws -> Value {
+        let worker = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let value = try autoreleasepool { try work() }
+            await after?()
+            return value
+        }
+        return try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
+    }
+
+    private func persistDisplayStatisticsIfRequested() {
+        guard let path = ProcessInfo.processInfo.environment["NIKO_DISPLAYLINK_METRICS"], !path.isEmpty else { return }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(displayLinkStatistics) else { return }
+        try? data.write(to: URL(fileURLWithPath: path), options: .atomic)
     }
 }

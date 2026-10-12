@@ -3,9 +3,10 @@ import AppKit
 
 @MainActor
 final class SavePanelRouter: NSObject {
-    private let panel = NSSavePanel()
+    private let panel: NSSavePanel
     private let formatMenu = NSPopUpButton()
     private let quality = NSSlider(value: AppSettings.shared.jpegQuality, minValue: 0, maxValue: 1, target: nil, action: nil)
+    init(panel: NSSavePanel = NSSavePanel()) { self.panel = panel; super.init() }
     /// Returns the chosen destination and encoder settings after a native save panel.
     func destination() -> (URL, ExportFormat, Double)? {
         for format in ExportFormat.allCases { formatMenu.addItem(withTitle: format.rawValue.uppercased()) }
@@ -19,6 +20,8 @@ final class SavePanelRouter: NSObject {
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
         return (url, selectedFormat, quality.doubleValue)
     }
+    /// Dismisses an outstanding save panel so application termination can drain its output task.
+    func cancel() { panel.cancel(nil) }
     private var selectedFormat: ExportFormat { ExportFormat.allCases[max(0, formatMenu.indexOfSelectedItem)] }
     @objc private func formatChanged() {
         panel.allowedContentTypes = [selectedFormat.type]

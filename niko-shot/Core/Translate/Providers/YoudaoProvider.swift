@@ -1,4 +1,4 @@
-// Implements Youdao's v3 SHA256 signing scheme with Character-count truncation, not encoded byte length.
+// Implements Youdao's v3 SHA256 signing using the official Python3 demo's Unicode code-point truncation.
 import Foundation
 import CryptoKit
 
@@ -18,9 +18,18 @@ public struct YoudaoProvider: TranslationService {
     public func credentialsStatus() -> CredentialsStatus {
         ["youdao.appKey", "youdao.appSecret"].allSatisfy { !(credentials.get($0) ?? "").isEmpty } ? .ready : .unconfigured
     }
-    /// Applies Youdao's first-ten plus Character count plus last-ten signing rule.
+    /// Applies the official Python3 demo's first-ten code points, code-point count and last-ten rule.
+    ///
+    /// Unicode scalars match Python3 `len` and slicing for valid UTF-8 input; the original text is not normalized.
+    /// The official JavaScript demo instead counts UTF-16 code units, so its result can differ for characters
+    /// outside the BMP. Those inputs still require verification with a real Youdao account; these fixtures
+    /// establish Python3-demo compatibility, not acceptance by the live service.
+    /// See the [official demos](https://ai.youdao.com/DOCSIRMA/html/trans/api/wbfy/index.html).
     public static func signingInput(_ text: String) -> String {
-        text.count <= 20 ? text : String(text.prefix(10)) + String(text.count) + String(text.suffix(10))
+        let scalars = text.unicodeScalars
+        let count = scalars.count
+        guard count > 20 else { return text }
+        return String(scalars.prefix(10)) + String(count) + String(scalars.suffix(10))
     }
     /// Computes lowercase SHA256 for a deterministic v3 signing tuple.
     public static func signature(appKey: String, text: String, salt: String, curtime: String, secret: String) -> String {

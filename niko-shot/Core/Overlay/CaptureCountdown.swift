@@ -17,7 +17,7 @@ final class CaptureCountdown {
         window?.orderOut(nil); window?.close(); window = nil
     }
     /// Shows a ring without retaining a timer after the countdown finishes.
-    func wait(seconds: Int) async throws {
+    func wait(seconds: Int, actionName: String = "截图") async throws {
         guard seconds > 0 else { return }
         guard window == nil else { throw AppError.busy }
         cancelled = false
@@ -35,7 +35,7 @@ final class CaptureCountdown {
         for remaining in stride(from: min(10, seconds), through: 1, by: -1) {
             try Task.checkCancellation()
             if cancelled { throw CancellationError() }
-            panel.contentView = NSHostingView(rootView: CountdownRing(remaining: remaining, total: seconds, cancel: { [weak self] in self?.cancel() }))
+            panel.contentView = NSHostingView(rootView: CountdownRing(remaining: remaining, total: seconds, actionName: actionName, cancel: { [weak self] in self?.cancel() }))
             panel.makeKeyAndOrderFront(nil)
             let sleep = Task { try await Task.sleep(for: .seconds(1)) }
             sleeper = sleep
@@ -55,8 +55,20 @@ private final class CountdownPanel: NSPanel {
 private struct CountdownRing: View {
     let remaining: Int
     let total: Int
+    let actionName: String
     let cancel: () -> Void
     var body: some View {
-        ZStack { Circle().fill(.ultraThinMaterial); Circle().trim(from: 0, to: Double(remaining) / Double(total)).stroke(.tint, style: StrokeStyle(lineWidth: 4, lineCap: .round)).rotationEffect(.degrees(-90)).padding(8); VStack { Text("\(remaining)").font(.system(size: 42, weight: .medium, design: .rounded)).monospacedDigit(); Button("取消", action: cancel).buttonStyle(.plain).font(.caption) } }.padding(4).accessibilityLabel("\(remaining) 秒后截图")
+        ZStack {
+            Circle().fill(.ultraThinMaterial)
+            Circle().trim(from: 0, to: Double(remaining) / Double(total))
+                .stroke(.tint, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                .rotationEffect(.degrees(-90)).padding(8)
+            VStack(spacing: 0) {
+                Text("\(remaining)").font(.system(size: 42, weight: .medium, design: .rounded)).monospacedDigit()
+                    .accessibilityLabel("\(remaining) 秒后\(actionName)")
+                Button("取消", action: cancel).buttonStyle(.plain).font(.caption)
+                    .frame(minWidth: 44, minHeight: 44).accessibilityLabel("取消\(actionName)倒计时")
+            }
+        }.padding(4).accessibilityElement(children: .contain).accessibilityLabel("\(actionName)倒计时")
     }
 }
