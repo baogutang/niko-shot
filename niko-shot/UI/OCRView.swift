@@ -5,18 +5,20 @@ import SwiftUI
 @MainActor
 struct OCRView: View {
     @Bindable private var model: OCRViewModel
+    private let settings: AppSettings
+    @State private var formattingExpanded = false
 
     /// Shares the recognition model so block edits and copy options stay synchronized.
-    init(model: OCRViewModel) { self.model = model }
+    init(model: OCRViewModel, settings: AppSettings = .shared) { self.model = model; self.settings = settings }
 
     var body: some View {
         NavigationStack {
             HSplitView {
-                recognitionPane.frame(minWidth: 360, idealWidth: 430)
-                TranslationPane(text: model.selectedText, isRecognizing: model.isRecognizing)
-                    .frame(minWidth: 430, idealWidth: 540)
+                recognitionPane.frame(minWidth: 290, idealWidth: 340)
+                TranslationPane(text: model.selectedText, isRecognizing: model.isRecognizing, settings: settings)
+                    .frame(minWidth: 620, idealWidth: 850)
             }
-            .navigationTitle("文字识别")
+            .navigationTitle("识别与翻译")
             .toolbar {
                 ToolbarItem(placement: .automatic) {
                     Button(allSelected ? "取消全选" : "全选", systemImage: allSelected ? "checkmark.square.fill" : "checkmark.square") {
@@ -36,24 +38,25 @@ struct OCRView: View {
                 }
             }
         }
-        .frame(minWidth: 900, minHeight: 560)
+        .background(NikoTheme.canvas)
+        .frame(minWidth: 980, minHeight: 600)
     }
 
     private var allSelected: Bool { !model.blocks.isEmpty && model.blocks.allSatisfy(\.selected) }
 
     private var recognitionPane: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Text("识别区块").font(.headline)
-                Text("\(model.blocks.filter(\.selected).count) / \(model.blocks.count)")
-                    .font(.callout).foregroundStyle(.secondary).monospacedDigit()
-                    .accessibilityLabel("已选择 \(model.blocks.filter(\.selected).count) 个，共 \(model.blocks.count) 个区块")
-                Spacer()
-                if model.isRecognizing {
-                    ProgressView().controlSize(.small)
-                    Text("正在识别…").font(.callout).foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                NikoSymbolBadge(symbol: "text.viewfinder", size: 34)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("识别文字").font(.system(size: 17, weight: .semibold)).accessibilityAddTraits(.isHeader)
+                    Text(model.isRecognizing ? "正在读取图中文字…" : "已选择 \(model.blocks.filter(\.selected).count) / \(model.blocks.count) 段")
+                        .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                        .accessibilityLabel("已选择 \(model.blocks.filter(\.selected).count) 个，共 \(model.blocks.count) 个区块")
                 }
-            }.padding(18)
+                Spacer()
+                if model.isRecognizing { ProgressView().controlSize(.small) }
+            }.padding(20)
             Divider()
             if let error = model.errorMessage {
                 Label(error, systemImage: "exclamationmark.circle")
@@ -72,7 +75,7 @@ struct OCRView: View {
                 }
             } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
+                    LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach($model.blocks) { $block in
                             OCRBlockEditor(block: $block,
                                            number: (model.blocks.firstIndex(where: { $0.id == block.id }) ?? 0) + 1,
@@ -82,16 +85,15 @@ struct OCRView: View {
                 }
             }
             Divider()
-            VStack(alignment: .leading, spacing: 10) {
-                Text("复制时整理文字").font(.caption).foregroundStyle(.secondary)
-                HStack(spacing: 18) {
-                    Toggle("合并段落", isOn: $model.mergeParagraphs)
-                        .accessibilityLabel("复制时合并段落")
-                    Toggle("去掉换行", isOn: $model.stripLineBreaks)
-                        .accessibilityLabel("复制时去掉多余换行")
-                }.toggleStyle(.checkbox)
-                Toggle("中文标点转英文", isOn: $model.englishPunctuation)
-                    .toggleStyle(.checkbox).accessibilityLabel("复制时将中文标点转换为英文标点")
+            DisclosureGroup(isExpanded: $formattingExpanded) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Toggle("合并段落", isOn: $model.mergeParagraphs).accessibilityLabel("复制时合并段落")
+                    Toggle("去掉换行", isOn: $model.stripLineBreaks).accessibilityLabel("复制时去掉多余换行")
+                    Toggle("中文标点转英文", isOn: $model.englishPunctuation)
+                        .accessibilityLabel("复制时将中文标点转换为英文标点")
+                }.toggleStyle(.checkbox).padding(.top, 12)
+            } label: {
+                Label("复制时整理文字", systemImage: "text.badge.checkmark").font(.callout)
             }.padding(16)
         }
     }
@@ -105,9 +107,9 @@ private struct OCRBlockEditor: View {
     let onCopy: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                Toggle("区块 \(number)", isOn: $block.selected)
+                Toggle("文本 \(number.formatted(.number.precision(.integerLength(2))))", isOn: $block.selected)
                     .toggleStyle(.checkbox).font(.callout.weight(.medium))
                     .accessibilityLabel("选择第 \(number) 个文字区块")
                 Spacer()
@@ -115,35 +117,29 @@ private struct OCRBlockEditor: View {
                     .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                     .help("文字识别置信度")
                     .accessibilityLabel("识别置信度 \(Int(block.confidence * 100))%")
-                Button("复制", systemImage: "doc.on.doc", action: onCopy)
-                    .buttonStyle(.borderless).font(.caption)
+                Button(action: onCopy) { Image(systemName: "doc.on.doc").frame(width: 24, height: 24) }
+                    .buttonStyle(.borderless).help("复制这段文字")
                     .disabled(block.text.isEmpty)
                     .accessibilityLabel("复制第 \(number) 个文字区块")
             }
             TextEditor(text: $block.text)
-                .font(.system(size: 13))
+                .font(.system(size: 14))
                 .scrollContentBackground(.hidden)
-                .padding(4)
+                .padding(.horizontal, -4)
                 .frame(height: editorHeight)
-                .background(.background, in: RoundedRectangle(cornerRadius: 6))
-                .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(.quaternary, lineWidth: 1) }
                 .accessibilityLabel("编辑第 \(number) 个文字区块")
-            Text(coordinateDescription).font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
-                .accessibilityLabel("第 \(number) 个区块在图片中的归一化坐标：\(coordinateDescription)")
         }
-        .padding(12)
-        .background(.quaternary.opacity(block.selected ? 0.35 : 0.15), in: RoundedRectangle(cornerRadius: 10))
-        .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(.quaternary, lineWidth: 1) }
+        .padding(14)
+        .background(NikoTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(block.selected ? Color.accentColor.opacity(0.32) : NikoTheme.separator.opacity(0.25), lineWidth: block.selected ? 1 : 0.5)
+        }
     }
 
     private var editorHeight: CGFloat {
         let estimatedLines = block.text.split(separator: "\n", omittingEmptySubsequences: false)
             .reduce(0) { $0 + max(1, Int(ceil(Double($1.count) / 46))) }
-        return min(180, max(72, CGFloat(estimatedLines) * 18 + 16))
-    }
-
-    private var coordinateDescription: String {
-        let box = block.boundingBox
-        return String(format: "x %.1f%%  ·  y %.1f%%  ·  %.1f%% × %.1f%%", box.minX * 100, box.minY * 100, box.width * 100, box.height * 100)
+        return min(180, max(62, CGFloat(estimatedLines) * 20 + 12))
     }
 }

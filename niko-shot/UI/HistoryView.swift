@@ -31,6 +31,15 @@ struct HistoryView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    NikoSymbolBadge(symbol: "photo.on.rectangle.angled", size: 34)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("截图历史").font(.system(size: 17, weight: .semibold)).accessibilityAddTraits(.isHeader)
+                        Text("搜索、编辑，或把截图拖到其他应用。").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }.padding(20)
+                Divider()
                 if let errorMessage {
                     HStack(spacing: 10) {
                         Label(errorMessage, systemImage: "exclamationmark.circle")
@@ -58,7 +67,7 @@ struct HistoryView: View {
                                 HistoryRow(record: record, deleting: deleting.contains(record.id),
                                            onOCR: { onOCR(record) }, onPin: { onPin(record) },
                                            onEdit: { onEdit(record) }, onDelete: { Task { await remove(record) } })
-                                Divider().padding(.leading, 164)
+                                Divider().padding(.leading, 180)
                             }
                             if hasMore {
                                 VStack(spacing: 8) {
@@ -71,7 +80,7 @@ struct HistoryView: View {
                                 .frame(maxWidth: .infinity)
                                 .task(id: records.last?.id) { await loadNextPage() }
                             }
-                        }.padding(.horizontal, 16).padding(.vertical, 8)
+                        }.padding(.horizontal, 20).padding(.vertical, 8)
                     }
                 }
             }
@@ -90,7 +99,8 @@ struct HistoryView: View {
             .task(id: query) { await reload() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .captureHistoryChanged)) { _ in Task { await reload() } }
-        .frame(minWidth: 700, minHeight: 460)
+        .background(NikoTheme.canvas)
+        .frame(minWidth: 760, minHeight: 500)
     }
 
     private func reload() async {
@@ -158,6 +168,7 @@ private struct HistoryRow: View {
     let onEdit: () -> Void
     let onDelete: () -> Void
     @State private var thumbnail: NSImage?
+    @State private var hovering = false
 
     private var fileURL: URL { URL(fileURLWithPath: record.path) }
 
@@ -171,34 +182,36 @@ private struct HistoryRow: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .frame(width: 132, height: 92)
-            .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
+            .frame(width: 156, height: 100)
+            .background(NikoTheme.surface, in: RoundedRectangle(cornerRadius: 8))
             .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(NikoTheme.separator.opacity(0.35), lineWidth: 0.5) }
             .help("拖入 Finder 或其他应用")
             .accessibilityLabel("截图缩略图，可拖出文件")
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 7) {
+                Text(captureName).font(.system(size: 14, weight: .semibold))
                 Text(record.createdAt, format: .dateTime.year().month().day().hour().minute())
-                    .font(.headline).monospacedDigit()
-                Text("\(record.width) × \(record.height) px · \(captureName)")
-                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
-                Text(fileURL.lastPathComponent).font(.caption).foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.middle)
+                    .font(.callout).foregroundStyle(.secondary).monospacedDigit()
+                Text("\(record.width) × \(record.height) 像素")
+                    .font(.caption).foregroundStyle(.tertiary).monospacedDigit()
                 if !record.ocrText.isEmpty {
                     Text(record.ocrText).font(.callout).foregroundStyle(.secondary)
                         .lineLimit(2).textSelection(.enabled)
                 }
-            }.frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: 4) {
+            }.frame(maxWidth: .infinity, alignment: .leading).help(fileURL.lastPathComponent)
+            HStack(spacing: 6) {
                 rowButton("重新识别文字", symbol: "text.viewfinder", action: onOCR)
                 rowButton("贴图", symbol: "pin", action: onPin)
                 rowButton("编辑标注", symbol: "pencil.tip", action: onEdit)
-                Button(role: .destructive, action: onDelete) { Image(systemName: "trash").frame(width: 28, height: 30) }
-                    .buttonStyle(.borderless).help("删除截图历史").accessibilityLabel("删除截图历史")
+                Button(role: .destructive, action: onDelete) { Image(systemName: "trash").frame(width: 32, height: 36) }
+                    .buttonStyle(NikoActionButtonStyle()).help("删除截图历史").accessibilityLabel("删除截图历史")
                     .disabled(deleting)
             }
         }
         .padding(.vertical, 12)
         .contentShape(Rectangle())
+        .background(Color.primary.opacity(hovering ? 0.025 : 0), in: RoundedRectangle(cornerRadius: 10))
+        .onHover { hovering = $0 }
         .onTapGesture(count: 2, perform: onEdit)
         .contextMenu {
             Button("重新识别文字", systemImage: "text.viewfinder", action: onOCR)
@@ -222,7 +235,7 @@ private struct HistoryRow: View {
     }
 
     private func rowButton(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: symbol).frame(width: 28, height: 30) }
-            .buttonStyle(.borderless).help(title).accessibilityLabel(title)
+        Button(action: action) { Image(systemName: symbol).frame(width: 32, height: 36) }
+            .buttonStyle(NikoActionButtonStyle()).help(title).accessibilityLabel(title)
     }
 }

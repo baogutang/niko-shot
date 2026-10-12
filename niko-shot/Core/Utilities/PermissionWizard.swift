@@ -40,9 +40,11 @@ public final class PermissionWizardController {
     /// Opens or revisits onboarding, with no automatic permission prompts.
     public func show() {
         if let window { window.makeKeyAndOrderFront(nil); refreshScreenStatus(); return }
-        let window = PermissionWizardWindow(contentRect: CGRect(x: 0, y: 0, width: 540, height: 480),
+        let window = PermissionWizardWindow(contentRect: CGRect(x: 0, y: 0, width: 540, height: 520),
                                             styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "欢迎使用 niko-shot"
+        window.toolbarStyle = .unified
+        window.titlebarAppearsTransparent = true
         window.isReleasedWhenClosed = false
         window.setAccessibilityLabel("niko-shot 首次使用向导")
         window.onClose = { [weak self] in self?.close() }
@@ -78,22 +80,44 @@ public final class PermissionWizardController {
         let count = label("第 \(step + 1) 步，共 3 步", size: 12, color: .secondaryLabelColor)
         count.setAccessibilityLabel("向导第 \(step + 1) 步，共三步")
         stack.addArrangedSubview(count)
+        let progress = NSProgressIndicator()
+        progress.style = .bar
+        progress.isIndeterminate = false
+        progress.minValue = 0; progress.maxValue = 3; progress.doubleValue = Double(step + 1)
+        progress.setAccessibilityElement(false)
+        stack.addArrangedSubview(progress)
+        progress.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        progress.heightAnchor.constraint(equalToConstant: 4).isActive = true
 
         let symbol = step == 0 ? "camera.viewfinder" : step == 1 ? "display" : "checkmark.viewfinder"
         let icon = NSImageView()
         icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
-        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 44, weight: .regular)
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 30, weight: .medium)
         icon.contentTintColor = .controlAccentColor
         icon.setAccessibilityElement(false)
-        icon.widthAnchor.constraint(equalToConstant: 56).isActive = true
-        icon.heightAnchor.constraint(equalToConstant: 56).isActive = true
-        stack.addArrangedSubview(icon)
+        let badge = NSBox()
+        badge.boxType = .custom; badge.titlePosition = .noTitle; badge.borderWidth = 0
+        badge.fillColor = .controlAccentColor.withAlphaComponent(0.10)
+        badge.cornerRadius = 14; badge.contentViewMargins = NSSize(width: 10, height: 10)
+        badge.contentView = icon
+        badge.widthAnchor.constraint(equalToConstant: 56).isActive = true
+        badge.heightAnchor.constraint(equalToConstant: 56).isActive = true
+        badge.setAccessibilityElement(false)
+        stack.addArrangedSubview(badge)
 
         switch step {
         case 0:
             stack.addArrangedSubview(label("把屏幕上的想法，留在手边。", size: 25, weight: .semibold))
             stack.addArrangedSubview(label("从菜单栏或全局快捷键开始截图、录屏、文字识别和翻译。所有工具都在这一个原生应用里。", size: 14))
-            stack.addArrangedSubview(label("拖动框选 · Enter 复制 · Tab 标注\n⌘S 保存 · Esc 随时取消", size: 13, color: .secondaryLabelColor))
+            let shortcuts = NSBox()
+            shortcuts.boxType = .custom; shortcuts.titlePosition = .noTitle
+            shortcuts.fillColor = .controlBackgroundColor; shortcuts.borderColor = .separatorColor.withAlphaComponent(0.35)
+            shortcuts.borderWidth = 0.5; shortcuts.cornerRadius = 12
+            shortcuts.contentViewMargins = NSSize(width: 14, height: 12)
+            shortcuts.contentView = label("拖动框选 · Enter 复制 · Tab 标注\n⌘S 保存 · Esc 随时取消", size: 13, color: .secondaryLabelColor)
+            stack.addArrangedSubview(shortcuts)
+            shortcuts.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+            shortcuts.heightAnchor.constraint(equalToConstant: 68).isActive = true
             stack.addArrangedSubview(label("截图快捷键不需要输入监控权限。麦克风和摄像头只在你开启录制时询问授权。", size: 12, color: .secondaryLabelColor))
         case 1:
             stack.addArrangedSubview(label("允许读取屏幕内容", size: 25, weight: .semibold))
@@ -131,6 +155,9 @@ public final class PermissionWizardController {
         next.keyEquivalent = "\r"
         footer.addArrangedSubview(next)
         content.addSubview(footer)
+        let divider = NSBox()
+        divider.boxType = .separator; divider.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(divider)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 30),
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -30),
@@ -139,7 +166,10 @@ public final class PermissionWizardController {
             footer.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 30),
             footer.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -30),
             footer.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20),
-            footer.heightAnchor.constraint(equalToConstant: 44)
+            footer.heightAnchor.constraint(equalToConstant: 44),
+            divider.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            divider.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            divider.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -10)
         ])
         window.contentView = content
         window.defaultButtonCell = next.cell as? NSButtonCell

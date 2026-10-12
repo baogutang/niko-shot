@@ -1,8 +1,21 @@
-// Presents system-style preference sections and a local-only native shortcut recorder.
+// Presents a compact native preference workspace and preserves local shortcut recording.
 import AppKit
+import Observation
 import SwiftUI
 
-/// Native preference navigation with observable settings and shortcut feedback.
+/// Routes an existing or newly opened settings window to the translation workspace.
+@MainActor
+@Observable
+public final class SettingsNavigation {
+    /// Shared navigation intent consumed by the settings window.
+    public static let shared = SettingsNavigation()
+    /// Set to true to reveal OCR and translation without replacing the existing view.
+    public var opensTranslation = false
+    /// Creates an independent navigation state when needed by an embedding host.
+    public init() {}
+}
+
+/// Native preference navigation with readable panels and inline shortcut feedback.
 @MainActor
 public struct SettingsView: View {
     @Bindable private var settings: AppSettings
@@ -12,9 +25,12 @@ public struct SettingsView: View {
     @State private var presetWidth = 800
     @State private var presetHeight = 600
     @State private var launchAtLogin = LaunchAtLogin()
+    @State private var navigation = SettingsNavigation.shared
+    @State private var translationDrafts = TranslationSettingsDrafts()
+    @State private var showsTranslationSettings = true
     private let onShowWizard: () -> Void
 
-    /// Creates a settings shell sharing the application's live preferences and hotkeys.
+    /// Shares live preferences and hotkeys; opening a guide keeps unsaved translation input.
     public init(settings: AppSettings = .shared, hotkeys: HotkeyCenter,
                 onShowWizard: @escaping () -> Void = {}) {
         self.settings = settings
@@ -25,233 +41,146 @@ public struct SettingsView: View {
     public var body: some View {
         NavigationSplitView {
             List(SettingsSection.allCases, selection: $section) { item in
-                Label(item.title, systemImage: item.symbol).tag(item)
-                    .accessibilityLabel(item.title)
+                HStack(spacing: 10) {
+                    NikoSymbolBadge(symbol: item.symbol, tint: item.tint, size: 27)
+                    Text(item.title).font(.body)
+                    Spacer(minLength: 0)
+                }
+                .frame(minHeight: 38)
+                .tag(item)
+                .accessibilityLabel(item.title)
             }
             .listStyle(.sidebar)
             .accessibilityLabel("设置分类")
-            .navigationSplitViewColumnWidth(min: 165, ideal: 180, max: 220)
-            .toolbar {
-                ToolbarItem(placement: .automatic) {
-                    Label("niko-shot", systemImage: "camera.viewfinder").font(.headline)
-                }
+            .navigationSplitViewColumnWidth(min: 180, ideal: 190, max: 220)
+            .safeAreaInset(edge: .bottom) {
+                HStack(spacing: 6) {
+                    Text("niko-shot").font(.caption.weight(.medium))
+                    Spacer()
+                    Text(version).font(.caption).foregroundStyle(.secondary)
+                }.padding(.horizontal, 16).padding(.vertical, 12)
             }
         } detail: {
-            VStack(alignment: .leading, spacing: 0) {
-                Text((section ?? .general).title).font(.largeTitle.weight(.semibold))
-                    .accessibilityAddTraits(.isHeader)
-                    .padding(.horizontal, 28).padding(.top, 24).padding(.bottom, 8)
-                content.formStyle(.grouped)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    NikoPageHeader(title: currentSection.title, subtitle: currentSection.subtitle,
+                                   symbol: currentSection.symbol)
+                    content
+                }
+                .frame(maxWidth: 650, alignment: .leading)
+                .padding(24)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(NikoTheme.canvas)
         }
-        .frame(minWidth: 700, minHeight: 500)
-        .onAppear { launchAtLogin.refresh() }
+        .navigationSplitViewStyle(.balanced)
+        .frame(minWidth: 820, minHeight: 580)
+        .onAppear { launchAtLogin.refresh(); consumeNavigation() }
+        .onChange(of: navigation.opensTranslation) { _, requested in
+            if requested { consumeNavigation() }
+        }
+        .onDisappear { translationDrafts.clearSensitiveInputs() }
     }
+
+    private var currentSection: SettingsSection { section ?? .general }
+    private var version: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0" }
 
     @ViewBuilder private var content: some View {
-        switch section ?? .general {
-        case .general:
-            Form {
-                Section("niko-shot") {
-                    LabeledContent("运行方式", value: "菜单栏常驻 · 键盘优先")
-                    LabeledContent("外观", value: "跟随系统")
-                    Text("从菜单栏或全局快捷键开始。截图过程中按 Esc 取消，按 Enter 复制。")
-                        .font(.callout).foregroundStyle(.secondary)
+        switch currentSection {
+        case .general: generalContent
+        case .hotkeys: hotkeyContent
+        case .capture: captureContent
+        case .annotation: annotationContent
+        case .output: outputContent
+        case .ocrTranslation: ocrContent
+        case .recording: recordingContent
+        case .history:
+            SettingsGroup(title: "保留时间", caption: "历史记录可在历史窗口中搜索、拖出和手动删除。") {
+                PreferenceRow(title: "截图历史") {
+                    Picker("截图历史", selection: $settings.historyRetention) {
+                        Text("直到手动删除").tag(0)
+                        Text("7 天").tag(7); Text("30 天").tag(30); Text("90 天").tag(90)
+                    }.labelsHidden().frame(width: 180).accessibilityLabel("历史保留时间")
                 }
-                Section("登录启动") {
-                    Toggle("登录时打开 niko-shot", isOn: Binding(
-                        get: { launchAtLogin.isEnabled },
-                        set: { enabled in Task { await launchAtLogin.setEnabled(enabled) } }
-                    ))
-                    .disabled(launchAtLogin.isUpdating)
-                    .accessibilityLabel("登录时自动打开 niko-shot")
-                    if launchAtLogin.isUpdating {
-                        ProgressView("正在更新登录项…").controlSize(.small)
-                            .accessibilityLabel("正在更新登录启动设置")
-                    }
-                    Label(launchAtLogin.statusDescription, systemImage: launchAtLogin.requiresApproval ? "clock" : "info.circle")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .accessibilityLabel("登录启动状态：\(launchAtLogin.statusDescription)")
-                    if let message = launchAtLogin.errorMessage {
-                        Label(message, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.red)
-                            .accessibilityLabel(message)
-                    }
-                    HStack {
-                        Button("打开登录项设置") { launchAtLogin.openSettings() }
-                            .accessibilityLabel("打开系统设置中的登录项")
-                        Button("刷新状态") { launchAtLogin.refresh() }
-                            .disabled(launchAtLogin.isUpdating).accessibilityLabel("刷新登录启动状态")
-                    }
+            }
+        case .about: aboutContent
+        }
+    }
+
+    private var generalContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SettingsGroup(title: "启动与外观") {
+                PreferenceRow(title: "运行方式") { Text("菜单栏常驻").foregroundStyle(.secondary) }
+                Divider()
+                PreferenceRow(title: "外观") { Text("跟随系统").foregroundStyle(.secondary) }
+                Divider()
+                Toggle("登录时打开 niko-shot", isOn: Binding(
+                    get: { launchAtLogin.isEnabled },
+                    set: { enabled in Task { await launchAtLogin.setEnabled(enabled) } }
+                ))
+                .toggleStyle(.switch).frame(minHeight: 44).disabled(launchAtLogin.isUpdating)
+                .accessibilityLabel("登录时自动打开 niko-shot")
+                if launchAtLogin.isUpdating {
+                    ProgressView("正在更新登录项…").controlSize(.small)
+                        .accessibilityLabel("正在更新登录启动设置")
                 }
-                Section("使用向导与权限") {
-                    Button("重新查看使用向导", action: onShowWizard)
+                Label(launchAtLogin.statusDescription,
+                      systemImage: launchAtLogin.requiresApproval ? "clock" : "info.circle")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityLabel("登录启动状态：\(launchAtLogin.statusDescription)")
+                if let error = launchAtLogin.errorMessage {
+                    Label(error, systemImage: "exclamationmark.circle")
+                        .font(.callout).foregroundStyle(.red).textSelection(.enabled)
+                }
+                HStack(spacing: 10) {
+                    Button("打开登录项设置") { launchAtLogin.openSettings() }
+                        .accessibilityLabel("打开系统设置中的登录项")
+                    Button("刷新状态") { launchAtLogin.refresh() }
+                        .disabled(launchAtLogin.isUpdating).accessibilityLabel("刷新登录启动状态")
+                }
+            }
+            SettingsGroup(title: "使用向导与权限",
+                          caption: "截图与录屏需要屏幕录制权限。自动滚动使用辅助功能；手动滚动可直接使用。") {
+                HStack {
+                    Label("从第一张截图开始", systemImage: "sparkles")
+                    Spacer()
+                    Button("打开使用向导", action: onShowWizard)
                         .keyboardShortcut("h", modifiers: [.command, .shift])
                         .accessibilityLabel("打开三步使用和权限向导")
-                    Button("屏幕录制权限设置") { openPrivacySettings("Privacy_ScreenCapture") }
+                }.frame(minHeight: 44)
+                Divider()
+                HStack(spacing: 10) {
+                    Button("屏幕录制权限") { openPrivacySettings("Privacy_ScreenCapture") }
                         .accessibilityLabel("打开屏幕录制权限系统设置")
-                    Button("辅助功能权限设置") { openPrivacySettings("Privacy_Accessibility") }
+                    Button("辅助功能权限") { openPrivacySettings("Privacy_Accessibility") }
                         .accessibilityLabel("打开自动滚动使用的辅助功能权限系统设置")
-                    Text("截图与录屏使用屏幕录制权限；辅助功能只用于长截图自动滚动，未授权时可手动滚动。麦克风和摄像头仅在录制时按需授权。")
-                        .font(.caption).foregroundStyle(.secondary)
                 }
+                Text("麦克风和摄像头仅在开启对应录制选项后按需授权。")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-        case .hotkeys:
-            hotkeyForm
-        case .capture:
-            Form {
-                Section("框选") {
-                    Picker("默认延时", selection: $settings.captureDelay) {
-                        Text("立即").tag(0)
-                        ForEach(1...10, id: \.self) { Text("\($0) 秒").tag($0) }
-                    }.accessibilityLabel("截图延时")
-                    Toggle("显示像素尺寸", isOn: $settings.showsPixels)
-                        .accessibilityLabel("框选时显示实际像素尺寸")
-                    Text("关闭后以屏幕点数显示；导出按屏幕实际缩放倍率计算。")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Section("预设尺寸") {
-                    ForEach(settings.presetSizes) { preset in
-                        HStack {
-                            LabeledContent(preset.name, value: "\(Int(preset.width)) × \(Int(preset.height)) pt").monospacedDigit()
-                            Button("删除", systemImage: "minus.circle") { settings.presetSizes.removeAll { $0.id == preset.id } }
-                                .labelStyle(.iconOnly).accessibilityLabel("删除截图尺寸预设\(preset.name)").help("删除\(preset.name)")
-                        }
-                    }
-                    TextField("名称", text: $presetName).accessibilityLabel("截图尺寸预设名称")
-                    HStack {
-                        TextField("宽", value: $presetWidth, format: .number).accessibilityLabel("预设宽度，单位屏幕点")
-                        Text("×").accessibilityHidden(true)
-                        TextField("高", value: $presetHeight, format: .number).accessibilityLabel("预设高度，单位屏幕点")
-                        Button("添加") { settings.presetSizes.append(CaptureSizePreset(name: presetName, width: Double(presetWidth), height: Double(presetHeight))) }
-                            .disabled(presetWidth <= 0 || presetHeight <= 0 || presetName.isEmpty)
-                            .keyboardShortcut(.return, modifiers: .command).accessibilityLabel("添加截图尺寸预设")
-                    }
-                }
-            }
-        case .annotation:
-            Form {
-                Section("标注工作区") {
-                    Label("矩形、椭圆、箭头、画笔、文字、马赛克等工具", systemImage: "pencil.tip.crop.circle")
-                    LabeledContent("撤销 / 重做", value: "⌘Z / ⇧⌘Z")
-                    LabeledContent("切换框选与标注", value: "Tab")
-                }
-            }
-        case .output:
-            Form {
-                Section("默认输出") {
-                    Picker("格式", selection: $settings.exportFormatRaw) {
-                        Text("PNG").tag("png"); Text("JPEG").tag("jpeg")
-                        Text("HEIF").tag("heif"); Text("TIFF").tag("tiff")
-                    }.accessibilityLabel("默认图片格式")
-                    if settings.exportFormatRaw == "jpeg" {
-                        LabeledContent("JPEG 质量") {
-                            Slider(value: $settings.jpegQuality, in: 0...1).frame(width: 170)
-                                .accessibilityLabel("JPEG 质量")
-                            Text(settings.jpegQuality, format: .percent.precision(.fractionLength(0)))
-                                .monospacedDigit().frame(width: 42)
-                        }
-                    }
-                    TextField("文件名模板", text: $settings.filenameTemplate)
-                        .accessibilityLabel("截图文件名模板")
-                    Text("可使用 {date}、{time} 和 {n}。扩展名随输出格式自动添加。")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
-        case .ocrTranslation:
-            Form {
-                Section("文字识别") {
-                    Toggle("自动识别截图以供历史搜索", isOn: $settings.autoOCR)
-                        .accessibilityLabel("自动识别截图文字，用于历史搜索")
-                    Toggle("精确识别", isOn: $settings.accurateOCR)
-                        .accessibilityLabel("使用精确文字识别")
-                    Text("快速模式用于系统支持的拉丁语言；启用中文或日文时仍使用精确识别，保留这些语言的识别能力。")
-                        .font(.caption).foregroundStyle(.secondary)
-                    ForEach([("zh-Hans", "简体中文"), ("en-US", "英语"), ("ja-JP", "日语")], id: \.0) { code, name in
-                        Toggle(name, isOn: Binding(get: { settings.ocrLanguages.contains(code) }, set: { selected in if selected { if !settings.ocrLanguages.contains(code) { settings.ocrLanguages.append(code) } } else if settings.ocrLanguages.count > 1 { settings.ocrLanguages.removeAll { $0 == code } } }))
-                            .accessibilityLabel("识别语言：\(name)").help("至少保留一种文字识别语言")
-                    }
-                }
-                TranslationSettingsView(settings: settings)
-            }
-        case .recording:
-            Form {
-                Section("视频") {
-                    Picker("帧率", selection: $settings.recordingFPS) {
-                        ForEach([15, 24, 30, 60], id: \.self) { Text("\($0) fps").tag($0) }
-                    }.accessibilityLabel("录屏帧率")
-                    Picker("编码", selection: $settings.recordingCodec) {
-                        Text("HEVC · 更小体积").tag("hevc")
-                        Text("H.264 · 广泛兼容").tag("h264")
-                    }.accessibilityLabel("视频编码")
-                    Slider(value: $settings.recordingQuality, in: 0...1) { Text("编码质量") }.accessibilityLabel("录屏编码质量")
-                    Toggle("显示光标", isOn: $settings.showsCursor)
-                        .accessibilityLabel("在录制视频中显示光标")
-                    Toggle("摄像头画中画", isOn: $settings.recordingCamera)
-                        .accessibilityLabel("录制摄像头画中画")
-                }
-                Section("GIF") {
-                    TextField("最大宽度（像素）", value: $settings.gifWidth, format: .number)
-                        .accessibilityLabel("GIF 最大宽度，单位像素")
-                    Picker("采样帧率", selection: $settings.gifFPS) { ForEach([5, 10, 15, 24, 30], id: \.self) { Text("\($0) fps").tag($0) } }
-                        .accessibilityLabel("GIF 采样帧率")
-                    Text("默认最多 800px、15fps；导出面板显示预估体积。").font(.caption).foregroundStyle(.secondary)
-                }
-                Section("音频") {
-                    Toggle("录制系统声音", isOn: $settings.systemAudio)
-                        .accessibilityLabel("在录屏中包含系统声音")
-                    Toggle("录制麦克风", isOn: $settings.microphone)
-                        .accessibilityLabel("在录屏中包含麦克风声音")
-                    Text("仅在开启麦克风录制时请求麦克风权限。")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
-        case .history:
-            Form {
-                Section("保留时间") {
-                    Picker("截图历史", selection: $settings.historyRetention) {
-                        Text("直到手动删除").tag(0); Text("7 天").tag(7)
-                        Text("30 天").tag(30); Text("90 天").tag(90)
-                    }.accessibilityLabel("历史保留时间")
-                }
-            }
-        case .about:
-            Form {
-                Section {
-                    HStack(spacing: 16) {
-                        Image(systemName: "camera.viewfinder").font(.system(size: 42)).foregroundStyle(.tint)
-                            .accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("niko-shot").font(.title2.weight(.semibold))
-                            Text("版本 \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0")")
-                                .foregroundStyle(.secondary)
-                            Text("原生截图、录屏与文字工具").font(.callout)
-                        }
-                    }.padding(.vertical, 12)
-                    LabeledContent("系统要求", value: "macOS 14 或更新版本")
-                    Text("Swift · AppKit · SwiftUI · ScreenCaptureKit")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+            HStack(spacing: 10) {
+                NikoShortcutHint(text: "Esc")
+                Text("取消截图").font(.caption).foregroundStyle(.secondary)
+                NikoShortcutHint(text: "↩")
+                Text("复制截图").font(.caption).foregroundStyle(.secondary)
             }
         }
     }
 
-    private func openPrivacySettings(_ pane: String) {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") { NSWorkspace.shared.open(url) }
-    }
-
-    private var hotkeyForm: some View {
-        Form {
-            Section {
+    private var hotkeyContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SettingsGroup(title: "全局快捷键", caption: "点击组合键录制，按 Esc 取消。无需输入监控权限。") {
                 ForEach(CaptureAction.allCases) { action in
-                    VStack(alignment: .leading, spacing: 7) {
-                        HStack {
-                            Label(action.title, systemImage: action.symbol)
-                            Spacer()
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 12) {
+                            Image(systemName: action.symbol).foregroundStyle(.secondary)
+                                .frame(width: 22).accessibilityHidden(true)
+                            Text(action.title)
+                            Spacer(minLength: 12)
                             HotkeyRecorder(shortcut: hotkeys.shortcut(for: action), actionTitle: action.title) {
                                 hotkeys.setShortcut($0, for: action)
-                            }.frame(width: 150, height: 26)
-                        }
+                            }.frame(width: 150, height: 44)
+                        }.frame(minHeight: 44)
                         if let issue = hotkeys.registrationErrors[action] {
                             Label(issue.message, systemImage: "exclamationmark.circle.fill")
                                 .font(.caption).foregroundStyle(.red)
@@ -264,16 +193,278 @@ public struct SettingsView: View {
                                 }
                             }
                         }
-                    }.padding(.vertical, 3)
+                    }
+                    if action != CaptureAction.allCases.last { Divider() }
                 }
-            } footer: {
-                Text("点击组合键开始录制，按 Esc 取消。热键无需输入监控权限。替代键仍会接受系统冲突检查。")
             }
-            Section {
-                Button("恢复默认快捷键") { hotkeys.resetDefaults() }
-                    .accessibilityLabel("恢复全部默认快捷键")
+            Button("恢复默认快捷键") { hotkeys.resetDefaults() }
+                .accessibilityLabel("恢复全部默认快捷键")
+        }
+    }
+
+    private var captureContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SettingsGroup(title: "框选行为") {
+                PreferenceRow(title: "默认延时") {
+                    Picker("默认延时", selection: $settings.captureDelay) {
+                        Text("立即").tag(0)
+                        ForEach(1...10, id: \.self) { Text("\($0) 秒").tag($0) }
+                    }.labelsHidden().frame(width: 150).accessibilityLabel("截图延时")
+                }
+                Divider()
+                Toggle("显示实际像素尺寸", isOn: $settings.showsPixels)
+                    .toggleStyle(.switch).frame(minHeight: 44)
+                    .accessibilityLabel("框选时显示实际像素尺寸")
+                Text("关闭后显示屏幕点数；导出始终按屏幕实际缩放倍率计算。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            SettingsGroup(title: "预设尺寸", caption: "框选时可选择预设，尺寸以屏幕点数计算。") {
+                ForEach(settings.presetSizes) { preset in
+                    HStack {
+                        Text(preset.name)
+                        Spacer()
+                        Text("\(Int(preset.width)) × \(Int(preset.height)) pt")
+                            .monospacedDigit().foregroundStyle(.secondary)
+                        Button { settings.presetSizes.removeAll { $0.id == preset.id } } label: {
+                            Image(systemName: "minus.circle").frame(width: 44, height: 44)
+                        }
+                        .buttonStyle(.borderless).help("删除\(preset.name)")
+                        .accessibilityLabel("删除截图尺寸预设\(preset.name)")
+                    }.frame(minHeight: 40)
+                }
+                if !settings.presetSizes.isEmpty { Divider() }
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("添加预设").font(.subheadline.weight(.medium))
+                    TextField("名称", text: $presetName).textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("截图尺寸预设名称")
+                    HStack(spacing: 10) {
+                        TextField("宽度", value: $presetWidth, format: .number)
+                            .textFieldStyle(.roundedBorder).accessibilityLabel("预设宽度，单位屏幕点")
+                        Text("×").foregroundStyle(.secondary).accessibilityHidden(true)
+                        TextField("高度", value: $presetHeight, format: .number)
+                            .textFieldStyle(.roundedBorder).accessibilityLabel("预设高度，单位屏幕点")
+                        Text("pt").font(.caption).foregroundStyle(.secondary)
+                        Button("添加") {
+                            settings.presetSizes.append(CaptureSizePreset(name: presetName.trimmingCharacters(in: .whitespacesAndNewlines),
+                                                                          width: Double(presetWidth), height: Double(presetHeight)))
+                        }
+                        .disabled(presetWidth <= 0 || presetHeight <= 0 || presetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .keyboardShortcut(.return, modifiers: .command).accessibilityLabel("添加截图尺寸预设")
+                    }
+                }
             }
         }
+    }
+
+    private var annotationContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SettingsGroup(title: "标注工具") {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), alignment: .leading)], alignment: .leading, spacing: 16) {
+                    ForEach(AnnotationTool.allCases, id: \.self) { tool in
+                        Label(tool.title, systemImage: tool.symbol).font(.callout)
+                            .accessibilityLabel(tool.title)
+                    }
+                }.padding(.vertical, 4)
+            }
+            SettingsGroup(title: "画布操作") {
+                PreferenceRow(title: "撤销") { NikoShortcutHint(text: "⌘Z") }
+                    .accessibilityElement(children: .ignore).accessibilityLabel("撤销，Command Z")
+                Divider()
+                PreferenceRow(title: "重做") { NikoShortcutHint(text: "⇧⌘Z") }
+                    .accessibilityElement(children: .ignore).accessibilityLabel("重做，Shift Command Z")
+                Divider()
+                PreferenceRow(title: "切换框选与标注") { NikoShortcutHint(text: "Tab") }
+                    .accessibilityElement(children: .ignore).accessibilityLabel("切换框选与标注，Tab")
+            }
+        }
+    }
+
+    private var outputContent: some View {
+        SettingsGroup(title: "图片导出") {
+            PreferenceRow(title: "默认格式") {
+                Picker("默认格式", selection: $settings.exportFormatRaw) {
+                    Text("PNG").tag("png"); Text("JPEG").tag("jpeg")
+                    Text("HEIF").tag("heif"); Text("TIFF").tag("tiff")
+                }.labelsHidden().frame(width: 170).accessibilityLabel("默认图片格式")
+            }
+            if settings.exportFormatRaw == "jpeg" {
+                Divider()
+                PreferenceRow(title: "JPEG 质量") {
+                    Slider(value: $settings.jpegQuality, in: 0...1).frame(width: 180).accessibilityLabel("JPEG 质量")
+                    Text(settings.jpegQuality, format: .percent.precision(.fractionLength(0)))
+                        .monospacedDigit().frame(width: 42)
+                }
+            }
+            Divider()
+            VStack(alignment: .leading, spacing: 8) {
+                Text("文件名模板").font(.subheadline.weight(.medium))
+                TextField("文件名模板", text: $settings.filenameTemplate).textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("截图文件名模板")
+                Text("可使用 {date}、{time} 和 {n}；扩展名随输出格式自动添加。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }.padding(.top, 4)
+        }
+    }
+
+    private var ocrContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Picker("文字识别与翻译设置", selection: $showsTranslationSettings) {
+                Text("文字识别").tag(false)
+                Text("翻译服务").tag(true)
+            }.pickerStyle(.segmented).labelsHidden().accessibilityLabel("文字识别与翻译设置子页")
+            if showsTranslationSettings {
+                TranslationSettingsView(settings: settings, drafts: translationDrafts)
+            } else {
+            SettingsGroup(title: "文字识别") {
+                Toggle("自动识别截图，用于历史搜索", isOn: $settings.autoOCR)
+                    .toggleStyle(.switch).frame(minHeight: 44)
+                    .accessibilityLabel("自动识别截图文字，用于历史搜索")
+                Divider()
+                Toggle("精确识别", isOn: $settings.accurateOCR)
+                    .toggleStyle(.switch).frame(minHeight: 44).accessibilityLabel("使用精确文字识别")
+                Text("快速模式适用于系统支持的拉丁语言；中文或日文仍使用精确识别。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Divider()
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("识别语言").font(.subheadline.weight(.medium))
+                    HStack(spacing: 20) {
+                        ForEach([("zh-Hans", "简体中文"), ("en-US", "英语"), ("ja-JP", "日语")], id: \.0) { code, name in
+                            Toggle(name, isOn: ocrLanguageBinding(code)).toggleStyle(.checkbox)
+                                .disabled(settings.ocrLanguages.count == 1 && settings.ocrLanguages.contains(code))
+                                .accessibilityLabel("识别语言：\(name)").help("至少保留一种文字识别语言")
+                        }
+                    }.frame(minHeight: 32)
+                }
+            }
+            }
+        }
+    }
+
+    private var recordingContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SettingsGroup(title: "视频") {
+                PreferenceRow(title: "帧率") {
+                    Picker("帧率", selection: $settings.recordingFPS) {
+                        ForEach([15, 24, 30, 60], id: \.self) { Text("\($0) fps").tag($0) }
+                    }.labelsHidden().frame(width: 140).accessibilityLabel("录屏帧率")
+                }
+                Divider()
+                PreferenceRow(title: "编码") {
+                    Picker("编码", selection: $settings.recordingCodec) {
+                        Text("HEVC · 更小体积").tag("hevc"); Text("H.264 · 广泛兼容").tag("h264")
+                    }.labelsHidden().frame(width: 200).accessibilityLabel("视频编码")
+                }
+                Divider()
+                PreferenceRow(title: "编码质量") {
+                    Slider(value: $settings.recordingQuality, in: 0...1).frame(width: 180)
+                        .accessibilityLabel("录屏编码质量")
+                    Text(settings.recordingQuality, format: .percent.precision(.fractionLength(0)))
+                        .monospacedDigit().frame(width: 42)
+                }
+                Divider()
+                Toggle("显示光标", isOn: $settings.showsCursor).toggleStyle(.switch).frame(minHeight: 44)
+                    .accessibilityLabel("在录制视频中显示光标")
+                Divider()
+                Toggle("摄像头画中画", isOn: $settings.recordingCamera).toggleStyle(.switch).frame(minHeight: 44)
+                    .accessibilityLabel("录制摄像头画中画")
+            }
+            SettingsGroup(title: "GIF", caption: "默认最大 800 px、15 fps；导出时显示预估体积。") {
+                PreferenceRow(title: "最大宽度", detail: "像素") {
+                    TextField("最大宽度", value: $settings.gifWidth, format: .number)
+                        .textFieldStyle(.roundedBorder).frame(width: 100)
+                        .accessibilityLabel("GIF 最大宽度，单位像素")
+                }
+                Divider()
+                PreferenceRow(title: "采样帧率") {
+                    Picker("采样帧率", selection: $settings.gifFPS) {
+                        ForEach([5, 10, 15, 24, 30], id: \.self) { Text("\($0) fps").tag($0) }
+                    }.labelsHidden().frame(width: 140).accessibilityLabel("GIF 采样帧率")
+                }
+            }
+            SettingsGroup(title: "音频", caption: "仅在开启麦克风录制时请求麦克风权限。") {
+                Toggle("录制系统声音", isOn: $settings.systemAudio).toggleStyle(.switch).frame(minHeight: 44)
+                    .accessibilityLabel("在录屏中包含系统声音")
+                Divider()
+                Toggle("录制麦克风", isOn: $settings.microphone).toggleStyle(.switch).frame(minHeight: 44)
+                    .accessibilityLabel("在录屏中包含麦克风声音")
+            }
+        }
+    }
+
+    private var aboutContent: some View {
+        SettingsGroup(title: "niko-shot") {
+            HStack(spacing: 14) {
+                NikoSymbolBadge(symbol: "camera.viewfinder", size: 52)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("版本 \(version)").font(.headline)
+                    Text("原生截图、录屏与文字工具").font(.callout).foregroundStyle(.secondary)
+                }
+            }.padding(.vertical, 4)
+            Divider()
+            PreferenceRow(title: "系统要求") { Text("macOS 14 或更新版本").foregroundStyle(.secondary) }
+            Text("Swift · AppKit · SwiftUI · ScreenCaptureKit").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func consumeNavigation() {
+        guard navigation.opensTranslation else { return }
+        section = .ocrTranslation
+        showsTranslationSettings = true
+        navigation.opensTranslation = false
+    }
+
+    private func ocrLanguageBinding(_ code: String) -> Binding<Bool> {
+        Binding(get: { settings.ocrLanguages.contains(code) }, set: { enabled in
+            if enabled, !settings.ocrLanguages.contains(code) { settings.ocrLanguages.append(code) }
+            else if !enabled, settings.ocrLanguages.count > 1 { settings.ocrLanguages.removeAll { $0 == code } }
+        })
+    }
+
+    private func openPrivacySettings(_ pane: String) {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") { NSWorkspace.shared.open(url) }
+    }
+}
+
+@MainActor
+private struct SettingsGroup<Content: View>: View {
+    let title: String
+    let caption: String?
+    private let content: Content
+
+    init(title: String, caption: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title; self.caption = caption; self.content = content()
+    }
+
+    var body: some View {
+        NikoPanel {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(title).font(.headline).accessibilityAddTraits(.isHeader)
+                if let caption { Text(caption).font(.caption).foregroundStyle(.secondary) }
+                content
+            }
+        }
+    }
+}
+
+@MainActor
+private struct PreferenceRow<Content: View>: View {
+    let title: String
+    let detail: String?
+    private let content: Content
+
+    init(title: String, detail: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title; self.detail = detail; self.content = content()
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                if let detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
+            }
+            Spacer(minLength: 16)
+            content
+        }.frame(minHeight: 44)
     }
 }
 
@@ -293,6 +484,19 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .about: "关于"
         }
     }
+    var subtitle: String {
+        switch self {
+        case .general: "启动方式、权限和使用向导。"
+        case .hotkeys: "为截图与常用动作设置快捷键。"
+        case .capture: "调整框选提示、延时和常用尺寸。"
+        case .annotation: "标注工具与画布快捷操作。"
+        case .output: "选择默认格式、图片质量和文件名。"
+        case .ocrTranslation: "识别文字，并接入你选择的翻译服务。"
+        case .recording: "视频、GIF 与音频的默认录制选项。"
+        case .history: "管理截图历史的保留时间。"
+        case .about: "版本与系统信息。"
+        }
+    }
     var symbol: String {
         switch self {
         case .general: "gearshape"
@@ -304,6 +508,19 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .recording: "record.circle"
         case .history: "clock"
         case .about: "info.circle"
+        }
+    }
+    var tint: Color {
+        switch self {
+        case .general: .gray
+        case .hotkeys: .purple
+        case .capture: .blue
+        case .annotation: .orange
+        case .output: .green
+        case .ocrTranslation: .indigo
+        case .recording: .red
+        case .history: .teal
+        case .about: .gray
         }
     }
 }

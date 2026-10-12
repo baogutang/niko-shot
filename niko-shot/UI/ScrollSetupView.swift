@@ -30,38 +30,33 @@ struct ScrollSetupView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 14) {
-                Image(systemName: "arrow.down.document").font(.system(size: 30)).foregroundStyle(.tint)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("滚动长截图").font(.title2.weight(.semibold))
-                    Text("选择滚动方式，排除不随页面滚动的固定栏。")
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-                Spacer()
-            }.padding(24)
+            NikoPageHeader(title: "滚动长截图", subtitle: "选定滚动方式，排除页面的固定栏。", symbol: "arrow.down.document")
+                .padding(24)
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    GroupBox("滚动方式") {
-                        VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 12) {
+                    NikoPanel {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("滚动方式").font(.headline).accessibilityAddTraits(.isHeader)
                             Picker("滚动方式", selection: $mode) {
                                 ForEach(ScrollCaptureMode.allCases) { item in Text(item.title).tag(item) }
                             }.pickerStyle(.segmented).accessibilityLabel("长截图滚动方式")
                             Text(mode == .automatic
                                  ? "工具会自动向下滚动，请保持窗口位置并等待捕获完成。"
                                  : "请自行向下滚动，画面稳定后会自动捕获；完成时请点结束。")
-                                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                             if mode == .automatic && !automaticAllowed {
+                                Divider()
                                 Label("尚未授予辅助功能权限。开始后将转为手动滚动。", systemImage: "info.circle")
                                     .font(.callout).foregroundStyle(.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
                                 Button("打开辅助功能设置", action: onOpenAccessibility)
                                     .accessibilityLabel("打开系统设置的辅助功能权限页面")
                             }
-                        }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
-                    GroupBox("忽略固定栏") {
-                        VStack(alignment: .leading, spacing: 12) {
+                    NikoPanel {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("忽略固定栏").font(.headline).accessibilityAddTraits(.isHeader)
                             HStack {
                                 Picker("编辑忽略区", selection: $edge) {
                                     ForEach(IgnoredEdge.allCases) { Text($0.title).tag($0) }
@@ -73,8 +68,8 @@ struct ScrollSetupView: View {
                             }
                             Text("选择顶部或底部，然后在预览中拖动分界线。高亮区域会从每一帧中裁去。")
                                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                            preview.frame(height: 270)
-                            HStack(spacing: 24) {
+                            preview.frame(height: 244)
+                            HStack(spacing: 16) {
                                 exclusionField("忽略顶部", value: topBinding, maximum: maximumIgnored - ignoredBottom)
                                 exclusionField("忽略底部", value: bottomBinding, maximum: maximumIgnored - ignoredTop)
                             }
@@ -88,19 +83,20 @@ struct ScrollSetupView: View {
                                 Text("滚动区域高度至少需要 240 px，请取消后重新框选。")
                                     .font(.callout).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
                             }
-                        }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
                 }.padding(.horizontal, 24).padding(.bottom, 24)
             }
             Divider()
-            HStack {
+            HStack(spacing: 12) {
                 Button("取消", action: onCancel).keyboardShortcut(.cancelAction).accessibilityLabel("取消长截图设置")
                 Spacer()
                 Button("开始长截图") { onStart(mode, ignoredTop, ignoredBottom) }
-                    .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent).controlSize(.large).keyboardShortcut(.defaultAction)
                     .disabled(usableHeight < 240).accessibilityLabel("使用所选滚动方式和忽略区域开始长截图")
-            }.padding(20)
+            }.padding(.horizontal, 24).padding(.vertical, 16)
         }
+        .background(NikoTheme.canvas)
         .frame(minWidth: 560, idealWidth: 640, minHeight: 620, idealHeight: 740)
     }
 
@@ -142,9 +138,9 @@ struct ScrollSetupView: View {
                 boundary(width: width, active: edge == .top).offset(y: top)
                 boundary(width: width, active: edge == .bottom).offset(y: height - bottom)
             }
-            .frame(width: width, height: height).background(Color(nsColor: .controlBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.12)))
+            .frame(width: width, height: height).background(NikoTheme.canvas)
+            .clipShape(RoundedRectangle(cornerRadius: NikoTheme.cornerRadius))
+            .overlay(RoundedRectangle(cornerRadius: NikoTheme.cornerRadius).strokeBorder(NikoTheme.separator.opacity(0.45)))
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0).onChanged { event in
                 guard height > 0 else { return }

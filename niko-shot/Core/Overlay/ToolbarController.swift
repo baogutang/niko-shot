@@ -213,10 +213,12 @@ private final class HUDPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+/// Native material surface with separate annotation, appearance and output rows.
 @MainActor
-private final class HUDContentView: NSVisualEffectView {
+final class HUDContentView: NSVisualEffectView {
     private let column = NSStackView()
     private var toolGroups: [[NSView]] = []
+    private var styleGroups: [[NSView]] = []
     private var commandGroups: [[NSView]] = []
     private var toolButtons: [(AnnotationTool, HUDIconButton)] = []
     private var actionButtons: [ToolbarAction: HUDIconButton] = [:]
@@ -271,15 +273,16 @@ private final class HUDContentView: NSVisualEffectView {
             }
             colorButtons.append(button)
         }
-        commandGroups.append(colorButtons)
-        commandGroups.append([StrokeWidthControl(onChange: onWidth)])
+        styleGroups.append(colorButtons)
+        styleGroups.append([StrokeWidthControl(onChange: onWidth)])
         }
         let groups: [[ToolbarAction]] = confirmationTitle == nil ? [[.undo, .redo], [.selection], [.copy, .save, .pin, .ocr, .scroll], [.close]] : [[.copy], [.close]]
         for group in groups {
             var views: [NSView] = []
             for action in group {
                 let title = action == .copy ? (confirmationTitle ?? action.title) : action.title
-                let button = HUDIconButton(symbol: action == .copy && confirmationTitle != nil ? "checkmark.circle" : action.symbol, title: title)
+                let button = HUDIconButton(symbol: action == .copy && confirmationTitle != nil ? "checkmark.circle" : action.symbol,
+                                           title: title, tint: action == .copy ? .controlAccentColor : nil)
                 button.toolTip = action.keyHint.map { "\(title) · \($0)" } ?? title
                 button.onPress = { onAction(action) }
                 actionButtons[action] = button
@@ -299,7 +302,7 @@ private final class HUDContentView: NSVisualEffectView {
         let limit = max(44, maximumWidth - 24)
         var largest: CGFloat = 44
         var rowCount = 0
-        for groups in [toolGroups, commandGroups] {
+        for groups in [toolGroups, styleGroups, commandGroups] {
             var rowViews: [NSView] = []
             var rowWidth: CGFloat = 0
             func finishRow() {

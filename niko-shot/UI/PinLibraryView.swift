@@ -13,7 +13,16 @@ struct PinLibraryView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    NikoSymbolBadge(symbol: "pin", size: 34)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("贴图库").font(.system(size: 17, weight: .semibold)).accessibilityAddTraits(.isHeader)
+                        Text("双击显示贴图，也可以直接拖出文件。").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }.padding(20)
+                Divider()
                 if manager.pins.isEmpty {
                     ContentUnavailableView("贴图库为空", systemImage: "pin",
                                            description: Text("截图后选择“贴图”，即可将图片悬浮在其他窗口上。"))
@@ -42,6 +51,7 @@ struct PinLibraryView: View {
                 }
             }
         }
+        .background(NikoTheme.canvas)
         .frame(minWidth: 600, minHeight: 440)
     }
 }
@@ -65,7 +75,7 @@ private struct PinCard: View {
             }
             .frame(maxWidth: .infinity)
             .frame(height: 148)
-            .background(.quaternary.opacity(0.4))
+            .background(NikoTheme.surface)
             .help("双击显示贴图，或拖入 Finder 和其他应用")
             .accessibilityLabel("贴图缩略图，可拖出文件")
             Divider()
@@ -74,14 +84,14 @@ private struct PinCard: View {
                     .lineLimit(1).truncationMode(.middle)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Button(action: onShow) { Image(systemName: "arrow.up.forward.square").frame(width: 24, height: 28) }
-                    .buttonStyle(.borderless).help("显示贴图").accessibilityLabel("显示贴图")
+                    .buttonStyle(NikoActionButtonStyle()).help("显示贴图").accessibilityLabel("显示贴图")
                 Button(role: .destructive, action: onRemove) { Image(systemName: "trash").frame(width: 24, height: 28) }
-                    .buttonStyle(.borderless).help("删除贴图").accessibilityLabel("删除贴图")
+                    .buttonStyle(NikoActionButtonStyle()).help("删除贴图").accessibilityLabel("删除贴图")
             }.padding(.horizontal, 12).padding(.vertical, 8)
         }
-        .background(.background, in: RoundedRectangle(cornerRadius: 12))
+        .background(NikoTheme.surface, in: RoundedRectangle(cornerRadius: 12))
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary, lineWidth: 1) }
+        .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(NikoTheme.separator.opacity(0.35), lineWidth: 0.5) }
         .contentShape(RoundedRectangle(cornerRadius: 12))
         .onTapGesture(count: 2, perform: onShow)
         .contextMenu {

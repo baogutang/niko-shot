@@ -28,59 +28,93 @@ struct GifExportView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 14) {
-                Image(systemName: "photo.stack").font(.system(size: 30)).foregroundStyle(.tint)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("导出 GIF").font(.title2.weight(.semibold))
-                    Text("循环播放，可调整尺寸和帧率。").font(.callout).foregroundStyle(.secondary)
-                }
-                Spacer()
-            }.padding(24)
-            Form {
-                Section("输出选项") {
-                    LabeledContent("宽度") {
-                        if maximumWidth > minimumWidth {
-                            Slider(value: widthBinding, in: Double(minimumWidth)...Double(maximumWidth), step: 1)
-                                .frame(width: 170).accessibilityLabel("GIF 输出宽度")
+            NikoPageHeader(title: "导出 GIF", subtitle: "调整尺寸和帧率，导出循环播放的动画。", symbol: "photo.stack")
+                .padding(24)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    NikoPanel {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("输出选项").font(.headline).accessibilityAddTraits(.isHeader)
+                            LabeledContent("宽度") {
+                                HStack(spacing: 10) {
+                                    if maximumWidth > minimumWidth {
+                                        Slider(value: widthBinding, in: Double(minimumWidth)...Double(maximumWidth), step: 1)
+                                            .accessibilityLabel("GIF 输出宽度")
+                                    }
+                                    Text("\(outputWidth) px").font(.callout).monospacedDigit()
+                                        .foregroundStyle(.secondary).frame(width: 64, alignment: .trailing)
+                                }.frame(maxWidth: 290)
+                            }.frame(minHeight: 28)
+                            LabeledContent("帧率") {
+                                Picker("帧率", selection: $settings.gifFPS) {
+                                    ForEach([5, 10, 15, 24, 30], id: \.self) { Text("\($0) fps").tag($0) }
+                                }.pickerStyle(.segmented).labelsHidden().frame(width: 290)
+                                    .accessibilityLabel("GIF 帧率")
+                            }.frame(minHeight: 28)
+                            Text("默认宽度不超过 800 px。较小尺寸和较低帧率可减少体积。")
+                                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         }
-                        Text("\(outputWidth) px").monospacedDigit().frame(width: 64, alignment: .trailing)
+                    }.disabled(isExporting)
+                    NikoPanel {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Text("预计体积").font(.headline)
+                                Spacer()
+                                Text(sizeDescription).font(.system(size: 20, weight: .semibold)).monospacedDigit()
+                            }.accessibilityElement(children: .combine)
+                            Divider()
+                            HStack(alignment: .top, spacing: 16) {
+                                metric("输出尺寸", value: "\(outputWidth) × \(outputHeight) px")
+                                Divider().frame(height: 36)
+                                metric("时长", value: "\(safeDuration.formatted(.number.precision(.fractionLength(1)))) 秒")
+                                Divider().frame(height: 36)
+                                metric("预计帧数", value: "\(Int(ceil(safeDuration * Double(outputFPS))))")
+                            }
+                            Text("实际大小取决于画面内容。GIF 将持续循环播放。")
+                                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        }
                     }
-                    Picker("帧率", selection: $settings.gifFPS) {
-                        ForEach([5, 10, 15, 24, 30], id: \.self) { Text("\($0) fps").tag($0) }
-                    }.accessibilityLabel("GIF 帧率")
-                    Text("默认宽度不超过 800 px。较低帧率和更小尺寸可以明显减少体积。")
-                        .font(.caption).foregroundStyle(.secondary)
-                }.disabled(isExporting)
-                Section("预览信息") {
-                    LabeledContent("输出尺寸", value: "\(outputWidth) × \(outputHeight) px").monospacedDigit()
-                    LabeledContent("时长", value: "\(safeDuration.formatted(.number.precision(.fractionLength(1)))) 秒").monospacedDigit()
-                    LabeledContent("预计帧数", value: "\(Int(ceil(safeDuration * Double(outputFPS))))").monospacedDigit()
-                    LabeledContent("预计体积", value: sizeDescription).monospacedDigit()
-                    Text("体积为估算值，实际大小取决于画面内容。GIF 将持续循环播放。")
-                        .font(.caption).foregroundStyle(.secondary)
                 }
+                .padding(.horizontal, 24).padding(.bottom, 24)
+            }
+            Divider()
+            VStack(spacing: 14) {
                 if isExporting {
-                    Section("正在导出") {
+                    VStack(alignment: .leading, spacing: 8) {
                         if let progress {
+                            HStack {
+                                Text("正在导出 GIF").font(.callout)
+                                Spacer()
+                                Text(min(1, max(0, progress)), format: .percent.precision(.fractionLength(0)))
+                                    .font(.callout).monospacedDigit().foregroundStyle(.secondary)
+                            }
                             ProgressView(value: min(1, max(0, progress))).accessibilityLabel("GIF 导出进度")
-                            Text(progress, format: .percent.precision(.fractionLength(0))).monospacedDigit()
                         } else {
                             ProgressView("正在处理视频帧…").accessibilityLabel("正在导出 GIF")
                         }
-                    }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
                 }
-            }.formStyle(.grouped)
-            Divider()
-            HStack {
-                Button(isExporting ? "取消导出" : "取消", action: onCancel)
-                    .keyboardShortcut(.cancelAction).accessibilityLabel(isExporting ? "取消 GIF 导出" : "取消 GIF 设置")
-                Spacer()
-                Button("导出 GIF…") { onExport(GifOptions(width: outputWidth, fps: outputFPS)) }
-                    .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-                    .disabled(isExporting || safeDuration == 0).accessibilityLabel("选择保存位置并导出 GIF")
-            }.padding(20)
+                HStack(spacing: 12) {
+                    Button(isExporting ? "取消导出" : "取消", action: onCancel)
+                        .keyboardShortcut(.cancelAction).accessibilityLabel(isExporting ? "取消 GIF 导出" : "取消 GIF 设置")
+                    Spacer()
+                    Button("导出 GIF…") { onExport(GifOptions(width: outputWidth, fps: outputFPS)) }
+                        .buttonStyle(.borderedProminent).controlSize(.large).keyboardShortcut(.defaultAction)
+                        .disabled(isExporting || safeDuration == 0).accessibilityLabel("选择保存位置并导出 GIF")
+                }
+            }.padding(.horizontal, 24).padding(.vertical, 16)
         }
+        .background(NikoTheme.canvas)
         .frame(minWidth: 480, idealWidth: 500, minHeight: 470)
+    }
+
+    private func metric(_ title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.callout.weight(.medium)).monospacedDigit()
+                .fixedSize(horizontal: false, vertical: true)
+        }.frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
     }
 
     private var safeDuration: Double { duration.isFinite ? max(0, duration) : 0 }

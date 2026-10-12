@@ -60,7 +60,7 @@ final class RecordingControlBarController {
         effect.blendingMode = .behindWindow
         effect.state = .active
         effect.wantsLayer = true
-        effect.layer?.cornerRadius = 22
+        effect.layer?.cornerRadius = NikoTheme.cornerRadius
         effect.layer?.masksToBounds = true
         let hosting = NSHostingView(rootView: RecordingControlBar(session: session, format: format,
                                                                  onStop: { [weak self] in self?.onStop() },
@@ -126,7 +126,7 @@ private struct RecordingControlBar: View {
                     Circle().fill(session.state == .paused ? Color.orange : Color.red).frame(width: 7, height: 7)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(durationLabel).font(.system(size: 15, weight: .medium, design: .monospaced)).monospacedDigit()
+                        Text(durationLabel).font(.system(size: 17, weight: .semibold)).monospacedDigit()
                             .accessibilityLabel("录制时长 \(durationLabel)")
                         Text("\(format) · \(stateTitle)").font(.caption2).foregroundStyle(.secondary)
                             .accessibilityLabel("录制格式 \(format)，\(stateTitle)")
@@ -190,13 +190,12 @@ private struct RecordingHUDButton: View {
             Image(systemName: symbol).font(.system(size: 17, weight: .medium))
                 .foregroundStyle(tint).frame(width: 44, height: 44)
                 .background(selected ? Color.accentColor.opacity(0.2) : hovered ? Color.primary.opacity(0.08) : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 11))
-                .contentShape(RoundedRectangle(cornerRadius: 11))
+                            in: RoundedRectangle(cornerRadius: NikoTheme.cornerRadius))
+                .contentShape(RoundedRectangle(cornerRadius: NikoTheme.cornerRadius))
         }
         .buttonStyle(.plain).disabled(!enabled).opacity(enabled ? 1 : 0.45)
         .focusable()
-        .scaleEffect(hovered && enabled && !reduceMotion ? 1.06 : 1)
-        .animation(reduceMotion ? nil : .spring(duration: 0.15, bounce: 0.12), value: hovered)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.13), value: hovered)
         .onHover { hovered = $0 }.help(title).accessibilityLabel(title)
     }
 }

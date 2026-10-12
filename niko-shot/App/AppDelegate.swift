@@ -93,8 +93,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func showSettings() {
         installApplicationMenu()
         if settingsWindow == nil {
-            let window = UtilityWindow(contentRect: NSRect(x: 0, y: 0, width: 860, height: 620), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
+            let window = UtilityWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 700), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
             window.title = "niko-shot 设置"
+            window.toolbarStyle = .unified
+            window.titlebarAppearsTransparent = true
             window.isReleasedWhenClosed = false
             if let hotkeys {
                 window.contentView = NSHostingView(rootView: SettingsView(hotkeys: hotkeys,
@@ -106,6 +108,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Opens the translation preferences directly without recreating an existing settings workspace.
+    @objc func showTranslationSettings() {
+        SettingsNavigation.shared.opensTranslation = true
+        showSettings()
     }
 
     func perform(_ action: CaptureAction) {
@@ -257,8 +265,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pinsWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
     private func makeUtilityWindow(title: String) -> UtilityWindow {
-        let window = UtilityWindow(contentRect: CGRect(x: 0, y: 0, width: 820, height: 600), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
-        window.title = title; window.isReleasedWhenClosed = false; window.center(); return window
+        let window = UtilityWindow(contentRect: CGRect(x: 0, y: 0, width: 900, height: 640), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
+        window.title = title; window.isReleasedWhenClosed = false
+        window.toolbarStyle = .unified; window.titlebarAppearsTransparent = true
+        window.center(); return window
     }
     private func openHistoryImage(_ record: HistoryRecord, pin: Bool) {
         guard !isTerminating else { return }
@@ -305,7 +315,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     private func presentOCR(_ model: OCRViewModel) {
         installApplicationMenu()
-        if ocrWindow == nil { let window = makeUtilityWindow(title: "识别与翻译"); window.onClose = { [weak self] in self?.ocrWindow = nil }; ocrWindow = window }
+        if ocrWindow == nil {
+            let window = makeUtilityWindow(title: "识别与翻译")
+            window.setContentSize(CGSize(width: 1240, height: 760)); window.center()
+            window.onClose = { [weak self] in self?.ocrWindow = nil }; ocrWindow = window
+        }
         ocrWindow?.contentView = NSHostingView(rootView: OCRView(model: model))
         ocrWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }

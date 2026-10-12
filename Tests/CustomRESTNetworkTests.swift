@@ -108,6 +108,70 @@ final class CustomRESTNetworkTests: XCTestCase {
         XCTAssertTrue(tasksEmpty, "Cancellation must release the native URLSession task")
     }
 
+    func testSelfHostedTranslationNeedsNoKeyAndCachesOnlyTheSelectedService() async throws {
+        let server = try RESTLoopbackServer { _ in .reply(200, Data(#"{"translatedText":"本机译文"}"#.utf8)) }
+        let session = makeSession()
+        defer { session.invalidateAndCancel(); server.stop() }
+        try await waitUntil { server.ready }
+        let configuration = CustomRESTConfiguration(
+            name: "self-hosted", urlTemplate: try server.baseURL() + "/translate",
+            bodyTemplate: #"{"q":"$TEXT","source":"$SOURCE","target":"$TARGET","format":"text"}"#,
+            responsePath: "translatedText", languageStyle: .libreTranslate)
+        let router = TranslationRouter(session: session, credentials: KeychainStore(testValues: [:]))
+        let readiness = await router.credentialsStatus(provider: .custom, custom: configuration)
+        XCTAssertEqual(readiness, .ready)
+        let request = TranslationRequest(text: "原文保留 $KEY 和换行\n第二段", source: .english)
+        let first = try await router.translate(request, provider: .custom, custom: configuration)
+        let cached = try await router.translate(request, provider: .custom, custom: configuration)
+        XCTAssertEqual(first.text, "本机译文")
+        XCTAssertEqual(cached.text, first.text)
+        XCTAssertEqual(server.requests.count, 1)
+        let wire = try XCTUnwrap(server.requests.first)
+        XCTAssertNil(wire.headers["authorization"])
+        let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: wire.body) as? [String: Any])
+        XCTAssertNil(body["api_key"])
+        XCTAssertEqual(body["q"] as? String, request.text)
+        XCTAssertEqual(body["target"] as? String, "zh")
+    }
+
+    func testEncodedAuthenticationTemplatesFailBeforeSendingWithoutCredentials() async throws {
+        let server = try RESTLoopbackServer { _ in .reply(200, Data(#"{"text":"unexpected"}"#.utf8)) }
+        let session = makeSession()
+        defer { session.invalidateAndCancel(); server.stop() }
+        try await waitUntil { server.ready }
+        let bodies: [(CustomRESTConfiguration.BodyFormat, String)] = [
+            (.json, #"{"q":"$TEXT","nested":{"api_key":"\u0024KEY"}}"#),
+            (.form, "q=$TEXT&api_key=%24KEY"),
+            (.form, "literal=%invalid&api_key=%24KEY&q=$TEXT")
+        ]
+        for (format, body) in bodies {
+            let configuration = CustomRESTConfiguration(name: "key-required", urlTemplate: try server.baseURL() + "/translate",
+                                                        bodyTemplate: body, bodyFormat: format, responsePath: "text")
+            let router = TranslationRouter(session: session, credentials: KeychainStore(testValues: [:]))
+            let readiness = await router.credentialsStatus(provider: .custom, custom: configuration)
+            XCTAssertEqual(readiness, .unconfigured)
+            do {
+                _ = try await router.translate(TranslationRequest(text: "未配置"), provider: .custom, custom: configuration)
+                XCTFail("An encoded key placeholder must still require a credential")
+            } catch { XCTAssertEqual(error as? TranslationError, .unconfigured) }
+        }
+        XCTAssertTrue(server.requests.isEmpty)
+    }
+
+    func testOptionsMethodCanReachAConfiguredCustomEndpoint() async throws {
+        let server = try RESTLoopbackServer { _ in .reply(200, Data(#"{"text":"服务可用"}"#.utf8)) }
+        let session = makeSession()
+        defer { session.invalidateAndCancel(); server.stop() }
+        try await waitUntil { server.ready }
+        let configuration = CustomRESTConfiguration(name: "options", method: "OPTIONS", urlTemplate: try server.baseURL() + "/translate",
+                                                    bodyTemplate: "", responsePath: "text")
+        let provider = CustomRESTProvider(configuration: configuration, session: session, credentials: KeychainStore(testValues: [:]))
+        let result = try await provider.translate(TranslationRequest(text: "测试"))
+        XCTAssertEqual(result.text, "服务可用")
+        XCTAssertEqual(server.requests.first?.method, "OPTIONS")
+        XCTAssertEqual(server.requests.count, 1)
+    }
+
     private func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 4

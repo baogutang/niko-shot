@@ -31,6 +31,31 @@ public struct CustomRESTConfiguration: Codable, Equatable, Identifiable, Sendabl
     public var languageStyle: LanguageStyle
     /// The instance's Keychain account; no secret is serialized into this configuration.
     public var keyAccount: String { "custom.\(id.uuidString).key" }
+    /// Authentication is optional for services whose request templates do not reference a key.
+    public var requiresAPIKey: Bool {
+        if urlTemplate.contains("$KEY") || headers.values.contains(where: { $0.contains("$KEY") }) { return true }
+        switch bodyFormat {
+        case .json:
+            // Request expansion happens after JSON decoding, including Unicode escapes.
+            guard let value = try? JSONSerialization.jsonObject(with: Data(bodyTemplate.utf8), options: .fragmentsAllowed) else { return false }
+            return Self.referencesKey(value)
+        case .form:
+            // Both form field names and values are decoded before template expansion.
+            return bodyTemplate.components(separatedBy: "&").contains { field in
+                field.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).contains { part in
+                    let raw = String(part).replacingOccurrences(of: "+", with: " ")
+                    return (raw.removingPercentEncoding ?? raw).contains("$KEY")
+                }
+            }
+        }
+    }
+
+    private static func referencesKey(_ value: Any) -> Bool {
+        if let string = value as? String { return string.contains("$KEY") }
+        if let array = value as? [Any] { return array.contains(where: referencesKey) }
+        if let object = value as? [String: Any] { return object.values.contains(where: referencesKey) }
+        return false
+    }
     /// Creates a REST template ready for editing or cloning with a fresh UUID.
     public init(id: UUID = UUID(), name: String, method: String = "POST", urlTemplate: String,
                 headers: [String: String] = [:], bodyTemplate: String, bodyFormat: BodyFormat = .json,
@@ -92,17 +117,19 @@ public struct CustomRESTProvider: TranslationService {
     public init(configuration: CustomRESTConfiguration, session: URLSession = .shared, credentials: KeychainStore = KeychainStore()) {
         self.configuration = configuration; self.session = session; self.credentials = credentials
     }
-    /// Reports whether this instance has a Keychain value.
-    public func credentialsStatus() -> CredentialsStatus { !(credentials.get(configuration.keyAccount) ?? "").isEmpty ? .ready : .unconfigured }
+    /// Accepts key-free self-hosted services, otherwise requires the instance's Keychain value.
+    public func credentialsStatus() -> CredentialsStatus {
+        !configuration.requiresAPIKey || !(credentials.get(configuration.keyAccount) ?? "").isEmpty ? .ready : .unconfigured
+    }
     /// Builds JSON structurally before substitutions, so quotes and newlines cannot corrupt or inject its body.
     public static func makeRequest(_ request: TranslationRequest, configuration: CustomRESTConfiguration, key: String) throws -> URLRequest {
-        guard !key.isEmpty else { throw TranslationError.unconfigured }
+        guard !configuration.requiresAPIKey || !key.isEmpty else { throw TranslationError.unconfigured }
         if let reason = configuration.unsupportedReason(source: request.source, target: request.target) {
             throw TranslationError.provider(code: "unsupported_language", message: reason)
         }
         let substitutions = ["$KEY": key, "$TEXT": request.text, "$SOURCE": request.source.map(configuration.code) ?? "auto", "$TARGET": configuration.code(request.target)]
         let method = configuration.method.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        guard ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"].contains(method) else {
+        guard ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].contains(method) else {
             throw TranslationError.provider(code: "invalid_configuration", message: "不支持的 HTTP Method。")
         }
         let url = replacing(configuration.urlTemplate, values: substitutions.mapValues(TranslationHTTP.encodeComponent))
@@ -157,7 +184,7 @@ public struct CustomRESTProvider: TranslationService {
     }
     /// Calls exactly this configured instance once.
     public func translate(_ request: TranslationRequest) async throws -> TranslationResult {
-        guard let key = credentials.get(configuration.keyAccount) else { throw TranslationError.unconfigured }
+        let key = credentials.get(configuration.keyAccount) ?? ""
         let network = try Self.makeRequest(request, configuration: configuration, key: key)
         let (data, response) = try await TranslationHTTP.execute(network, session: session)
         return try Self.parseResponse(data, statusCode: response.statusCode, responsePath: configuration.responsePath)

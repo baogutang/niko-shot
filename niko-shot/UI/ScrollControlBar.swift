@@ -90,7 +90,7 @@ final class ScrollControlBarController {
         effect.blendingMode = .behindWindow
         effect.state = .active
         effect.wantsLayer = true
-        effect.layer?.cornerRadius = 22
+        effect.layer?.cornerRadius = NikoTheme.cornerRadius
         effect.layer?.masksToBounds = true
         let hosting = NSHostingView(rootView: ScrollControlBar(state: state,
             onFinish: { [weak self] in self?.onFinish() }, onCancel: { [weak self] in self?.onCancel() },
@@ -191,7 +191,7 @@ private struct ScrollControlBar: View {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 10) {
-                        Text("\(max(0, state.height).formatted()) px").font(.system(size: 15, weight: .medium)).monospacedDigit()
+                        Text("\(max(0, state.height).formatted()) px").font(.system(size: 17, weight: .semibold)).monospacedDigit()
                         Text("\(max(0, state.frames)) 屏").font(.caption).foregroundStyle(.secondary).monospacedDigit()
                     }
                     Text(state.status).font(.caption).foregroundStyle(.secondary).lineLimit(2).help(state.status)
@@ -291,12 +291,11 @@ private struct ScrollHUDButton: View {
             }
             .foregroundStyle(tint).padding(.horizontal, showsTitle ? 10 : 0)
             .frame(minWidth: 44, minHeight: 44)
-            .background(hovered ? Color.primary.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 11))
-            .contentShape(RoundedRectangle(cornerRadius: 11))
+            .background(hovered ? Color.primary.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: NikoTheme.cornerRadius))
+            .contentShape(RoundedRectangle(cornerRadius: NikoTheme.cornerRadius))
         }
         .buttonStyle(.plain).disabled(!enabled).opacity(enabled ? 1 : 0.45).focusable()
-        .scaleEffect(hovered && enabled && !reduceMotion ? 1.06 : 1)
-        .animation(reduceMotion ? nil : .spring(duration: 0.15, bounce: 0.12), value: hovered)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.13), value: hovered)
         .onHover { hovered = $0 }.help(title).accessibilityLabel(title)
     }
 }
