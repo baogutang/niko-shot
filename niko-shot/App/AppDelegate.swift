@@ -29,7 +29,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let windowList = WindowList()
     private let countdown = CaptureCountdown()
     private var lastRegion: CaptureContext?
-    private let pinManager = PinWindowManager()
+    private var storedPinManager: PinWindowManager?
+    private var pinManager: PinWindowManager {
+        if let storedPinManager { return storedPinManager }
+        let manager = PinWindowManager()
+        storedPinManager = manager
+        return manager
+    }
+    private var pinResourceCounts: [String: Int] {
+        storedPinManager?.resourceCounts ?? ["pinWindows": 0, "pinTasks": 0, "pinPersistenceTasks": 0]
+    }
     private let menuModel = MenuModel()
     private var historyStore: HistoryStore?
     private var historyWindow: UtilityWindow?
@@ -241,6 +250,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } catch { ErrorPresenter.show(error) }
     }
     func showPins() {
+        guard !isTerminating else { return }
         installApplicationMenu()
         pinManager.load()
         if pinsWindow == nil { let window = makeUtilityWindow(title: "贴图库"); window.contentView = NSHostingView(rootView: PinLibraryView(manager: pinManager)); window.onClose = { [weak self] in self?.pinsWindow = nil }; pinsWindow = window }
@@ -533,7 +543,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !isTerminating else { return .terminateLater }
         isTerminating = true
-        pinManager.prepareForTermination()
+        let pendingPins = storedPinManager
+        pendingPins?.prepareForTermination()
         let stoppedServer = automationServer
         hotkeys?.stop(); stoppedServer?.stop(); wizard?.close(); wizard = nil
         let pendingCapture = captureTask, pendingAutomation = automationTask
@@ -543,13 +554,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for panel in outputPanels.values { panel.cancel() }
         countdown.cancel(); selectionSession.finish()
         let ownsRecordingResources = recording.resourceCounts.values.contains { $0 > 0 }
-        let ownsPinResources = pinManager.resourceCounts.values.contains { $0 > 0 }
+        let ownsPinResources = pinResourceCounts.values.contains { $0 > 0 }
         let ownsSelectionResources = selectionSession.resourceCounts.values.contains { $0 > 0 }
         guard ownsSelectionResources || ownsPinResources || ownsRecordingResources || recording.isBusy || scrolling.isBusy || pendingCapture != nil || pendingAutomation != nil ||
                 !pendingOutputs.isEmpty || !pendingOCR.isEmpty || (stoppedServer?.drainingOperationCount ?? 0) > 0 else { return .terminateNow }
         Task {
             await selectionSession.finishAndDrain()
-            await pinManager.finishForTermination()
+            await pendingPins?.finishForTermination()
             if ownsRecordingResources || recording.isBusy { await recording.finishForTermination() }
             if scrolling.isBusy { await scrolling.cancel() }
             await stoppedServer?.stopAndDrain()
@@ -566,7 +577,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         captureTask?.cancel()
         countdown.cancel()
         selectionSession.finish()
-        pinManager.closeAll()
+        storedPinManager?.closeAll()
         settingsWindow?.close(); settingsWindow = nil
         historyWindow?.close(); historyWindow = nil
         pinsWindow?.close(); pinsWindow = nil
@@ -590,7 +601,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 "captureTask": captureTask == nil ? 0 : 1, "outputTasks": outputTasks.count, "ocrTasks": ocrTasks.count,
                 "outputPanels": outputPanels.count,
                 "recording": recording.resourceCounts, "scrolling": scrolling.resourceCounts,
-                "pins": pinManager.resourceCounts, "selection": selectionSession.resourceCounts
+                "pins": pinResourceCounts, "selection": selectionSession.resourceCounts
             ]
             if let data = try? JSONSerialization.data(withJSONObject: metrics, options: [.prettyPrinted, .sortedKeys]) {
                 try? data.write(to: URL(fileURLWithPath: path), options: .atomic)

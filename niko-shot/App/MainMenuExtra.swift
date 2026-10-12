@@ -9,7 +9,7 @@ final class MenuModel { var recents: [HistoryRecord] = []; var onOpen: (() -> Vo
 @MainActor
 final class MainMenuExtra: NSObject, NSPopoverDelegate {
     private let item: NSStatusItem
-    private let popover = NSPopover()
+    private var popover: NSPopover?
     private let performAction: (String) -> Void
     private let showSettings: () -> Void
     private let model: MenuModel
@@ -26,30 +26,36 @@ final class MainMenuExtra: NSObject, NSPopoverDelegate {
         item.button?.image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "niko-shot")
         item.button?.target = self
         item.button?.action = #selector(toggle)
-        popover.behavior = .transient
-        popover.delegate = self
     }
 
     @objc private func toggle() {
-        guard let button = item.button else { return }
+        guard !closed, let button = item.button else { return }
+        let popover: NSPopover
+        if let existing = self.popover { popover = existing }
+        else {
+            popover = NSPopover()
+            popover.behavior = .transient
+            popover.delegate = self
+            self.popover = popover
+        }
         if !popover.isShown { model.onOpen?() }
         if popover.contentViewController == nil {
             popover.contentViewController = NSHostingController(rootView: MenuContent(model: model, hotkeys: hotkeys, action: { [weak self] id in
-                self?.popover.performClose(nil)
+                self?.popover?.performClose(nil)
                 self?.performAction(id)
-            }, settings: { [weak self] in self?.popover.performClose(nil); self?.showSettings() }))
+            }, settings: { [weak self] in self?.popover?.performClose(nil); self?.showSettings() }))
         }
         if popover.isShown { popover.performClose(nil) }
         else { popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY) }
     }
 
-    func popoverDidClose(_ notification: Notification) { popover.contentViewController = nil }
+    func popoverDidClose(_ notification: Notification) { popover?.contentViewController = nil }
 
     /// Releases the status item and native popover when the app exits.
     func close() {
         guard !closed else { return }
-        closed = true; popover.close(); popover.contentViewController = nil
-        popover.delegate = nil; item.button?.target = nil
+        closed = true; popover?.close(); popover?.contentViewController = nil
+        popover?.delegate = nil; popover = nil; item.button?.target = nil
         NSStatusBar.system.removeStatusItem(item)
     }
 }
