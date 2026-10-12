@@ -32,8 +32,28 @@ final class SelectionSession {
     var outputAction: ToolbarAction = .copy
     private var annotationColor = AnnotationColor.red
     private var annotationWidth: CGFloat = 3
-    var windowCount: Int { windows.count }
+    private var imageEditorWindow: NSWindow?
+    var windowCount: Int { windows.count + (imageEditorWindow == nil ? 0 : 1) + (toolbar?.windowCount ?? 0) }
     var frameCount: Int { store.frames.count }
+
+    /// Reuses the annotation editor for history images and completed long screenshots.
+    func edit(image: CGImage, pointSize: CGSize, kind: String = "edited", completion: @escaping (CGImage, CaptureContext) -> Void) {
+        finish(); generation = UUID(); state = .annotating; outputAction = .copy; self.completion = completion
+        let screen = NSScreen.main?.frame ?? CGRect(x: 0, y: 0, width: 1200, height: 800)
+        let geometry = ScreenGeometry(id: 0, frame: screen, scale: CGFloat(image.width) / max(1, pointSize.width))
+        let context = CaptureContext(screen: geometry, localRect: CGRect(origin: .zero, size: pointSize), kind: kind)
+        editorContext = context
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: min(900, screen.width - 80), height: min(650, screen.height - 100)), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.title = "niko-shot 标注"; window.isReleasedWhenClosed = false
+        let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.hasHorizontalScroller = true; scroll.autoresizingMask = [.width, .height]
+        let canvas = AnnotationCanvasView(image: image, size: pointSize)
+        canvas.onAction = { [weak self] action in self?.perform(action) }
+        self.canvas = canvas; scroll.documentView = canvas; window.contentView = scroll
+        window.center(); imageEditorWindow = window; window.makeKeyAndOrderFront(nil); window.makeFirstResponder(canvas); NSApp.activate(ignoringOtherApps: true)
+        showToolbar(context: CaptureContext(screen: geometry, localRect: CGRect(x: 0, y: 0, width: window.frame.width, height: window.frame.height)))
+        screenObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.finish() } }
+        monitorCount = 1
+    }
 
     deinit {
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
@@ -201,6 +221,7 @@ final class SelectionSession {
     func finish() {
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
+        imageEditorWindow?.close(); imageEditorWindow = nil
         for window in windows {
             if let view = window.contentView as? SelectionView {
                 view.onSelection = nil; view.onConfirm = nil; view.onCancel = nil
