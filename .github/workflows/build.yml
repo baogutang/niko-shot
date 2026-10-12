@@ -207,17 +207,50 @@ jobs:
           candidate="candidate-${RELEASE_RUN_NUMBER}-${RELEASE_RUN_ATTEMPT}-${short_sha}"
           gh release create "$candidate" distribution/* --target "$RELEASE_SHA" --prerelease --latest=false \
             --title "niko-shot $version candidate $short_sha" --notes-file release-notes.md
-          current_main="$(gh api "repos/$GH_REPO/commits/main" --jq .sha)"
-          if [[ "$current_main" != "$RELEASE_SHA" ]]; then
-            echo 'A newer main commit exists; preserved this candidate without replacing nightly.'
-            exit 0
+          # Immutable candidate assets stay together; nightly changes only navigation.
+          # A later failed main build must not hide an earlier successful candidate.
+          if gh api "repos/$GH_REPO/releases/tags/nightly" > nightly.json 2> nightly-error.txt; then
+            python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          previous = json.loads(Path('nightly.json').read_text())
+          match = re.search(r'<!-- niko-shot-candidate: candidate-(\d+)-(\d+)-[0-9a-f]{12} -->', previous.get('body') or '')
+          current = (int(os.environ['RELEASE_RUN_NUMBER']), int(os.environ['RELEASE_RUN_ATTEMPT']))
+          if match and tuple(map(int, match.groups())) > current:
+              Path('preserve-newer-nightly').touch()
+          PY
+            if [[ -f preserve-newer-nightly ]]; then
+              echo 'Preserved the newer successful candidate; this run has its own immutable release.'
+              exit 0
+            fi
+            nightly_exists=true
+          elif grep -q 'HTTP 404' nightly-error.txt; then
+            nightly_exists=false
+          else
+            cat nightly-error.txt >&2
+            exit 1
           fi
-          if gh release view nightly >/dev/null 2>&1; then
-            gh release upload nightly distribution/* --clobber
+          python3 - "$candidate" <<'PY'
+          import os, sys
+          from pathlib import Path
+          candidate = sys.argv[1]
+          base = f'https://github.com/{os.environ["GH_REPO"]}/releases/download/{candidate}'
+          links = f'''<!-- niko-shot-candidate: {candidate} -->
+
+          本导航页指向一套完整、不可变的成功构建产物。所有文件均来自同一个候选；源码请以该候选标签与 release-info.json 为准。
+
+          **[下载 DMG]({base}/niko-shot-universal.dmg) · [下载 ZIP]({base}/niko-shot-universal.zip)**
+
+          [SHA256SUMS]({base}/SHA256SUMS) · [构建与签名信息]({base}/release-info.json) · [独立候选发布页](https://github.com/{os.environ["GH_REPO"]}/releases/tag/{candidate})
+
+          '''
+          Path('nightly-notes.md').write_text(links + Path('release-notes.md').read_text())
+          PY
+          if [[ "$nightly_exists" == true ]]; then
             gh api --method PATCH "repos/$GH_REPO/git/refs/tags/nightly" -f sha="$RELEASE_SHA" -F force=true >/dev/null
             gh release edit nightly --target "$RELEASE_SHA" --prerelease --latest=false \
-              --title "niko-shot $version nightly $short_sha" --notes-file release-notes.md
+              --title "niko-shot $version nightly $short_sha" --notes-file nightly-notes.md
           else
-            gh release create nightly distribution/* --target "$RELEASE_SHA" --prerelease --latest=false \
-              --title "niko-shot $version nightly $short_sha" --notes-file release-notes.md
+            gh release create nightly --target "$RELEASE_SHA" --prerelease --latest=false \
+              --title "niko-shot $version nightly $short_sha" --notes-file nightly-notes.md
           fi

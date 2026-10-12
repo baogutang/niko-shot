@@ -77,19 +77,30 @@
     }).then(response => {
       if (!response.ok) throw new Error("release_unavailable");
       return response.json();
-    }).then(release => {
+    }).then(async navigation => {
+      const marker = typeof navigation.body === "string" ? navigation.body.match(/<!-- niko-shot-candidate: (candidate-\d+-\d+-[0-9a-f]{12}) -->/) : null;
+      if (!marker) throw new Error("candidate_unavailable");
+      const tag = marker[1];
+      const response = await fetch(`https://api.github.com/repos/baogutang/niko-shot/releases/tags/${tag}`, {
+        headers: { Accept: "application/vnd.github+json" }, signal: releaseController.signal
+      });
+      if (!response.ok) throw new Error("candidate_unavailable");
+      const release = await response.json();
+      if (release.tag_name !== tag || release.draft) throw new Error("candidate_unavailable");
       const assets = Array.isArray(release.assets) ? release.assets : [];
       const filenames = { dmg: "niko-shot-universal.dmg", zip: "niko-shot-universal.zip", checksums: "SHA256SUMS" };
-      let available = 0;
+      const destinations = [];
       for (const [kind, name] of Object.entries(filenames)) {
         const asset = assets.find(item => item.name === name && typeof item.browser_download_url === "string");
-        if (!asset) continue;
+        if (!asset || asset.state !== "uploaded" || asset.size <= 0) throw new Error("assets_unavailable");
         const url = new URL(asset.browser_download_url);
-        if (url.protocol !== "https:" || url.hostname !== "github.com" || !url.pathname.startsWith("/baogutang/niko-shot/releases/download/nightly/") || url.search || url.hash) continue;
-        document.querySelector(`[data-download="${kind}"]`).href = url.href;
-        if (kind !== "checksums") available++;
+        if (url.protocol !== "https:" || url.hostname !== "github.com" || url.pathname !== `/baogutang/niko-shot/releases/download/${tag}/${name}` || url.search || url.hash) throw new Error("assets_unavailable");
+        destinations.push([kind, url.href]);
       }
-      if (!available) throw new Error("assets_unavailable");
+      const provenance = assets.find(item => item.name === "release-info.json");
+      if (!provenance || provenance.state !== "uploaded" || provenance.size <= 0) throw new Error("assets_unavailable");
+      // Apply all links together only after this complete immutable candidate is verified.
+      destinations.forEach(([kind, url]) => { document.querySelector(`[data-download="${kind}"]`).href = url; });
       const published = release.published_at ? new Date(release.published_at) : null;
       const date = published && !Number.isNaN(published.getTime()) ? published.toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" }) : "";
       releaseStatus.textContent = `GitHub 开发候选已可下载${date ? `，发布于 ${date}` : ""}。`;

@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <strong><a href="https://github.com/baogutang/niko-shot/releases/download/nightly/niko-shot-universal.dmg">下载 macOS 版</a></strong>
+  <strong><a href="https://github.com/baogutang/niko-shot/releases/tag/nightly">下载 macOS 版</a></strong>
   &nbsp;·&nbsp;
   <strong><a href="https://baogutang.github.io/niko-shot/">访问官网</a></strong>
   &nbsp;·&nbsp;
@@ -61,14 +61,14 @@
 
 ## 下载与安装
 
-[**下载 DMG**](https://github.com/baogutang/niko-shot/releases/download/nightly/niko-shot-universal.dmg) · [**下载 ZIP**](https://github.com/baogutang/niko-shot/releases/download/nightly/niko-shot-universal.zip) · [全部发布说明](https://github.com/baogutang/niko-shot/releases)
+[**下载 Mac 版：DMG / ZIP**](https://github.com/baogutang/niko-shot/releases/tag/nightly) · [全部发布说明](https://github.com/baogutang/niko-shot/releases)
 
 1. 确认系统为 macOS 14 或更新版本。Universal 包同时包含 Apple Silicon 与 Intel 架构。
 2. 打开 DMG，将 niko-shot.app 拖入「应用程序」；或解压 ZIP 后把应用放入「应用程序」或你自己的 Applications 目录。
 3. 打开应用，在菜单栏进入首次向导：欢迎 → 屏幕录制授权 → 试截一张。默认按 **⇧⌘A** 开始区域截图。
 4. 需要翻译时，再按下文配置自己的服务；录屏麦克风、摄像头与自动滚动权限按需开启。
 
-GitHub Actions 在 main 通过构建与测试后更新 **Nightly 预发布**。下载同一发布中的 [SHA256SUMS](https://github.com/baogutang/niko-shot/releases/download/nightly/SHA256SUMS) 和 [release-info.json](https://github.com/baogutang/niko-shot/releases/download/nightly/release-info.json)，可核对文件哈希与该次构建信息；[Actions](https://github.com/baogutang/niko-shot/actions/workflows/build.yml)保留自动构建记录。
+GitHub Actions 在 main 通过构建与测试后更新 **Nightly 导航页**，其中的 DMG、ZIP、SHA256SUMS 与 release-info.json 链接指向同一个独立、不可变的候选发布。文件不会在下载期间被滚动覆盖，可核对哈希与完整源码提交；[Actions](https://github.com/baogutang/niko-shot/actions/workflows/build.yml)保留自动构建记录。
 
 当前候选未完成 Developer ID 签名与 Apple 公证，macOS 可能阻止首次打开。请先核对发布来源与文件哈希，再按 [Apple 的安全打开说明](https://support.apple.com/zh-cn/102445)决定是否允许打开此次应用。ad hoc 签名完整性与测试通过不代表 Apple 已公证。
 

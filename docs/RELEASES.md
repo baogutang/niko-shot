@@ -4,25 +4,20 @@
 
 ## 下载与安装
 
-公开仓库的 [候选发布页](https://github.com/baogutang/niko-shot/releases/tag/nightly) 提供以下固定地址，下载无需登录 Actions：
+公开仓库的 [Nightly 导航页](https://github.com/baogutang/niko-shot/releases/tag/nightly) 提供通用版 DMG、ZIP、SHA256SUMS 和构建签名信息的链接。四个链接指向同一个独立 `candidate-*` 发布，其资产不再替换，下载无需登录 Actions。
 
-- [通用版 DMG](https://github.com/baogutang/niko-shot/releases/download/nightly/niko-shot-universal.dmg)
-- [通用版 ZIP](https://github.com/baogutang/niko-shot/releases/download/nightly/niko-shot-universal.zip)
-- [SHA256SUMS](https://github.com/baogutang/niko-shot/releases/download/nightly/SHA256SUMS)
-- [构建与签名信息](https://github.com/baogutang/niko-shot/releases/download/nightly/release-info.json)
-
-这些地址需要仓库公开且第一次发布任务实际成功；工作流文件存在或本机打包成功都不会让下载地址提前生效。私有仓库的 Release 需要仓库访问权限，不能作为免登录公开下载。
+导航需要仓库公开且第一次发布任务实际成功；工作流文件存在或本机打包成功都不会让下载地址提前生效。私有仓库的 Release 需要仓库访问权限，不能作为免登录公开下载。官网会从导航页读取候选标记，确认该候选四个资产已上传，再一起更新下载按钮；读取失败时回退到导航页。
 
 打开 DMG，将 `niko-shot.app` 拖入 Applications；也可解压 ZIP 后复制应用。首次尝试打开时 macOS 可能拦截未公证的候选。先确认发布来源，并运行 `shasum -a 256 niko-shot-universal.zip` 与下载的 SHA256SUMS 对照；确认要运行后，按 [Apple 官方说明](https://support.apple.com/102445)在系统设置「隐私与安全性」中允许本次打开。不要为此关闭系统整体安全检查。运行后再按原生向导授权屏幕录制；辅助功能只用于自动滚动，麦克风和摄像头按需授权。
 
-每次成功的 main 构建保存独立的 `candidate-运行号-重跑次数-提交短SHA` 预发布及资产，完整 SHA 保存在 release-info.json 和发布正文。`nightly` 更新到 main 的最近成功候选，失败的构建不会更新它；较旧提交完成时也不会覆盖更新的 main。下载期间如 nightly 正在替换资产，可使用独立 candidate 发布中的同一套文件核对哈希。
+每次成功的 main 构建保存独立的 `candidate-运行号-重跑次数-提交短SHA` 预发布及资产，完整 SHA 保存在 release-info.json 和发布正文。Nightly 的正文一次更新为该候选的完整链接，不滚动替换文件。较新的 main 失败不会阻止较早成功候选提供下载；运行号与重跑次数较旧的任务不会回退已发布导航。导航标签更新和正文更新是两次 GitHub API 操作；源代码身份始终以正文中的独立候选标签与 manifest 为准，下载的一整套文件不会因此混用。
 
 ## GitHub Actions
 
 | 流程 | 触发 | 门禁与产物 | 可写权限 |
 |---|---|---|---|
 | `build.yml` 构建任务 | main 每次推送、面向 main 的 PR、手动运行 | XcodeGen；干净 Debug build/test；Swift 6 完整并发检查，编译警告作为错误；独立 universal Release；ZIP、DMG、SHA256、构建信息；日志和 xcresult | 仅读仓库 |
-| `build.yml` 发布任务 | 通过上一步的 main 推送或 main 手动运行 | 独立 candidate 预发布和固定 nightly 下载 | 仅此 job 的 `contents: write` |
+| `build.yml` 发布任务 | 通过上一步的 main 推送或 main 手动运行 | 独立 candidate 预发布和固定 nightly 导航入口 | 仅此 job 的 `contents: write` |
 | `pages.yml` 验证任务 | main 推送、面向 main 的 PR、手动运行 | `python3 scripts/verify-website.py`；上传 `website/` 原始静态文件，无 Node 构建 | 仅读仓库 |
 | `pages.yml` 部署任务 | 通过验证的 main 推送或 main 手动运行 | GitHub Pages 官网 | 仅此 job 的 `pages: write`、`id-token: write` |
 
