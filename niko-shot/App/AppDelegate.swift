@@ -21,6 +21,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var historyStore: HistoryStore?
     private var historyWindow: NSWindow?
     private var pinsWindow: NSWindow?
+    private let ocrEngine = OCREngine()
+    private var ocrWindow: NSWindow?
+    private var latestOCRText = ""
     private let launchLog = OSLog(subsystem: "com.n1ko.niko-shot", category: "Lifecycle")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -101,6 +104,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 try await store.insert(record)
                 try await store.prune(days: AppSettings.shared.historyRetention)
                 menuModel.recents = try await store.list(limit: 3)
+                let interactiveOCR = action == .ocr || context.kind == "ocr"
+                if AppSettings.shared.autoOCR || interactiveOCR { recognizeCapture(image, record: record, show: interactiveOCR) }
                 if action == .pin { pinManager.pin(image: image, url: file, thumbnail: payload.2); return }
                 if action == .save {
                     guard let (url, format, quality) = SavePanelRouter().destination() else { return }
@@ -122,7 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let store = try getHistoryStore()
             if historyWindow == nil {
                 let window = makeUtilityWindow(title: "截图历史")
-                window.contentView = NSHostingView(rootView: HistoryView(store: store, onOCR: { [weak self] record in self?.openHistoryImage(record, pin: false) }, onPin: { [weak self] record in self?.openHistoryImage(record, pin: true) }, onEdit: { [weak self] record in self?.openHistoryImage(record, pin: false) }))
+                window.contentView = NSHostingView(rootView: HistoryView(store: store, onOCR: { [weak self] record in self?.reOCR(record) }, onPin: { [weak self] record in self?.openHistoryImage(record, pin: true) }, onEdit: { [weak self] record in self?.openHistoryImage(record, pin: false) }))
                 historyWindow = window
             }
             historyWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
@@ -145,6 +150,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }.value
                 if pin { pinManager.pin(image: image, url: URL(fileURLWithPath: record.path), thumbnail: record.thumbnail) }
                 else { selectionSession.edit(image: image, pointSize: CGSize(width: image.width, height: image.height)) { [weak self] image, context in self?.handleCapture(image, context: context) } }
+            } catch { ErrorPresenter.show(error) }
+        }
+    }
+
+    private func recognizeCapture(_ image: CGImage, record: HistoryRecord, show: Bool) {
+        let model = OCRViewModel()
+        if show { model.isRecognizing = true; presentOCR(model) }
+        let languages = AppSettings.shared.ocrLanguages, accurate = AppSettings.shared.accurateOCR
+        Task(priority: show ? .userInitiated : .utility) {
+            do {
+                let blocks = try await ocrEngine.recognize(image, languages: languages, accurate: accurate)
+                model.blocks = blocks; model.isRecognizing = false
+                let text = blocks.map(\.text).joined(separator: "\n")
+                latestOCRText = text
+                try await getHistoryStore().updateOCR(id: record.id, text: text)
+                NotificationCenter.default.post(name: .captureHistoryChanged, object: nil)
+            } catch { model.isRecognizing = false; model.errorMessage = error.localizedDescription }
+        }
+    }
+    private func presentOCR(_ model: OCRViewModel) {
+        if ocrWindow == nil { ocrWindow = makeUtilityWindow(title: "识别与翻译") }
+        ocrWindow?.contentView = NSHostingView(rootView: OCRView(model: model))
+        ocrWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+    }
+    private func reOCR(_ record: HistoryRecord) {
+        Task {
+            do {
+                let image = try await Task.detached(priority: .utility) { () -> CGImage in
+                    guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: record.path) as CFURL, nil), let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { throw AppError.imageCreation }; return image
+                }.value
+                recognizeCapture(image, record: record, show: true)
             } catch { ErrorPresenter.show(error) }
         }
     }

@@ -2,6 +2,8 @@
 import Foundation
 import SQLite3
 
+extension Notification.Name { static let captureHistoryChanged = Notification.Name("com.n1ko.niko-shot.history.changed") }
+
 struct HistoryRecord: Identifiable, Sendable {
     let id: UUID
     let createdAt: Date

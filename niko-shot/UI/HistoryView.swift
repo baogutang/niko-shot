@@ -89,6 +89,7 @@ struct HistoryView: View {
             }
             .task(id: query) { await reload() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .captureHistoryChanged)) { _ in Task { await reload() } }
         .frame(minWidth: 700, minHeight: 460)
     }
 

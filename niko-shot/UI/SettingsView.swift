@@ -107,7 +107,10 @@ public struct SettingsView: View {
             Form {
                 Section("文字识别") {
                     Toggle("自动识别截图以供历史搜索", isOn: $settings.autoOCR)
-                    LabeledContent("默认识别语言", value: "简体中文、英语、日语")
+                    Toggle("精确识别", isOn: $settings.accurateOCR)
+                    ForEach([("zh-Hans", "简体中文"), ("en-US", "英语"), ("ja-JP", "日语")], id: \.0) { code, name in
+                        Toggle(name, isOn: Binding(get: { settings.ocrLanguages.contains(code) }, set: { selected in if selected { if !settings.ocrLanguages.contains(code) { settings.ocrLanguages.append(code) } } else if settings.ocrLanguages.count > 1 { settings.ocrLanguages.removeAll { $0 == code } } }))
+                    }
                 }
                 Section("翻译") {
                     Toggle("OCR 完成后自动翻译", isOn: $settings.automaticTranslation)

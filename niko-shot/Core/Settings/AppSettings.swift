@@ -44,6 +44,10 @@ public final class AppSettings {
     public var filenameTemplate: String { didSet { defaults.set(filenameTemplate, forKey: "filenameTemplate") } }
     /// Recognizes saved captures for history search.
     public var autoOCR: Bool { didSet { defaults.set(autoOCR, forKey: "autoOCR") } }
+    /// Recognition language tags accepted by Vision.
+    public var ocrLanguages: [String] { didSet { defaults.set(ocrLanguages, forKey: "ocrLanguages") } }
+    /// Accurate recognition is preferred; fast mode is available for latency-sensitive captures.
+    public var accurateOCR: Bool { didSet { defaults.set(accurateOCR, forKey: "accurateOCR") } }
     /// Translates an OCR result automatically with the selected provider.
     public var automaticTranslation: Bool { didSet { defaults.set(automaticTranslation, forKey: "automaticTranslation") } }
     /// Requested recording frame rate.
@@ -66,7 +70,7 @@ public final class AppSettings {
             "captureDelay": 0, "showsPixels": true, "exportFormat": "png", "jpegQuality": 0.9,
             "filenameTemplate": "niko-shot {date} {time}", "autoOCR": true, "automaticTranslation": true,
             "recordingFPS": 30, "recordingCodec": "hevc", "systemAudio": true,
-            "microphone": false, "showsCursor": true, "historyRetention": 30
+            "microphone": false, "showsCursor": true, "historyRetention": 30, "accurateOCR": true
         ])
         captureDelay = min(10, max(0, defaults.integer(forKey: "captureDelay")))
         showsPixels = defaults.bool(forKey: "showsPixels")
@@ -85,6 +89,8 @@ public final class AppSettings {
         jpegQuality = min(1, max(0, defaults.double(forKey: "jpegQuality")))
         filenameTemplate = defaults.string(forKey: "filenameTemplate") ?? "niko-shot {date} {time}"
         autoOCR = defaults.bool(forKey: "autoOCR")
+        ocrLanguages = defaults.stringArray(forKey: "ocrLanguages") ?? ["zh-Hans", "en-US", "ja-JP"]
+        accurateOCR = defaults.bool(forKey: "accurateOCR")
         automaticTranslation = defaults.bool(forKey: "automaticTranslation")
         let fps = defaults.integer(forKey: "recordingFPS")
         recordingFPS = [15, 24, 30, 60].contains(fps) ? fps : 30
