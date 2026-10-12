@@ -8,6 +8,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menu: MainMenuExtra?
     private var settingsWindow: NSWindow?
     private var hotkeys: HotkeyCenter?
+    private let captureEngine = CaptureEngine()
+    private let selectionSession = SelectionSession()
+    private var captureTask: Task<Void, Never>?
     private let launchLog = OSLog(subsystem: "com.n1ko.niko-shot", category: "Lifecycle")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -40,10 +43,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func perform(_ action: CaptureAction) {
-        showSettings()
+        guard captureTask == nil, selectionSession.state == .idle else { return }
+        captureTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.captureTask = nil }
+            do {
+                let frames = try await self.captureEngine.freezeScreens()
+                self.selectionSession.start(frames: frames) { [weak self] image, context in self?.handleCapture(image, context: context) }
+            } catch { ErrorPresenter.show(error) }
+        }
+    }
+
+    func handleCapture(_ image: CGImage, context: CaptureContext) {
+        Task {
+            do {
+                let png = try await Task.detached(priority: .userInitiated) { try ImageUtilities.png(image) }.value
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setData(png, forType: .png)
+            } catch { ErrorPresenter.show(error) }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         hotkeys?.stop()
+        captureTask?.cancel()
+        selectionSession.finish()
     }
 }
