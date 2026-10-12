@@ -8,6 +8,8 @@ final class SelectionView: NSView {
     var onSelection: ((CGRect) -> Void)?
     var onConfirm: (() -> Void)?
     var onCancel: (() -> Void)?
+    var onAnnotate: (() -> Void)?
+    var onSave: (() -> Void)?
     var candidates: [WindowCandidate] = []
     var windowMode = false
     var selectedWindow: WindowCandidate?
@@ -185,9 +187,11 @@ final class SelectionView: NSView {
         if event.modifierFlags.contains(.option), event.charactersIgnoringModifiers?.lowercased() == "c" {
             NSPasteboard.general.clearContents(); NSPasteboard.general.setString(hexColor, forType: .string); return
         }
+        if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "s" { onSave?(); return }
         switch event.keyCode {
         case 36, 76: onConfirm?()
         case 53: onCancel?()
+        case 48: onAnnotate?()
         case 49: hoverIndex += 1; highlightWindow()
         case 123, 124, 125, 126:
             let delta: CGFloat = (event.modifierFlags.contains(.shift) ? 10 : 1) / frameInfo.screen.scale

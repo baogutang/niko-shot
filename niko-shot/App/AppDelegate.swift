@@ -2,6 +2,7 @@
 import AppKit
 import SwiftUI
 import os
+import UniformTypeIdentifiers
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -67,9 +68,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func handleCapture(_ image: CGImage, context: CaptureContext) {
         lastRegion = context
         UserDefaults.standard.set(["screen": Double(context.screen.id), "x": context.localRect.minX, "y": context.localRect.minY, "width": context.localRect.width, "height": context.localRect.height], forKey: "lastRegion")
+        let action = selectionSession.outputAction
         Task {
             do {
                 let png = try await Task.detached(priority: .userInitiated) { try ImageUtilities.png(image) }.value
+                if action == .save {
+                    let panel = NSSavePanel(); panel.allowedContentTypes = [.png]; panel.nameFieldStringValue = "niko-shot.png"
+                    guard panel.runModal() == .OK, let url = panel.url else { return }
+                    try await Task.detached { try png.write(to: url, options: .atomic) }.value
+                    return
+                }
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setData(png, forType: .png)
             } catch { ErrorPresenter.show(error) }
