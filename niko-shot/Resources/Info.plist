@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleName</key><string>niko-shot</string>
+<key>CFBundleDisplayName</key><string>niko-shot</string>
+<key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+<key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+<key>LSMinimumSystemVersion</key><string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+<key>LSUIElement</key><true/>
+<key>NSPrincipalClass</key><string>NSApplication</string>
+<key>NSHighResolutionCapable</key><true/>
+<key>NSScreenCaptureUsageDescription</key><string>niko-shot captures the area you select for screenshots, OCR and recording.</string>
+<key>NSMicrophoneUsageDescription</key><string>Include your microphone in a recording when you enable it.</string>
+<key>NSCameraUsageDescription</key><string>Show your camera as a picture-in-picture overlay during recording.</string>
+<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>niko-shot</string><key>CFBundleURLSchemes</key><array><string>niko-shot</string></array></dict></array>
+</dict></plist>
