@@ -33,6 +33,7 @@ final class SelectionSession {
     private var annotationColor = AnnotationColor.red
     private var annotationWidth: CGFloat = 3
     private var imageEditorWindow: NSWindow?
+    private var imageEditorSource: FrozenFrame?
     var windowCount: Int { windows.count + (imageEditorWindow == nil ? 0 : 1) + (toolbar?.windowCount ?? 0) }
     var frameCount: Int { store.frames.count }
 
@@ -40,14 +41,15 @@ final class SelectionSession {
     func edit(image: CGImage, pointSize: CGSize, kind: String = "edited", completion: @escaping (CGImage, CaptureContext) -> Void) {
         finish(); generation = UUID(); state = .annotating; outputAction = .copy; self.completion = completion
         let screen = NSScreen.main?.frame ?? CGRect(x: 0, y: 0, width: 1200, height: 800)
-        let geometry = ScreenGeometry(id: 0, frame: screen, scale: CGFloat(image.width) / max(1, pointSize.width))
+        let geometry = ScreenGeometry(id: 0, frame: CGRect(origin: screen.origin, size: pointSize), scale: CGFloat(image.width) / max(1, pointSize.width))
+        captureKind = kind; imageEditorSource = FrozenFrame(screen: geometry, image: image)
         let context = CaptureContext(screen: geometry, localRect: CGRect(origin: .zero, size: pointSize), kind: kind)
         editorContext = context
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: min(900, screen.width - 80), height: min(650, screen.height - 100)), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "niko-shot 标注"; window.isReleasedWhenClosed = false
         let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.hasHorizontalScroller = true; scroll.autoresizingMask = [.width, .height]
         let canvas = AnnotationCanvasView(image: image, size: pointSize)
-        canvas.onAction = { [weak self] action in self?.perform(action) }
+        configure(canvas)
         self.canvas = canvas; scroll.documentView = canvas; window.contentView = scroll
         window.center(); imageEditorWindow = window; window.makeKeyAndOrderFront(nil); window.makeFirstResponder(canvas); NSApp.activate(ignoringOtherApps: true)
         showToolbar(context: CaptureContext(screen: geometry, localRect: CGRect(x: 0, y: 0, width: window.frame.width, height: window.frame.height)))
@@ -59,9 +61,10 @@ final class SelectionSession {
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         let remainingWindows = windows
         let remainingToolbar = toolbar
+        let remainingEditor = imageEditorWindow
         if let archive { try? FileManager.default.removeItem(at: archive.url) }
         // Sessions are owned and released by the main-actor app coordinator.
-        MainActor.assumeIsolated { remainingToolbar?.close(); for window in remainingWindows { window.orderOut(nil); window.close() } }
+        MainActor.assumeIsolated { remainingToolbar?.close(); remainingEditor?.close(); for window in remainingWindows { window.orderOut(nil); window.close() } }
     }
 
     /// Starts a snapshot-only session, injectable so teardown can be tested without TCC.
@@ -122,12 +125,14 @@ final class SelectionSession {
                 self?.annotationColor = value; self?.canvas?.color = value
             }, onWidth: { [weak self] width in self?.annotationWidth = width; self?.canvas?.strokeWidth = width })
         }
-        toolbar?.show(near: context.globalRect, screenFrame: context.screen.frame)
+        if let window = imageEditorWindow { toolbar?.show(near: window.frame, screenFrame: window.screen?.frame ?? NSScreen.main?.frame ?? window.frame) }
+        else { toolbar?.show(near: context.globalRect, screenFrame: context.screen.frame) }
     }
 
     /// Crops, archives and releases the full-screen backing images before native annotation.
     func beginAnnotation(tool: AnnotationTool) {
         if let canvas { canvas.tool = tool; toolbar?.setSelectedTool(tool); return }
+        if imageEditorWindow != nil, state == .selected { applyEditorCrop(tool: tool); return }
         guard let (frame, rect) = selected, state == .selected else { return }
         state = .annotating
         let token = generation
@@ -172,6 +177,7 @@ final class SelectionSession {
         case .redo: canvas?.redo()
         case .close: finish()
         case .selection:
+            if imageEditorWindow != nil { toggleEditorSelection(); return }
             guard let archive else { return }
             let callback = completion, kind = captureKind, savedDocument = canvas?.document, savedContext = editorContext, token = generation
             Task { [weak self] in
@@ -186,8 +192,56 @@ final class SelectionSession {
         }
     }
 
+    private func configure(_ view: AnnotationCanvasView) {
+        view.onAction = { [weak self] action in self?.perform(action) }
+        view.onToolChange = { [weak self] tool in self?.toolbar?.setSelectedTool(tool) }
+        view.onDocumentChange = { [weak self, weak view] in self?.toolbar?.setUndoAvailability(canUndo: view?.document.canUndo ?? false, canRedo: view?.document.canRedo ?? false) }
+        view.color = annotationColor; view.strokeWidth = annotationWidth
+    }
+
+    private func toggleEditorSelection() {
+        guard let window = imageEditorWindow, let scroll = window.contentView as? NSScrollView, let source = imageEditorSource else { return }
+        if state == .selected { applyEditorCrop(); return }
+        guard let canvas, state == .annotating else { return }
+        resumedDocument = canvas.document; resumedContext = editorContext
+        canvas.onAction = nil; canvas.onDocumentChange = nil; canvas.onToolChange = nil
+        self.canvas = nil
+        let view = SelectionView(frameInfo: source)
+        view.selection = editorContext?.localRect ?? source.screen.localBounds
+        selected = (source, view.selection); state = .selected
+        view.onSelection = { [weak self] rect in self?.selected = (source, rect); self?.state = rect.isEmpty ? .selecting : .selected }
+        view.onConfirm = { [weak self] in self?.applyEditorCrop(output: .copy) }
+        view.onAnnotate = { [weak self] in self?.applyEditorCrop() }
+        view.onSave = { [weak self] in self?.applyEditorCrop(output: .save) }
+        view.onCancel = { [weak self] in self?.finish() }
+        scroll.documentView = view; window.makeFirstResponder(view)
+    }
+
+    private func applyEditorCrop(tool: AnnotationTool = .rectangle, output: ToolbarAction? = nil) {
+        guard let (frame, rect) = selected, !rect.isEmpty, let window = imageEditorWindow, let scroll = window.contentView as? NSScrollView else { return }
+        let token = generation, previous = resumedContext
+        var document = resumedDocument
+        if let previous { document?.rebase(by: CGPoint(x: previous.localRect.minX - rect.minX, y: previous.localRect.minY - rect.minY), canvasSize: rect.size) }
+        let savedDocument = document
+        let pixels = CoordinateSpace.imagePixelRect(fromSelection: rect, screen: frame.screen)
+        state = .annotating
+        Task { [weak self, weak window, weak scroll] in
+            let image = await Task.detached(priority: .userInitiated) { frame.image.cropping(to: pixels) }.value
+            guard let self, self.generation == token, self.state == .annotating, let image, let window, let scroll else { return }
+            let view = AnnotationCanvasView(image: image, size: rect.size)
+            if let savedDocument { view.document = savedDocument; view.refresh() }
+            view.tool = tool; self.configure(view); self.canvas = view
+            self.editorContext = CaptureContext(screen: frame.screen, localRect: rect, kind: self.captureKind)
+            self.selected = nil; scroll.documentView = view; window.makeFirstResponder(view)
+            self.toolbar?.setSelectedTool(tool)
+            self.toolbar?.setUndoAvailability(canUndo: view.document.canUndo, canRedo: view.document.canRedo)
+            if let output { self.outputAction = output; self.confirm() }
+        }
+    }
+
     /// Crops the original snapshot; it never takes a second screenshot.
     func confirm() {
+        if imageEditorWindow != nil, state == .selected { applyEditorCrop(output: outputAction); return }
         if let canvas, let context = editorContext, state == .annotating {
             state = .exporting
             let document = canvas.document, base = canvas.base, callback = completion
@@ -221,7 +275,10 @@ final class SelectionSession {
     func finish() {
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
-        imageEditorWindow?.close(); imageEditorWindow = nil
+        if let view = (imageEditorWindow?.contentView as? NSScrollView)?.documentView as? SelectionView {
+            view.onSelection = nil; view.onConfirm = nil; view.onCancel = nil; view.onAnnotate = nil; view.onSave = nil
+        }
+        imageEditorWindow?.close(); imageEditorWindow?.contentView = nil; imageEditorWindow = nil; imageEditorSource = nil
         for window in windows {
             if let view = window.contentView as? SelectionView {
                 view.onSelection = nil; view.onConfirm = nil; view.onCancel = nil

@@ -12,8 +12,9 @@ struct OCRView: View {
     var body: some View {
         NavigationStack {
             HSplitView {
-                recognitionPane.frame(minWidth: 390, idealWidth: 510)
-                previewPane.frame(minWidth: 280, idealWidth: 340)
+                recognitionPane.frame(minWidth: 360, idealWidth: 430)
+                TranslationPane(text: model.selectedText, isRecognizing: model.isRecognizing)
+                    .frame(minWidth: 430, idealWidth: 540)
             }
             .navigationTitle("文字识别")
             .toolbar {
@@ -35,7 +36,7 @@ struct OCRView: View {
                 }
             }
         }
-        .frame(minWidth: 740, minHeight: 520)
+        .frame(minWidth: 900, minHeight: 560)
     }
 
     private var allSelected: Bool { !model.blocks.isEmpty && model.blocks.allSatisfy(\.selected) }
@@ -95,44 +96,6 @@ struct OCRView: View {
         }
     }
 
-    private var previewPane: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Label("原文与译文", systemImage: "character.bubble").font(.headline).padding(18)
-            Divider()
-            VStack(alignment: .leading, spacing: 16) {
-                GroupBox {
-                    ScrollView {
-                        Text(model.selectedText.isEmpty ? "勾选左侧区块以预览原文" : model.selectedText)
-                            .font(.body)
-                            .foregroundStyle(model.selectedText.isEmpty ? Color.secondary : Color.primary)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .topLeading)
-                            .padding(8)
-                    }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .accessibilityLabel("所选文字原文预览")
-                } label: {
-                    Label("原文", systemImage: "text.alignleft")
-                }
-                translationPane
-            }.padding(16)
-        }
-    }
-
-    // B6 replaces this empty pane with actual provider controls and returned translation text.
-    private var translationPane: some View {
-        GroupBox {
-            VStack(spacing: 10) {
-                Image(systemName: "character.bubble").font(.system(size: 28)).foregroundStyle(.tertiary)
-                Text("尚无译文").font(.headline).foregroundStyle(.secondary)
-                Text("翻译结果将在这里显示。").font(.callout).foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(16)
-            .accessibilityElement(children: .combine)
-        } label: {
-            Label("译文", systemImage: "globe")
-        }
-    }
 }
 
 @MainActor

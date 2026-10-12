@@ -37,4 +37,19 @@ final class AnnotationDocumentTests: XCTestCase {
         let result = try AnnotationRenderer.render(base: base, document: AnnotationDocument(canvasSize: CGSize(width: 20, height: 20)), scale: 1)
         XCTAssertEqual(base.dataProvider?.data as Data?, result.dataProvider?.data as Data?)
     }
+    func testBlurPreservesUnderlyingEarlierAnnotationsAtEachScale() throws {
+        let context = try ImageUtilities.context(width: 80, height: 80)
+        context.setFillColor(CGColor(gray: 0, alpha: 1)); context.fill(CGRect(x: 0, y: 0, width: 80, height: 80))
+        let base = try XCTUnwrap(context.makeImage())
+        var document = AnnotationDocument(canvasSize: CGSize(width: 80, height: 80))
+        document.append(AnnotationItem(tool: .highlight, color: .red, rect: CGRect(x: 10, y: 10, width: 60, height: 60)))
+        document.append(AnnotationItem(tool: .blur, width: 1, rect: CGRect(x: 30, y: 30, width: 20, height: 20)))
+        for scale: CGFloat in [1, 2] {
+            let image = try AnnotationRenderer.render(base: base, document: document, scale: scale)
+            let bytes = try XCTUnwrap(image.dataProvider?.data as Data?)
+            let offset = Int(40 * scale) * image.bytesPerRow + Int(40 * scale) * 4
+            XCTAssertGreaterThan(bytes[offset], 30, "An effect must operate on preceding document commands")
+        }
+    }
+
 }

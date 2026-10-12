@@ -50,6 +50,14 @@ public final class AppSettings {
     public var accurateOCR: Bool { didSet { defaults.set(accurateOCR, forKey: "accurateOCR") } }
     /// Translates an OCR result automatically with the selected provider.
     public var automaticTranslation: Bool { didSet { defaults.set(automaticTranslation, forKey: "automaticTranslation") } }
+    /// Single selected translation service; failures never select another service.
+    public var translationProvider: TranslationProviderID { didSet { defaults.set(translationProvider.rawValue, forKey: "translationProvider") } }
+    /// REST templates contain no credentials; each key lives in the system Keychain.
+    public var customTranslationServices: [CustomRESTConfiguration] {
+        didSet { if let data = try? JSONEncoder().encode(customTranslationServices) { defaults.set(data, forKey: "customTranslationServices") } }
+    }
+    /// The instance used when the selected service is custom REST.
+    public var selectedCustomTranslationID: UUID? { didSet { defaults.set(selectedCustomTranslationID?.uuidString, forKey: "selectedCustomTranslationID") } }
     /// Requested recording frame rate.
     public var recordingFPS: Int { didSet { defaults.set(recordingFPS, forKey: "recordingFPS") } }
     /// AVFoundation codec identifier: hevc or h264.
@@ -92,6 +100,9 @@ public final class AppSettings {
         ocrLanguages = defaults.stringArray(forKey: "ocrLanguages") ?? ["zh-Hans", "en-US", "ja-JP"]
         accurateOCR = defaults.bool(forKey: "accurateOCR")
         automaticTranslation = defaults.bool(forKey: "automaticTranslation")
+        translationProvider = TranslationProviderID(rawValue: defaults.string(forKey: "translationProvider") ?? "baidu") ?? .baidu
+        customTranslationServices = defaults.data(forKey: "customTranslationServices").flatMap { try? JSONDecoder().decode([CustomRESTConfiguration].self, from: $0) } ?? []
+        selectedCustomTranslationID = defaults.string(forKey: "selectedCustomTranslationID").flatMap(UUID.init(uuidString:))
         let fps = defaults.integer(forKey: "recordingFPS")
         recordingFPS = [15, 24, 30, 60].contains(fps) ? fps : 30
         recordingCodec = defaults.string(forKey: "recordingCodec") == "h264" ? "h264" : "hevc"

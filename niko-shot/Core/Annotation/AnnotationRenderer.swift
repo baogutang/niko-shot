@@ -45,10 +45,12 @@ enum AnnotationRenderer {
             context.setAlpha(0.28); context.fill(item.rect)
         case .mosaic, .blur:
             // Core Image calls the built-in pixelation filter CIPixellate (the prompt's CITilePixellate does not exist).
-            let source = CIImage(cgImage: base).clampedToExtent()
+            guard let snapshot = context.makeImage() else { return }
+            let source = CIImage(cgImage: snapshot).clampedToExtent()
+            let pixelScale = abs(context.ctm.a)
             let filter = item.tool == .mosaic ? "CIPixellate" : "CIGaussianBlur"
             let key = item.tool == .mosaic ? kCIInputScaleKey : kCIInputRadiusKey
-            let processed = source.applyingFilter(filter, parameters: [key: max(8, item.width * 4)]).cropped(to: CGRect(x: 0, y: 0, width: base.width, height: base.height))
+            let processed = source.applyingFilter(filter, parameters: [key: max(8, item.width * 4) * pixelScale]).cropped(to: CGRect(x: 0, y: 0, width: snapshot.width, height: snapshot.height))
             if let image = CIContext(options: [.cacheIntermediates: false]).createCGImage(processed, from: processed.extent) {
                 if item.points.count > 2 { context.addPath(path(item.points)); context.setLineWidth(max(14, item.width * 6)); context.replacePathWithStrokedPath(); context.clip() }
                 else { context.clip(to: item.rect) }

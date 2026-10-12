@@ -20,4 +20,20 @@ final class SelectionSessionTests: XCTestCase {
         session = nil
         XCTAssertNil(weakSession)
     }
+    func testImageEditorTearsDownItsWindowAndToolbar() throws {
+        let context = try ImageUtilities.context(width: 64, height: 128)
+        let image = try XCTUnwrap(context.makeImage())
+        var session: SelectionSession? = SelectionSession()
+        weak let weakSession = session
+        session?.edit(image: image, pointSize: CGSize(width: 32, height: 64)) { _, _ in }
+        XCTAssertEqual(session?.state, .annotating)
+        XCTAssertEqual(session?.windowCount, 2)
+        XCTAssertEqual(session?.monitorCount, 1)
+        session?.finish()
+        XCTAssertEqual(session?.windowCount, 0)
+        XCTAssertEqual(session?.monitorCount, 0)
+        session = nil
+        XCTAssertNil(weakSession)
+    }
+
 }

@@ -112,11 +112,7 @@ public struct SettingsView: View {
                         Toggle(name, isOn: Binding(get: { settings.ocrLanguages.contains(code) }, set: { selected in if selected { if !settings.ocrLanguages.contains(code) { settings.ocrLanguages.append(code) } } else if settings.ocrLanguages.count > 1 { settings.ocrLanguages.removeAll { $0 == code } } }))
                     }
                 }
-                Section("翻译") {
-                    Toggle("OCR 完成后自动翻译", isOn: $settings.automaticTranslation)
-                    Text("百度、Google、有道、DeepL 和自定义 REST 服务。密钥通过系统钥匙串管理。")
-                        .font(.callout).foregroundStyle(.secondary)
-                }
+                TranslationSettingsView(settings: settings)
             }
         case .recording:
             Form {
