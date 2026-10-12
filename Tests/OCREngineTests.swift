@@ -13,13 +13,24 @@ final class OCREngineTests: XCTestCase {
             "Native screenshot · 计算机截图边缘 · 画像のキャプチャ",
             "Capture 2026 · 测试结果与设备 · 今日は晴れです"
         ])
-        for languages in [["zh-Hans", "en-US", "ja-JP"], ["en-US", "zh-Hans", "ja-JP"]] {
+        for languages in [["zh-Hans", "en-US", "ja-JP"], ["en-US", "zh-Hans", "ja-JP"], ["ja-JP", "en-US", "zh-Hans"]] {
             let blocks = try await OCREngine().recognize(image, languages: languages)
             let text = blocks.map(\.text).joined(separator: "\n")
             for expected in ["Hello", "简体汉语识别", "计算机截图边缘", "日本語のテスト", "画像のキャプチャ", "今日は晴れです"] {
                 XCTAssertTrue(text.contains(expected), "Missing \(expected) for \(languages):\n\(text)")
             }
             XCTAssertTrue(blocks.allSatisfy { $0.boundingBox.minX >= 0 && $0.boundingBox.maxX <= 1 && $0.boundingBox.minY >= 0 && $0.boundingBox.maxY <= 1 })
+        }
+    }
+
+    func testEnglishFirstWithJapaneseEnabledPreservesNativeKanaWithoutChinese() async throws {
+        let image = try fixture(["Native screenshot · 日本語のテスト · 画像のキャプチャ · 今日は晴れです"])
+        for languages in [["en-US", "ja-JP"], ["ja-JP", "en-US"]] {
+            let blocks = try await OCREngine().recognize(image, languages: languages)
+            let text = blocks.map(\.text).joined(separator: "\n")
+            for expected in ["Native screenshot", "日本語のテスト", "画像のキャプチャ", "今日は晴れです"] {
+                XCTAssertTrue(text.contains(expected), "Missing \(expected) for \(languages):\n\(text)")
+            }
         }
     }
 

@@ -60,10 +60,18 @@ actor OCREngine {
                 } else { request.recognitionLevel = .fast }
             }
             var seen = Set<String>()
-            let selected = languages.filter { supported.contains($0) && seen.insert($0).inserted }
+            var selected = languages.filter { supported.contains($0) && seen.insert($0).inserted }
             guard languages.isEmpty || !selected.isEmpty else {
                 throw NSError(domain: "niko-shot.ocr", code: 1,
                     userInfo: [NSLocalizedDescriptionKey: "当前 macOS 不支持所选识别语言。"])
+            }
+            // CJK recognition also reads Latin text, whereas an English-first explicit
+            // request can discard CJK. With Chinese and Japanese enabled, keep Han
+            // recognition in the selected Chinese variant and extend kana separately.
+            if request.recognitionLevel == .accurate,
+               let primary = selected.first(where: { $0.hasPrefix("zh-") }) ??
+                             selected.first(where: { $0.hasPrefix("ja-") || $0.hasPrefix("ko-") }) {
+                selected = [primary] + selected.filter { $0 != primary }
             }
             return RecognitionConfiguration(level: request.recognitionLevel, languages: selected)
         }
@@ -75,7 +83,10 @@ actor OCREngine {
             let request = VNRecognizeTextRequest()
             request.recognitionLevel = configuration.level
             request.recognitionLanguages = configuration.languages
-            request.automaticallyDetectsLanguage = true
+            // Automatic detection can choose the Japanese model for a whole mixed
+            // line and corrupt simplified Han. Honor enabled languages explicitly;
+            // retain detection only when the caller has requested automatic language.
+            request.automaticallyDetectsLanguage = configuration.languages.isEmpty
             request.usesLanguageCorrection = true
             try VNImageRequestHandler(cgImage: image).perform([request])
             try Task.checkCancellation()

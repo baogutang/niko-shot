@@ -15,7 +15,7 @@
   <a href="https://github.com/baogutang/niko-shot/actions/workflows/build.yml"><img src="https://github.com/baogutang/niko-shot/actions/workflows/build.yml/badge.svg" alt="GitHub Actions 构建状态"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-171717?logo=apple&logoColor=white" alt="macOS 14 或更新版本">
   <img src="https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white" alt="原生 Swift 6">
-  <a href="docs/ACCEPTANCE.md"><img src="https://img.shields.io/badge/本机回归-166%20通过-4C7D58" alt="166 项本机回归通过"></a>
+  <a href="docs/ACCEPTANCE.md"><img src="https://img.shields.io/badge/本机回归-167%20通过-4C7D58" alt="167 项本机回归通过"></a>
   <a href="https://github.com/baogutang/niko-shot/releases/tag/nightly"><img src="https://img.shields.io/badge/Nightly-开发候选-8B6D38" alt="Nightly 开发候选"></a>
 </p>
 
@@ -31,7 +31,7 @@
 
 <p align="center"><sub>macOS Sonoma 14+ · Apple Silicon 与 Intel · AppKit / SwiftUI · 运行时零第三方依赖</sub></p>
 
-> **当前为开发候选。** 本机 166 项回归测试通过；Nightly 使用 ad hoc 签名，尚未完成 Developer ID 分发与公证。真实界面走查、服务账号和外设验收仍有待完成项，冷启动与使用后内存预算未达标，整体 DoD 尚未通过。具体范围见[验收记录](docs/ACCEPTANCE.md)。
+> **当前为开发候选。** 本机 167 项回归测试通过；Nightly 使用 ad hoc 签名，尚未完成 Developer ID 分发与公证。真实界面走查、服务账号和外设验收仍有待完成项，冷启动与使用后内存预算未达标，整体 DoD 尚未通过。具体范围见[验收记录](docs/ACCEPTANCE.md)。
 
 ## 在菜单栏，把这些事做完
 
@@ -204,7 +204,7 @@ Developer ID 分发需要有效的 Application 证书与已存入 Keychain 的�
 
 ## 架构与验收
 
-当前实现使用 Swift 6 严格并发、AppKit / SwiftUI 与系统框架。运行时没有 WebView、ffmpeg、登录 Helper 或第三方二进制。最新本机回归 **166 项、0 failures**；真实设备、账号、分发与性能结果保持独立。
+当前实现使用 Swift 6 严格并发、AppKit / SwiftUI 与系统框架。运行时没有 WebView、ffmpeg、登录 Helper 或第三方二进制。最新本机回归 **167 项、0 failures**；真实设备、账号、分发与性能结果保持独立。
 
 <details>
 <summary>原生架构与数据流（Mermaid）</summary>
@@ -261,7 +261,7 @@ AppKit 与原生配置停留在 MainActor；像素渲染、识别、拼接、编
 
 `scripts/measure-idle.py` 用外部采样器记录真实进程的 MenuReady 时间、RSS 和 CPU，不向应用加入轮询。默认运行两小时，原始 JSON、终止统计与 display-link 时间戳存于 `build/evidence`。可另外使用 `xcrun xctrace` 的 Time Profiler、Allocations 和 App Launch 模板记录原始 Instruments trace。
 
-改版前 B9 候选完成干净构建与 149 项测试。界面改版与发布前安全修复后的本机回归为 166 项、0 failures；Swift 6 完整并发检查与编译警告作为错误的门禁通过。新增官方接入导航、免密 REST、编码占位符认证、OPTIONS 的真实本机 HTTP 验证，以及五类服务错误回显与编码变体的密钥脱敏回归。测试覆盖原生图片／音视频编码、Vision 混排、模板签名、跨进程自动化、窗口及任务生命周期；实际账号和外设验收范围保持独立。
+改版前 B9 候选完成干净构建与 149 项测试。界面改版与发布前安全修复后的本机回归为 167 项、0 failures；Swift 6 完整并发检查与编译警告作为错误的门禁通过。新增官方接入导航、免密 REST、编码占位符认证、OPTIONS 的真实本机 HTTP 验证，以及五类服务错误回显与编码变体的密钥脱敏回归。测试覆盖原生图片／音视频编码、Vision 混排、模板签名、跨进程自动化、窗口及任务生命周期；实际账号和外设验收范围保持独立。
 
 改版前 B9 最终候选已复制至 `~/Applications/niko-shot.app`，主二进制哈希保持一致。原生登录启动开关实际完成启用及注销，最终恢复关闭；没有执行注销登录或重启系统。正常启动安装副本并重启 Shortcuts 后，系统发现全部五个正式动作，最近 OCR 动作在应用运行时和退出后均实际返回公开测试文字；前四个动作的完整捕获仍需对应权限和实机验收。
 
