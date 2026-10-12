@@ -3,12 +3,19 @@ import Foundation
 import Vision
 import CoreGraphics
 
+struct OCRScriptRun: Sendable {
+    var range: Range<String.Index>
+    var boundingBox: CGRect
+    var hasKana: Bool
+}
+
 struct OCRBlock: Identifiable, Sendable {
     var id = UUID()
     var text: String
     var boundingBox: CGRect
     var confidence: Float
     var selected = true
+    var scriptRuns: [OCRScriptRun] = []
 }
 
 actor OCREngine {
@@ -22,22 +29,128 @@ actor OCREngine {
         // English/Chinese text and using only a native candidate's extended kana run.
         if configuration.level == .accurate,
            let japanese = configuration.languages.first(where: { $0.hasPrefix("ja-") }),
-           configuration.languages.first != japanese, blocks.contains(where: { Self.containsCJK($0.text) }) {
+           configuration.languages.first != japanese {
             try Task.checkCancellation()
             let alternate = RecognitionConfiguration(level: .accurate,
                 languages: [japanese] + configuration.languages.filter { $0 != japanese })
             let candidates = try Self.perform(image, configuration: alternate)
-            for index in blocks.indices where Self.containsCJK(blocks[index].text) {
-                let primary = blocks[index]
-                let matched = candidates.filter { $0.confidence >= primary.confidence && Self.overlap(primary.boundingBox, $0.boundingBox) >= 0.5 }
-                    .max { Self.overlap(primary.boundingBox, $0.boundingBox) < Self.overlap(primary.boundingBox, $1.boundingBox) }
-                if let matched { blocks[index].text = Self.extendingKana(in: primary.text, using: matched.text) }
-            }
+            blocks = try Self.reconcile(image, primary: blocks, supplemental: candidates, languages: configuration.languages)
         }
         try Task.checkCancellation()
         return blocks.sorted {
             if abs($0.boundingBox.midY - $1.boundingBox.midY) > 0.015 { return $0.boundingBox.midY > $1.boundingBox.midY }
             return $0.boundingBox.minX < $1.boundingBox.minX
+        }
+    }
+
+    /// Preserves independently detected lines and rechecks their Han-only spans
+    /// without feeding the Japanese and Latin portions back into the Chinese decoder.
+    nonisolated static func reconcile(_ image: CGImage, primary: [OCRBlock], supplemental: [OCRBlock], languages: [String]) throws -> [OCRBlock] {
+        try Task.checkCancellation()
+        var recovered = primary
+        if languages.contains(where: { $0.hasPrefix("zh-") }) {
+            let configuration = try Self.configuration(languages: languages, accurate: true)
+            for candidate in supplemental where containsCJK(candidate.text) &&
+                !recovered.contains(where: { overlap($0.boundingBox, candidate.boundingBox) > 0 }) {
+                try Task.checkCancellation()
+                recovered.append(try recoverHanRuns(image, candidate: candidate, configuration: configuration))
+            }
+        }
+        return mergingRecognitions(primary: recovered, supplemental: supplemental)
+    }
+
+    /// Keeps primary Han and supplements disjoint observations, without duplicating
+    /// a partially overlapping line or discarding a low-confidence independent line.
+    nonisolated static func mergingRecognitions(primary: [OCRBlock], supplemental: [OCRBlock]) -> [OCRBlock] {
+        var blocks = primary
+        for index in primary.indices where containsCJK(primary[index].text) {
+            let block = primary[index]
+            let matched = supplemental.filter { $0.confidence >= block.confidence && overlap(block.boundingBox, $0.boundingBox) >= 0.5 }
+                .max { overlap(block.boundingBox, $0.boundingBox) < overlap(block.boundingBox, $1.boundingBox) }
+            if let matched {
+                let extended = extendingKana(in: block.text, using: matched.text)
+                if extended != block.text {
+                    blocks[index].text = extended
+                    blocks[index].scriptRuns = []
+                }
+            }
+        }
+        for candidate in supplemental where !blocks.contains(where: { overlap($0.boundingBox, candidate.boundingBox) > 0 }) {
+            blocks.append(candidate)
+        }
+        return blocks
+    }
+
+    private nonisolated static func recoverHanRuns(_ image: CGImage, candidate: OCRBlock, configuration: RecognitionConfiguration) throws -> OCRBlock {
+        var edits: [(Range<String.Index>, String)] = []
+        var confidence = candidate.confidence
+        for run in candidate.scriptRuns where !run.hasKana {
+            try Task.checkCancellation()
+            let recognized = try recognizeIsolatedHan(image, bounds: run.boundingBox,
+                lineHeight: candidate.boundingBox.height, configuration: configuration)
+            var best: (text: String, confidence: Float, score: CGFloat)?
+            for block in recognized {
+                for decoded in block.scriptRuns where !decoded.hasKana {
+                    let score = overlap(run.boundingBox, decoded.boundingBox)
+                    // Character boxes are approximate. Reject incidental overlap from
+                    // neighboring glyphs admitted by the conservative crop margins.
+                    if score >= 0.25, score > (best?.score ?? 0) {
+                        best = (String(block.text[decoded.range]), block.confidence, score)
+                    }
+                }
+            }
+            if let best { edits.append((run.range, best.text)); confidence = min(confidence, best.confidence) }
+        }
+        guard !edits.isEmpty else { return candidate }
+        edits.sort { $0.0.lowerBound < $1.0.lowerBound }
+        var result = "", cursor = candidate.text.startIndex
+        for (range, replacement) in edits {
+            result += candidate.text[cursor..<range.lowerBound]
+            result += replacement
+            cursor = range.upperBound
+        }
+        result += candidate.text[cursor...]
+        var corrected = candidate
+        corrected.text = result
+        corrected.confidence = confidence
+        corrected.scriptRuns = [] // Ranges describe the original native candidate only.
+        return corrected
+    }
+
+    private nonisolated static func recognizeIsolatedHan(_ image: CGImage, bounds: CGRect, lineHeight: CGFloat, configuration: RecognitionConfiguration) throws -> [OCRBlock] {
+        try autoreleasepool {
+            try Task.checkCancellation()
+            let width = image.width, height = image.height
+            // Vision documents character boxes as approximate UI geometry. Expand by
+            // half a native line height to retain omitted edge glyphs, without scaling
+            // pixels or inferring glyph width from the erroneous recognized string.
+            let horizontalPadding = max(2, lineHeight * CGFloat(height) * 0.5)
+            let verticalPadding = min(24, max(2, lineHeight * CGFloat(height) * 0.5))
+            let region = bounds.insetBy(dx: -horizontalPadding / CGFloat(width), dy: -verticalPadding / CGFloat(height))
+                .intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+            guard !region.isNull, region.width > 0, region.height > 0 else { return [] }
+            let cropRect = CGRect(x: region.minX * CGFloat(width), y: (1 - region.maxY) * CGFloat(height),
+                width: region.width * CGFloat(width), height: region.height * CGFloat(height))
+                .integral.intersection(CGRect(x: 0, y: 0, width: width, height: height))
+            guard let crop = image.cropping(to: cropRect) else { return [] }
+            try Task.checkCancellation()
+            let recognized = try perform(crop, configuration: configuration)
+            func mappedBounds(_ box: CGRect) -> CGRect {
+                CGRect(x: (cropRect.minX + box.minX * CGFloat(crop.width)) / CGFloat(width),
+                    y: (CGFloat(height) - cropRect.maxY + box.minY * CGFloat(crop.height)) / CGFloat(height),
+                    width: box.width * CGFloat(crop.width) / CGFloat(width), height: box.height * CGFloat(crop.height) / CGFloat(height))
+                    .intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+            }
+            return recognized.map { block in
+                var mapped = block
+                mapped.boundingBox = mappedBounds(block.boundingBox)
+                mapped.scriptRuns = block.scriptRuns.map { run in
+                    var global = run
+                    global.boundingBox = mappedBounds(run.boundingBox)
+                    return global
+                }
+                return mapped
+            }
         }
     }
 
@@ -90,11 +203,21 @@ actor OCREngine {
             request.usesLanguageCorrection = true
             try VNImageRequestHandler(cgImage: image).perform([request])
             try Task.checkCancellation()
-            return (request.results ?? []).compactMap { observation in
-                guard let candidate = observation.topCandidates(1).first else { return nil }
-                return OCRBlock(text: candidate.string, boundingBox: observation.boundingBox, confidence: candidate.confidence)
-            }
+            return (request.results ?? []).compactMap(nativeBlock)
         }
+    }
+
+    /// Copies native candidate geometry into Sendable values; Vision objects stay
+    /// within the synchronous request's autorelease pool.
+    nonisolated static func nativeBlock(_ observation: VNRecognizedTextObservation) -> OCRBlock? {
+        guard let candidate = observation.topCandidates(1).first else { return nil }
+        let text = candidate.string
+        let runs = cjkRuns(in: text).compactMap { range -> OCRScriptRun? in
+            guard let rectangle = try? candidate.boundingBox(for: range),
+                  rectangle.boundingBox.width > 0, rectangle.boundingBox.height > 0 else { return nil }
+            return OCRScriptRun(range: range, boundingBox: rectangle.boundingBox, hasKana: text[range].contains(where: isKana))
+        }
+        return OCRBlock(text: text, boundingBox: observation.boundingBox, confidence: candidate.confidence, scriptRuns: runs)
     }
 
     private nonisolated static func overlap(_ lhs: CGRect, _ rhs: CGRect) -> CGFloat {
@@ -124,19 +247,22 @@ actor OCREngine {
         }
     }
 
-    private nonisolated static func japaneseRuns(in text: String) -> [Range<String.Index>] {
-        var ranges: [Range<String.Index>] = [], start: String.Index?, hasKana = false
+    private nonisolated static func cjkRuns(in text: String) -> [Range<String.Index>] {
+        var ranges: [Range<String.Index>] = [], start: String.Index?
         for index in text.indices {
             if isKana(text[index]) || isHan(text[index]) {
                 if start == nil { start = index }
-                hasKana = hasKana || isKana(text[index])
             } else if let beginning = start {
-                if hasKana { ranges.append(beginning..<index) }
-                start = nil; hasKana = false
+                ranges.append(beginning..<index)
+                start = nil
             }
         }
-        if let start, hasKana { ranges.append(start..<text.endIndex) }
+        if let start { ranges.append(start..<text.endIndex) }
         return ranges
+    }
+
+    private nonisolated static func japaneseRuns(in text: String) -> [Range<String.Index>] {
+        cjkRuns(in: text).filter { text[$0].contains(where: isKana) }
     }
 
     private nonisolated static func extendingKana(in primary: String, using alternate: String) -> String {

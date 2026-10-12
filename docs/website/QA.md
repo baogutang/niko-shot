@@ -16,7 +16,7 @@
 | 翻译指南 | 五类服务及三步配置均来自应用源文件；日期 2026-10-13；手机实际显示正常，页面无横向溢出 |
 | 文本对比 | 浅色主按钮 4.94:1、链接 4.73:1、说明 5.37:1；深色主按钮 8.57:1、说明 8.52:1，按最终色值计算 |
 | 发布暂不可用 | 初次发布前 API 返回不可用；官网显示明确提示并保留 Release 链接，无假下载成功状态 |
-| 应用干净回归 | 167 项、0 failures；Swift 6 完整并发与编译警告作为错误的门禁通过，记录在 `build/evidence/ocr-ci-repair-tests.xcresult` |
+| 应用干净回归 | 169 项、0 failures；Swift 6 完整并发与编译警告作为错误的门禁通过，记录在 `build/evidence/ocr-han-recovery-tests.xcresult` |
 | 安全修复 | 五类服务的错误消息、代码、HTTP 正文和原生网络错误脱敏；新增 9 项真实 URLSession / URLProtocol 回归 |
 
 截图本机保存在 `build/evidence/site-mobile-dark.jpg` 与 `site-mobile-light.jpg`；下载检查针对实际浏览器产物。浏览器下载事件工具等待未返回，但文件已经落盘且经独立读取验证，未把工具超时当作导出失败或成功的唯一依据。
@@ -25,10 +25,19 @@
 
 GitHub Pages 已实际部署成功，公开地址为 https://baogutang.github.io/niko-shot/；[部署运行](https://github.com/baogutang/niko-shot/actions/runs/38300497341) 重试成功，匿名 HTTP 为 200。桌面页面、手机页面及问答 Enter 展开已实际检查。
 
-[首次 PageSpeed 测量](https://pagespeed.web.dev/analysis/https-baogutang-github-io-niko-shot/ma7yihud6e?form_factor=mobile) 为移动慢速 4G：性能 71、无障碍 100、最佳做法 96、SEO 100，LCP 10.9s / TBT 0ms / CLS 0。图片传输为主要瓶颈，尚无真实用户指标。针对测量编码了 JPEG 与自适应图片：完整主视觉从 1,878,913 降至 213,068 字节，800px 版本 60,379 字节；画布完整图片改为进入视口后加载，原生预览新增半尺寸选择，内容未修改。手机 390 × 844 实际选择了 800px 主视觉及 `app-settings-compact.png`，无横向溢出；更新资源后键盘箭头、PNG 导出、图片复制再次通过。更新后的部署需再次测量，不把优化动作当作达到指标。
+[首次 PageSpeed 测量](https://pagespeed.web.dev/analysis/https-baogutang-github-io-niko-shot/ma7yihud6e?form_factor=mobile) 为移动慢速 4G：性能 71、无障碍 100、最佳做法 96、SEO 100，LCP 10.9s / TBT 0ms / CLS 0。图片传输为主要瓶颈，尚无真实用户指标。针对测量编码了 JPEG 与自适应图片：完整主视觉从 1,878,913 降至 213,068 字节，800px 版本 60,379 字节；画布完整图片改为进入视口后加载，原生预览新增半尺寸选择，内容未修改。手机 390 × 844 实际选择了 800px 主视觉及 `app-settings-compact.png`，无横向溢出；更新资源后键盘箭头、PNG 导出、图片复制再次通过。
+
+优化后的 [GitHub Pages 部署](https://github.com/baogutang/niko-shot/actions/runs/38301916439) 已成功，匿名 HTTP 为 200。[第二次独立 PageSpeed 测量](https://pagespeed.web.dev/analysis/https-baogutang-github-io-niko-shot/jfbf9ryv4o?form_factor=mobile) 于 2026-10-13 04:06（北京时间）完成：
+
+| 模拟环境 | 性能 / 无障碍 / 最佳做法 / SEO | FCP | LCP | TBT | CLS |
+|---|---|---|---|---|---|
+| 手机，慢速 4G | 99 / 100 / 96 / 100 | 0.9s | 2.0s | 0ms | 0 |
+| 桌面 | 100 / 100 / 96 / 100 | 0.3s | 0.5s | 0ms | 0 |
+
+报告使用 Lighthouse 13.5.0，没有真实用户 CrUX 数据；TBT 不能代替 INP。首次安装包尚未发布时，GitHub Release API 的 404 会被计入浏览器错误，最佳做法分数保留实际 96。报告文字和浏览器截图保存在 `build/evidence/pagespeed-mobile-after.txt` 与 `.jpg`；不以自动无障碍分数替代完整 VoiceOver 验收。
 
 ## 边界
 
-减少动态效果与透明度的 CSS / 清理路径已复核；当前机器锁屏，不能代替用户更改系统偏好进行真实体验验收。颜色对比已按最终 token 校验，压缩后的性能报告需在重新部署后独立检查。浏览器截图与静态验证不替代 Lighthouse 分数、屏幕阅读器完整走查或产品实机验收。
+减少动态效果与透明度的 CSS / 清理路径已复核；当前机器锁屏，不能代替用户更改系统偏好进行真实体验验收。颜色对比已按最终 token 校验，压缩后的线上性能已独立复测。浏览器截图与静态验证不替代屏幕阅读器完整走查或产品实机验收。
 
 应用离屏预览不能替代新版本活动窗口的拖拽、快捷键和 VoiceOver 走查。Developer ID、公证、真实翻译账号、双 DPI / 120 Hz、外设及现有未达标性能预算保持在 [完整验收记录](../ACCEPTANCE.md)，所有功能需求继续保留。
