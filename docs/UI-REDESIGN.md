@@ -23,6 +23,8 @@
 
 本机 `clean build test` 与后续最终回归 **157 项通过、0 failures**，编译警告为零。原始日志：`build/evidence/UI-redesign-xcodebuild.log`、`UI-redesign-final-xcodebuild.log`。新增真实 loopback HTTP 测试覆盖免密 REST 请求和缓存、编码认证占位符在无凭据时阻止请求、OPTIONS 方法；导航测试检查官方 HTTPS、凭据范围和链接角色。测试不会请求外部翻译服务或保存真实凭据。
 
+交付源码提交为 `ec9fee08a7784f2b6add5cf9de78f3729ce2e8be`（`feat(ui): redesign native workflows and provider onboarding`）。从该提交重新建立干净 Git 检出，仅依次执行 `xcodegen generate` 和 `xcodebuild -scheme niko-shot -configuration Debug build test`，两个步骤均返回 0，157 项测试通过。首轮 Xcode 测试报告写入超时；随后使用显式 `-resultBundlePath` 补验，同样 157 项通过、0 失败、0 跳过，并通过 `xcresulttool get test-results summary` 验证报告可读。补验时 Xcode 对 Debug 可执行文件的 App Intents 元数据提取报告无框架依赖警告，Swift 编译没有警告；实际交付的 Release 构建正常生成 `Metadata.appintents`。证据为 `build/evidence/UI-redesign-clean-clone.json`、`UI-redesign-clean-clone-report.log`、`UI-redesign-clean-clone-report.xcresult` 和 `UI-redesign-clean-clone-summary.json`。后续提交仅补充文档，不改变该交付源码与安装产物。
+
 当前产品源码生成了浅／深色的原生离屏预览，保存在 `build/evidence/UI-redesign/previews`，包括菜单、设置、五类翻译配置、OCR、历史、录屏、GIF、长截图、指南和标注 HUD。预览仅使用公开合成文字、图像与隔离的设置／数据库；窗口未激活，部分系统控件显示非活动外观，文件拖拽缩略图没有可靠显示。这些预览用于排版检查，不能替代真实窗口、键盘焦点、VoiceOver 或拖拽验收。
 
 纯 Release 构建包含 arm64／x86_64，7,232 KiB（7.41MB）；开发 ZIP 为 3,389,663 字节（3.39MB）。ad hoc 签名完整性校验通过，未作 Developer ID 公证。主二进制 SHA256：`75e0edd777da7d5bda27101d42f186ba693fe775a023c92a5c4921b54f4095dc`；ZIP SHA256：`2bb22f59ecf7d5381deb24f541a39443e33d650d1bf22c9e8306e16c54944c5c`。
