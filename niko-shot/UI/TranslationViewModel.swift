@@ -15,9 +15,13 @@ final class TranslationViewModel {
     private(set) var statusMessage: String?
     private(set) var requestedText = ""
     @ObservationIgnored private var requestTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingRequests: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var generation = UUID()
 
-    deinit { requestTask?.cancel() }
+    deinit { for task in pendingRequests.values { task.cancel() } }
+
+    /// Cancelled requests remain owned until the transport has actually returned.
+    var pendingRequestCount: Int { pendingRequests.count }
 
     /// Translates explicitly through the chosen peer provider without fallback or retries.
     func translate(text: String, settings: AppSettings) {
@@ -42,7 +46,8 @@ final class TranslationViewModel {
         let current = UUID()
         generation = current
         isTranslating = true
-        requestTask = Task { [weak self] in
+        let task = Task { [weak self] in
+            defer { self?.pendingRequests.removeValue(forKey: current) }
             do {
                 let result = try await TranslationRouter.shared.translate(request, provider: provider, custom: provider == .custom ? custom : nil)
                 try Task.checkCancellation()
@@ -61,6 +66,8 @@ final class TranslationViewModel {
                 self.errorMessage = Self.describe(error, provider: provider)
             }
         }
+        pendingRequests[current] = task
+        requestTask = task
     }
 
     /// Cancels an in-flight request and invalidates its response generation.
@@ -69,6 +76,17 @@ final class TranslationViewModel {
         requestTask?.cancel()
         requestTask = nil
         isTranslating = false
+    }
+
+    /// Waits only for the requests owned at this point, without affecting a newly attached workspace.
+    func drainPendingRequests() async {
+        let pending = Array(pendingRequests.values)
+        for task in pending { await task.value }
+    }
+
+    func cancelAndDrain() async {
+        cancel()
+        await drainPendingRequests()
     }
 
     /// Clears obsolete results when text, languages or the chosen provider change.

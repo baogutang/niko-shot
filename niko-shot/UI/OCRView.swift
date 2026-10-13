@@ -5,13 +5,15 @@ import SwiftUI
 struct OCRView: View {
     @Bindable private var model: OCRViewModel
     private let settings: AppSettings
+    private let translationModel: TranslationViewModel?
     @State private var showsBlocks = true
     @State private var formattingExpanded = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(model: OCRViewModel, settings: AppSettings = .shared) {
+    init(model: OCRViewModel, settings: AppSettings = .shared, translationModel: TranslationViewModel? = nil) {
         self.model = model
         self.settings = settings
+        self.translationModel = translationModel
     }
 
     var body: some View {
@@ -20,7 +22,7 @@ struct OCRView: View {
                 if showsBlocks {
                     recognitionPane.frame(minWidth: 240, idealWidth: 260, maxWidth: 340)
                 }
-                TranslationPane(text: model.selectedText, isRecognizing: model.isRecognizing, settings: settings)
+                TranslationPane(text: model.selectedText, isRecognizing: model.isRecognizing, settings: settings, model: translationModel)
                     .frame(minWidth: 580)
             }
             .navigationTitle("识别与翻译")

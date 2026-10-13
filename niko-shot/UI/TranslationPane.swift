@@ -8,16 +8,20 @@ struct TranslationPane: View {
     let text: String
     let isRecognizing: Bool
     @Bindable private var settings: AppSettings
-    @State private var model = TranslationViewModel()
+    @State private var model: TranslationViewModel
     @State private var recognitionGeneration = 0
     @State private var automaticGeneration: Int?
     @State private var showsSetupGuide = false
 
     /// Shows a snapshot-aware translation pane sharing persisted provider preferences.
-    init(text: String, isRecognizing: Bool, settings: AppSettings = .shared) {
+    init(text: String, isRecognizing: Bool, settings: AppSettings = .shared, model: TranslationViewModel? = nil) {
         self.text = text
         self.isRecognizing = isRecognizing
         self.settings = settings
+        _model = State(initialValue: model ?? TranslationViewModel())
+        if let model, model.requestedText == text, !model.translatedText.isEmpty || model.isTranslating {
+            _automaticGeneration = State(initialValue: 0)
+        }
     }
 
     var body: some View {

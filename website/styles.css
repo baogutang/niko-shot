@@ -144,7 +144,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .annotation-copy > p { font-size: 13px; margin-top: 14px; }
 .feature-detail { font-size: 12px !important; line-height: 1.85; color: var(--muted); }
 .annotation-preview { min-width: 0; }
-.annotation-preview img { width: 100%; max-width: 424px; filter: drop-shadow(0 9px 12px var(--shadow)); }
+.annotation-preview img { width: 100%; max-width: 673px; filter: drop-shadow(0 9px 12px var(--shadow)); }
 .annotation-preview figcaption { color: var(--muted); font-size: 11px; margin-top: 18px; }
 .feature-pair { display: grid; grid-template-columns: 1.12fr 1fr; gap: 0; margin-top: 32px; }
 .feature-pair article { padding: 30px 40px 28px 0; }
@@ -300,7 +300,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   .workflow-path span { font-size: 11px; }
   .annotation-feature { grid-template-columns: 1fr; gap: 26px; }
   .annotation-copy { max-width: 650px; }
-  .annotation-preview img { max-width: 424px; }
+  .annotation-preview img { max-width: 673px; }
   .translation-section, .privacy-section, .download-section { gap: 40px; }
   .keyboard-flow { gap: 9px; }
   .keyboard-flow kbd { min-width: 90px; padding-inline: 10px; font-size: 15px; }

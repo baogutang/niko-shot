@@ -39,6 +39,10 @@ final class SelectionSession {
     private var directScrollSelection = false
     private var windowCandidates: [WindowCandidate] = []
     private var toolbar: ToolbarController?
+    private var textResult: ScreenshotTextController?
+    private var textResultGeneration = UUID()
+    private var textSnapshotOperation: UUID?
+    private var retiringTextResults: [UUID: Task<Void, Never>] = [:]
     private var canvas: AnnotationCanvasView?
     private var editorContext: CaptureContext?
     private var archive: ArchivedFrame?
@@ -48,6 +52,9 @@ final class SelectionSession {
     var onFinish: ((Bool) -> Void)?
     /// Receives the original viewport after overlays close; nil explicitly requires screen reselection.
     var onScrollCapture: ((CaptureContext?) -> Void)?
+    /// Screenshot text stays attached to the active capture until the user requests a full workspace.
+    var onRecognizedText: ((String) -> Void)?
+    var onTextWorkspace: ((OCRViewModel, TranslationViewModel) -> Void)?
     var outputAction: ToolbarAction = .copy
     private var annotationColor = AnnotationColor.red
     private var annotationWidth: CGFloat = 3
@@ -57,11 +64,17 @@ final class SelectionSession {
     private var operations: [UUID: Task<Void, Never>] = [:]
     private var retiringCanvases: [UUID: Task<Void, Never>] = [:]
     private let afterImageOperation: (@Sendable () async -> Void)?
+    private let makeTextController: @MainActor () -> ScreenshotTextController
     /// Allows real background completion to be gated in cancellation regression tests.
-    init(afterImageOperation: (@Sendable () async -> Void)? = nil) { self.afterImageOperation = afterImageOperation }
+    init(afterImageOperation: (@Sendable () async -> Void)? = nil,
+         makeTextController: @escaping @MainActor () -> ScreenshotTextController = { ScreenshotTextController() }) {
+        self.afterImageOperation = afterImageOperation
+        self.makeTextController = makeTextController
+    }
     /// Cancelled work stays owned until the underlying renderer actually returns.
     var resourceCounts: [String: Int] {
         ["selectionTasks": operations.count, "retiringCanvases": retiringCanvases.count,
+         "screenshotText": textResult == nil ? 0 : 1, "retiringTextResults": retiringTextResults.count,
          "annotationPreview": canvas?.resourceCounts["preview"] ?? 0,
          "annotationTextAlert": canvas?.resourceCounts["textAlert"] ?? 0]
     }
@@ -112,12 +125,15 @@ final class SelectionSession {
         let remainingToolbar = toolbar
         let remainingEditor = imageEditorWindow
         let remainingCanvas = canvas
+        let remainingText = textResult
         for operation in operations.values { operation.cancel() }
         for operation in retiringCanvases.values { operation.cancel() }
+        for operation in retiringTextResults.values { operation.cancel() }
         if let archive { try? FileManager.default.removeItem(at: archive.url) }
         // Sessions are owned and released by the main-actor app coordinator.
         MainActor.assumeIsolated {
             remainingCanvas?.prepareForFinish()
+            remainingText?.cancel()
             remainingToolbar?.close()
             ((remainingEditor?.contentView as? NSScrollView)?.documentView as? SelectionView)?.stopDisplayUpdates()
             remainingEditor?.close()
@@ -165,6 +181,8 @@ final class SelectionSession {
                     self.selected = nil; self.activeScreen = nil; self.state = .selecting
                     for overlay in self.windows { overlay.ignoresMouseEvents = false }
                 }
+            } else if kind == "ocr", confirmationTitle == nil {
+                view.onSelectionCompleted = { [weak self] in self?.requestScreenshotText() }
             }
             view.onConfirm = { [weak self] in self?.confirm() }
             view.onCancel = { [weak self] in self?.finish() }
@@ -195,6 +213,7 @@ final class SelectionSession {
     private func select(frame: FrozenFrame, rect: CGRect) {
         guard state != .exporting else { return }
         if let activeScreen, activeScreen != frame.screen.id { return }
+        if selected?.1 != rect { closeScreenshotText() }
         activeScreen = frame.screen.id
         for window in windows {
             window.ignoresMouseEvents = (window.contentView as? SelectionView)?.frameInfo.screen.id != activeScreen
@@ -284,7 +303,10 @@ final class SelectionSession {
                 canvas.color = self.annotationColor; canvas.strokeWidth = self.annotationWidth
                 canvas.onAction = { [weak self] action in self?.perform(action) }
                 canvas.onToolChange = { [weak self] tool in self?.toolbar?.setSelectedTool(tool) }
-                canvas.onDocumentChange = { [weak self, weak canvas] in self?.toolbar?.setUndoAvailability(canUndo: canvas?.document.canUndo ?? false, canRedo: canvas?.document.canRedo ?? false) }
+                canvas.onDocumentChange = { [weak self, weak canvas] in
+                    self?.closeScreenshotText()
+                    self?.toolbar?.setUndoAvailability(canUndo: canvas?.document.canUndo ?? false, canRedo: canvas?.document.canRedo ?? false)
+                }
                 stage.addSubview(canvas)
                 self.canvas = canvas
                 for window in self.windows {
@@ -302,12 +324,91 @@ final class SelectionSession {
         }
     }
 
+    /// Reads the selected snapshot without completing, copying, or dismissing the capture.
+    func requestScreenshotText(translate: Bool = false) {
+        guard confirmationTitle == nil, !directScrollSelection,
+              state == .selected || state == .annotating else { return }
+        if let textResult {
+            if translate { textResult.requestTranslation() }
+            return
+        }
+        let render: @Sendable () throws -> CGImage
+        if let canvas, state == .annotating {
+            let base = canvas.base, document = canvas.document
+            let scale = CGFloat(base.width) / max(1, document.canvasSize.width)
+            render = { try AnnotationRenderer.render(base: base, document: document, scale: scale) }
+        } else if state == .selected, let (frame, rect) = selected, !rect.isEmpty {
+            let pixels = CoordinateSpace.imagePixelRect(fromSelection: rect, screen: frame.screen)
+            render = {
+                guard let image = frame.image.cropping(to: pixels) else { throw AppError.imageCreation }
+                return image
+            }
+        } else { return }
+        let token = generation, textToken = UUID()
+        textResultGeneration = textToken
+        let controller = makeTextController()
+        textResult = controller
+        controller.onDismiss = { [weak self] in self?.closeScreenshotText() }
+        controller.onRecognizedText = { [weak self] text in
+            guard let self, self.generation == token, self.textResultGeneration == textToken else { return }
+            self.onRecognizedText?(text)
+        }
+        controller.onExpand = { [weak self, weak controller] model in
+            guard let self, let controller, self.generation == token, self.textResultGeneration == textToken else { return }
+            let callback = self.onTextWorkspace, translation = controller.translationModel
+            guard let callback else { return }
+            self.finish()
+            callback(model, translation)
+        }
+        controller.onRetrySnapshot = { [weak self] in
+            guard let self, self.generation == token, self.textResultGeneration == textToken else { return }
+            self.closeScreenshotText()
+            self.requestScreenshotText(translate: translate)
+        }
+        controller.prepareSnapshot(translateAfterRecognition: translate)
+        toolbar?.setTextResultView(controller.view, preferredHeight: controller.preferredHeight)
+        let gate = afterImageOperation
+        textSnapshotOperation = runOperation { [weak self, weak controller] in
+            do {
+                let image = try await Self.imageWork(after: gate, render)
+                guard !Task.isCancelled, let self, let controller,
+                      self.generation == token, self.textResultGeneration == textToken else { return }
+                self.textSnapshotOperation = nil
+                controller.recognize(image, translateAfterRecognition: translate)
+            } catch {
+                guard !Task.isCancelled, let self, let controller,
+                      self.generation == token, self.textResultGeneration == textToken else { return }
+                self.textSnapshotOperation = nil
+                controller.showError(error)
+            }
+        }
+    }
+
+    private func closeScreenshotText() {
+        textResultGeneration = UUID()
+        if let id = textSnapshotOperation { operations[id]?.cancel() }
+        textSnapshotOperation = nil
+        guard let controller = textResult else { return }
+        textResult = nil
+        controller.onDismiss = nil; controller.onExpand = nil
+        controller.onRecognizedText = nil; controller.onRetrySnapshot = nil
+        controller.cancel()
+        toolbar?.setTextResultView(nil)
+        let id = UUID()
+        retiringTextResults[id] = Task { [weak self] in
+            await controller.finishAndDrain()
+            self?.retiringTextResults.removeValue(forKey: id)
+        }
+    }
+
     private func perform(_ action: ToolbarAction) {
         switch action {
         case .undo: canvas?.undo()
         case .redo: canvas?.redo()
         case .close: finish()
         case .scroll: requestScrollCapture()
+        case .ocr: requestScreenshotText()
+        case .translate: requestScreenshotText(translate: true)
         case .selection:
             if imageEditorWindow != nil { toggleEditorSelection(); return }
             guard let archive else { return }
@@ -332,7 +433,10 @@ final class SelectionSession {
     private func configure(_ view: AnnotationCanvasView) {
         view.onAction = { [weak self] action in self?.perform(action) }
         view.onToolChange = { [weak self] tool in self?.toolbar?.setSelectedTool(tool) }
-        view.onDocumentChange = { [weak self, weak view] in self?.toolbar?.setUndoAvailability(canUndo: view?.document.canUndo ?? false, canRedo: view?.document.canRedo ?? false) }
+        view.onDocumentChange = { [weak self, weak view] in
+            self?.closeScreenshotText()
+            self?.toolbar?.setUndoAvailability(canUndo: view?.document.canUndo ?? false, canRedo: view?.document.canRedo ?? false)
+        }
         view.color = annotationColor; view.strokeWidth = annotationWidth
     }
 
@@ -435,6 +539,7 @@ final class SelectionSession {
     /// Closes all overlays and removes listeners; also used for cancellation and display changes.
     func finish(completed: Bool = false) {
         let didFinish = onFinish; onFinish = nil
+        closeScreenshotText()
         for operation in operations.values { operation.cancel() }
         if let canvas { retire(canvas) }
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
@@ -482,8 +587,8 @@ final class SelectionSession {
 
     /// Waits for cancelled crop/render/preview workers without changing a newer session's state.
     func drainPendingOperations() async {
-        while !operations.isEmpty || !retiringCanvases.isEmpty {
-            let pending = Array(operations.values) + Array(retiringCanvases.values)
+        while !operations.isEmpty || !retiringCanvases.isEmpty || !retiringTextResults.isEmpty {
+            let pending = Array(operations.values) + Array(retiringCanvases.values) + Array(retiringTextResults.values)
             for operation in pending { await operation.value }
         }
     }
@@ -497,13 +602,15 @@ final class SelectionSession {
         }
     }
 
-    private func runOperation(_ work: @escaping @MainActor @Sendable () async -> Void) {
+    @discardableResult
+    private func runOperation(_ work: @escaping @MainActor @Sendable () async -> Void) -> UUID {
         let id = UUID()
         operations[id] = Task { [weak self] in
             defer { self?.operations.removeValue(forKey: id) }
             guard !Task.isCancelled else { return }
             await work()
         }
+        return id
     }
 
     private nonisolated static func imageWork<Value: Sendable>(after: (@Sendable () async -> Void)?,

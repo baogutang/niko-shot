@@ -59,6 +59,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.installApplicationMenu()
             self.scrolling.continueFromSelection(context: context)
         }
+        selectionSession.onRecognizedText = { [weak self] in self?.rememberOCRText($0) }
+        selectionSession.onTextWorkspace = { [weak self] model, translation in
+            self?.presentOCR(model, translationModel: translation)
+        }
         LaunchDiagnostics.record("before-activation-policy")
         if NSApp.activationPolicy() != .accessory { NSApp.setActivationPolicy(.accessory) }
         LaunchDiagnostics.record("activation-policy")
@@ -203,8 +207,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let file = URL(fileURLWithPath: record.path)
                 try Task.checkCancellation()
                 guard !isTerminating else { return }
-                let interactiveOCR = action == .ocr || context.kind == "ocr"
-                if AppSettings.shared.autoOCR || interactiveOCR { recognizeCapture(image, record: record, show: interactiveOCR) }
+                let interactiveOCR = action == .ocr || action == .translate
+                if AppSettings.shared.autoOCR || interactiveOCR || context.kind == "ocr" {
+                    recognizeCapture(image, record: record, show: interactiveOCR)
+                }
                 if action == .pin { pinManager.pin(image: image, url: file, thumbnail: payload.2); return }
                 if action == .save {
                     let router = SavePanelRouter()
@@ -330,7 +336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         latestOCRText = text
         UserDefaults.standard.set(text, forKey: "lastOCRText")
     }
-    private func presentOCR(_ model: OCRViewModel) {
+    private func presentOCR(_ model: OCRViewModel, translationModel: TranslationViewModel? = nil) {
         installApplicationMenu()
         if ocrWindow == nil {
             let window = makeUtilityWindow(title: "识别与翻译")
@@ -341,7 +347,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if !restoredFrame { window.center() }
             window.onClose = { [weak self] in self?.ocrWindow = nil }; ocrWindow = window
         }
-        ocrWindow?.contentView = NSHostingView(rootView: OCRView(model: model))
+        ocrWindow?.contentView = NSHostingView(rootView: OCRView(model: model, translationModel: translationModel))
         ocrWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
     private func reOCR(_ record: HistoryRecord) {

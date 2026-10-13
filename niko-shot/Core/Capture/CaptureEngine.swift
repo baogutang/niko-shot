@@ -100,11 +100,15 @@ final class CaptureEngine {
     func scrollCapture(context: CaptureContext) async throws -> RegionSnapshot {
         try Task.checkCancellation()
         try requirePermission()
-        let originalWindow = context.windowID.flatMap { Self.windowGeometry(id: $0) }
+        let originalWindow = try context.windowID.flatMap { try Self.windowGeometry(id: $0) }
         if context.windowID != nil, originalWindow == nil { throw ScrollTargetError.windowUnavailable }
+        if let originalWindow, !context.appBundleID.isEmpty,
+           NSRunningApplication(processIdentifier: originalWindow.ownerPID)?.bundleIdentifier != context.appBundleID {
+            throw ScrollTargetError.windowIdentityChanged
+        }
         let baseline = ScrollTargetGeometry(context: context, window: originalWindow)
         let validation: @MainActor () throws -> CaptureContext? = {
-            let window = context.windowID.flatMap { Self.windowGeometry(id: $0) }
+            let window = try context.windowID.flatMap { try Self.windowGeometry(id: $0) }
             return try baseline.validate(window: window, screens: Self.screenGeometries())
         }
         let scrollValidation: @MainActor (CGPoint) throws -> Void = { point in
@@ -158,16 +162,13 @@ final class CaptureEngine {
         }
     }
 
-    private static func windowGeometry(id: UInt32) -> ScrollWindowGeometry? {
-        // Query only the chosen compositor ID; no SCShareableContent enumeration occurs per frame.
-        guard let dictionaries = CGWindowListCreateDescriptionFromArray([NSNumber(value: id)] as CFArray) as? [[String: Any]],
-              let info = dictionaries.first,
-              let bounds = info[kCGWindowBounds as String] as? NSDictionary,
-              let rect = CGRect(dictionaryRepresentation: bounds),
-              let owner = info[kCGWindowOwnerPID as String] as? NSNumber else { return nil }
-        return ScrollWindowGeometry(id: id, ownerPID: owner.int32Value,
-            frame: CoordinateSpace.windowToAppKit(rect, primaryTop: NSScreen.screens.first?.frame.maxY ?? 0),
-            isOnScreen: (info[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue == true)
+    /// Reads compositor metadata without confusing unavailable query data with a closed window.
+    static func windowGeometry(id: UInt32) throws -> ScrollWindowGeometry? {
+        switch ScrollWindowServer.lookup(id: id) {
+        case .visible(let geometry), .notVisible(let geometry): return geometry
+        case .missing: return nil
+        case .unknown: throw ScrollTargetError.windowStateUnknown
+        }
     }
 
     private static func checkScrollDestination(windowID: UInt32, point: CGPoint) throws {
@@ -230,6 +231,64 @@ struct ScrollWindowGeometry: Sendable {
     let isOnScreen: Bool
 }
 
+/// Successful list membership proves visibility; unknown metadata never authorizes capture.
+enum ScrollWindowObservation: Sendable {
+    case visible(ScrollWindowGeometry), notVisible(ScrollWindowGeometry), missing, unknown
+}
+
+/// Uses lightweight compositor lists instead of enumerating ScreenCaptureKit content every frame.
+@MainActor
+enum ScrollWindowServer {
+    /// Queries hidden windows only when the selected ID is absent from the positive on-screen list.
+    static func lookup(id: UInt32) -> ScrollWindowObservation {
+        let visible = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]]
+        return resolve(id: id, onScreen: visible, includingHidden: {
+            CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]]
+        }, primaryTop: NSScreen.screens.first?.frame.maxY ?? 0)
+    }
+
+    /// Resolves optional visibility keys against positive membership while preserving ID, PID and bounds.
+    static func resolve(id: UInt32, onScreen: [[String: Any]]?,
+                        includingHidden: () -> [[String: Any]]?, primaryTop: CGFloat) -> ScrollWindowObservation {
+        guard id != kCGNullWindowID else { return .missing }
+        guard primaryTop.isFinite, let onScreen,
+              onScreen.allSatisfy({ windowID(in: $0) != nil }) else { return .unknown }
+        if let info = onScreen.first(where: { windowID(in: $0) == id }) {
+            if let flag = info[kCGWindowIsOnscreen as String],
+               (flag as? NSNumber)?.boolValue != true { return .unknown }
+            guard let value = geometry(info, isOnScreen: true, primaryTop: primaryTop) else { return .unknown }
+            return .visible(value)
+        }
+        guard let all = includingHidden(), all.allSatisfy({ windowID(in: $0) != nil }) else { return .unknown }
+        guard let info = all.first(where: { windowID(in: $0) == id }) else { return .missing }
+        // A window becoming visible between queries is retried, never mislabeled as closed.
+        if let flag = info[kCGWindowIsOnscreen as String],
+           (flag as? NSNumber)?.boolValue != false { return .unknown }
+        guard let value = geometry(info, isOnScreen: false, primaryTop: primaryTop) else { return .unknown }
+        return .notVisible(value)
+    }
+
+    private static func windowID(in info: [String: Any]) -> UInt32? {
+        guard let number = info[kCGWindowNumber as String] as? NSNumber else { return nil }
+        let value = number.doubleValue
+        guard value.isFinite, value.rounded() == value, value > 0, value <= Double(UInt32.max) else { return nil }
+        return UInt32(value)
+    }
+
+    private static func geometry(_ info: [String: Any], isOnScreen: Bool, primaryTop: CGFloat) -> ScrollWindowGeometry? {
+        guard let id = windowID(in: info), let owner = info[kCGWindowOwnerPID as String] as? NSNumber,
+              let bounds = info[kCGWindowBounds as String] as? NSDictionary,
+              let rect = CGRect(dictionaryRepresentation: bounds),
+              rect.origin.x.isFinite, rect.origin.y.isFinite, rect.width.isFinite, rect.height.isFinite,
+              rect.width > 0, rect.height > 0 else { return nil }
+        let pid = owner.doubleValue
+        guard pid.isFinite, pid.rounded() == pid, pid > 0, pid <= Double(Int32.max) else { return nil }
+        let frame = CoordinateSpace.windowToAppKit(rect, primaryTop: primaryTop)
+        guard frame.origin.x.isFinite, frame.origin.y.isFinite else { return nil }
+        return ScrollWindowGeometry(id: id, ownerPID: Int32(pid), frame: frame, isOnScreen: isOnScreen)
+    }
+}
+
 /// A pure target check shared by native capture and geometry-change regression tests.
 struct ScrollTargetGeometry: Sendable {
     let context: CaptureContext
@@ -242,8 +301,11 @@ struct ScrollTargetGeometry: Sendable {
             throw ScrollTargetError.displayChanged
         }
         guard let window else { return context }
-        guard let current, current.id == window.id, current.ownerPID == window.ownerPID, current.isOnScreen else {
+        guard let current, current.isOnScreen else {
             throw ScrollTargetError.windowUnavailable
+        }
+        guard current.id == window.id, current.ownerPID == window.ownerPID else {
+            throw ScrollTargetError.windowIdentityChanged
         }
         let initialFrame = context.targetWindowFrame ?? window.frame
         guard abs(current.frame.width - initialFrame.width) <= 0.5,
@@ -266,15 +328,22 @@ struct ScrollTargetGeometry: Sendable {
 
 /// Safe capture pauses distinguish a temporarily covered window from a target requiring reselection.
 enum ScrollTargetError: LocalizedError, Sendable {
-    case windowUnavailable, windowResized, regionMoved, displayChanged, unsafeScroll
+    case windowUnavailable, windowIdentityChanged, windowStateUnknown, windowResized, regionMoved, displayChanged, unsafeScroll
     var errorDescription: String? {
         switch self {
         case .windowUnavailable: "目标窗口已关闭或最小化。捕获已暂停，请重新选择窗口。"
+        case .windowIdentityChanged: "目标窗口的身份已改变。捕获已暂停，请重新选择窗口。"
+        case .windowStateUnknown: "暂时无法确认目标窗口状态。捕获已安全暂停，请稍后重试。"
         case .windowResized: "窗口尺寸已改变。捕获已暂停，请重新选择并从首屏开始。"
         case .regionMoved: "选区所在窗口已移动。捕获已暂停，请重新选择区域。"
         case .displayChanged: "显示器或缩放已改变。捕获已暂停，请重新选择窗口或区域。"
         case .unsafeScroll: "滚动位置被其他窗口遮挡，未派发滚动。请露出目标窗口后重试，或改为手动滚动。"
         }
     }
-    var requiresReselection: Bool { if case .unsafeScroll = self { false } else { true } }
+    var requiresReselection: Bool {
+        switch self {
+        case .unsafeScroll, .windowStateUnknown: false
+        default: true
+        }
+    }
 }
