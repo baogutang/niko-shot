@@ -24,10 +24,11 @@ enum NikoTheme {
   static var separator: Color { Color(nsColor: .separatorColor) }
   static let cornerRadius: CGFloat = 10
 
-  private static func adaptive(
+  private nonisolated static func adaptive(
     light: (Double, Double, Double), dark: (Double, Double, Double)
   ) -> Color {
-    Color(nsColor: NSColor(name: nil) { appearance in
+    // AppKit and SwiftUI resolve dynamic colors on drawing threads, not only the main actor.
+    Color(nsColor: NSColor(name: nil) { @Sendable appearance in
       let value = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
       return NSColor(srgbRed: value.0, green: value.1, blue: value.2, alpha: 1)
     })

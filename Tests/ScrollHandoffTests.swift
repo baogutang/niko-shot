@@ -5,6 +5,93 @@ import XCTest
 
 @MainActor
 final class ScrollHandoffTests: XCTestCase {
+    func testMouseDragShowsEveryToolbarControlAndRoutesOCROutput() async throws {
+        let image = try await fixture(width: 640, height: 480)
+        let screen = ScreenGeometry(id: 61, frame: CGRect(x: 80, y: 80, width: 640, height: 480), scale: 1)
+        let selection = SelectionSession()
+        defer { selection.finish() }
+        var captured: (CGImage, CaptureContext)?
+        selection.start(frames: [FrozenFrame(screen: screen, image: image)]) { captured = ($0, $1) }
+        XCTAssertEqual(selection.state, .selecting)
+        let view = try XCTUnwrap(selection.windows.first?.contentView as? SelectionView)
+        try mouse(.leftMouseDown, point: CGPoint(x: 60, y: 50), to: view)
+        try mouse(.leftMouseDragged, point: CGPoint(x: 300, y: 200), to: view)
+        try mouse(.leftMouseDragged, point: CGPoint(x: 400, y: 330), to: view)
+        try mouse(.leftMouseUp, point: CGPoint(x: 400, y: 330), to: view)
+        XCTAssertEqual(selection.state, .selected)
+        XCTAssertEqual(selection.windowCount, 2)
+        let panel = try XCTUnwrap(NSApp.windows.first { $0.isVisible && $0.accessibilityLabel() == "截图标注工具条" })
+        let hud = try XCTUnwrap(panel.contentView as? HUDContentView)
+        hud.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(panel.level.rawValue, try XCTUnwrap(view.window).level.rawValue)
+        XCTAssertFalse(panel.canBecomeKey, "Pointer use must keep the selection's keyboard responder")
+        try await waitUntil { panel.alphaValue >= 0.95 }
+        let buttons = allButtons(in: hud)
+        for title in AnnotationTool.allCases.map(\.title) + ToolbarAction.allCases.map(\.title) {
+            let button = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == title }, title)
+            XCTAssertFalse(button.isHiddenOrHasHiddenAncestor, title)
+            let frame = button.convert(button.bounds, to: hud)
+            XCTAssertGreaterThanOrEqual(frame.width, 44, title)
+            XCTAssertGreaterThanOrEqual(frame.height, 44, title)
+            XCTAssertTrue(hud.bounds.contains(frame), "\(title) must be fully inside the visible panel: \(frame)")
+        }
+        let ocr = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == ToolbarAction.ocr.title })
+        XCTAssertTrue(ocr.isEnabled)
+        ocr.performClick(nil)
+        try await waitUntil { captured != nil }
+        let result = try XCTUnwrap(captured)
+        XCTAssertEqual(selection.outputAction, .ocr)
+        XCTAssertEqual(result.0.width, 340)
+        XCTAssertEqual(result.0.height, 280)
+        XCTAssertEqual(result.1.localRect, CGRect(x: 60, y: 50, width: 340, height: 280))
+        await selection.drainPendingOperations()
+        XCTAssertEqual(selection.windowCount, 0)
+        XCTAssertEqual(selection.monitorCount, 0)
+        XCTAssertEqual(selection.resourceCounts.values.reduce(0, +), 0)
+    }
+
+    func testMouseSelectedToolbarStartsAnnotationThenHandsOriginalViewportToScroll() async throws {
+        let image = try await fixture(width: 1280, height: 960)
+        let screen = ScreenGeometry(id: 62, frame: CGRect(x: 80, y: 80, width: 640, height: 480), scale: 2)
+        let candidate = WindowCandidate(id: 42, frame: screen.frame, title: "Fixture window", appBundleID: "com.example.fixture")
+        let selection = SelectionSession()
+        defer { selection.onScrollCapture = nil; selection.finish() }
+        var captured: CaptureContext?
+        selection.onScrollCapture = { captured = $0 }
+        selection.start(frames: [FrozenFrame(screen: screen, image: image)], candidates: [candidate]) { _, _ in
+            XCTFail("Scroll must not export annotated frozen pixels")
+        }
+        let view = try XCTUnwrap(selection.windows.first?.contentView as? SelectionView)
+        try mouse(.leftMouseDown, point: CGPoint(x: 60, y: 50), to: view)
+        try mouse(.leftMouseDragged, point: CGPoint(x: 400, y: 330), to: view)
+        try mouse(.leftMouseUp, point: CGPoint(x: 400, y: 330), to: view)
+        let panel = try XCTUnwrap(NSApp.windows.first { $0.isVisible && $0.accessibilityLabel() == "截图标注工具条" })
+        let hud = try XCTUnwrap(panel.contentView as? HUDContentView)
+        let rectangle = try XCTUnwrap(allButtons(in: hud).first { $0.accessibilityLabel() == AnnotationTool.rectangle.title })
+        rectangle.performClick(nil)
+        try await waitUntil {
+            selection.windows.contains { $0.contentView?.subviews.contains { $0 is AnnotationCanvasView } == true }
+        }
+        let canvas = try XCTUnwrap(selection.windows.flatMap { $0.contentView?.subviews ?? [] }.compactMap { $0 as? AnnotationCanvasView }.first)
+        try key(" ", code: 49, to: canvas)
+        try key("", code: 124, to: canvas)
+        try key("", code: 125, to: canvas)
+        try key(" ", code: 49, to: canvas)
+        XCTAssertEqual(canvas.document.commands.count, 1)
+        let scroll = try XCTUnwrap(allButtons(in: hud).first { $0.accessibilityLabel() == ToolbarAction.scroll.title })
+        XCTAssertTrue(scroll.isEnabled)
+        scroll.performClick(nil)
+        let result = try XCTUnwrap(captured)
+        XCTAssertEqual(result.screen, screen)
+        XCTAssertEqual(result.localRect, CGRect(x: 60, y: 50, width: 340, height: 280))
+        XCTAssertEqual(result.windowID, candidate.id)
+        XCTAssertEqual(result.appBundleID, candidate.appBundleID)
+        await selection.drainPendingOperations()
+        XCTAssertEqual(selection.state, .idle)
+        XCTAssertEqual(selection.windowCount, 0)
+        XCTAssertEqual(selection.resourceCounts.values.reduce(0, +), 0)
+    }
+
     func testToolbarShowsLongCaptureTextAndExplainsDisabledAction() throws {
         var actions: [ToolbarAction] = []
         let hud = HUDContentView(onTool: { _ in }, onAction: { actions.append($0) }, onColor: { _ in }, onWidth: { _ in })
@@ -224,6 +311,17 @@ final class ScrollHandoffTests: XCTestCase {
             windowNumber: view.window?.windowNumber ?? 0, context: nil, characters: characters,
             charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code))
         view.keyDown(with: event)
+    }
+
+    private func mouse(_ type: NSEvent.EventType, point: CGPoint, to view: SelectionView) throws {
+        let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: view.convert(point, to: nil), modifierFlags: [],
+            timestamp: 0, windowNumber: view.window?.windowNumber ?? 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        switch type {
+        case .leftMouseDown: view.mouseDown(with: event)
+        case .leftMouseDragged: view.mouseDragged(with: event)
+        case .leftMouseUp: view.mouseUp(with: event)
+        default: XCTFail("Unsupported fixture mouse event")
+        }
     }
 
     private func waitUntil(_ condition: () -> Bool) async throws {

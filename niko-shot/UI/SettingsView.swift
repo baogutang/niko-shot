@@ -1,5 +1,6 @@
 // Presents a compact native preference workspace and preserves local shortcut recording.
 import AppKit
+import ApplicationServices
 import Observation
 import SwiftUI
 
@@ -28,6 +29,8 @@ public struct SettingsView: View {
   @State private var navigation = SettingsNavigation.shared
   @State private var translationDrafts = TranslationSettingsDrafts()
   @State private var showsTranslationSettings = true
+  @State private var screenCaptureAllowed = false
+  @State private var accessibilityAllowed = false
   private let onShowWizard: () -> Void
 
   /// Shares live preferences and hotkeys; opening a guide keeps unsaved translation input.
@@ -63,25 +66,19 @@ public struct SettingsView: View {
       .listStyle(.sidebar)
       .tint(NikoTheme.accent)
       .accessibilityLabel("设置分类")
-      .navigationSplitViewColumnWidth(min: 180, ideal: 190, max: 220)
+      .navigationSplitViewColumnWidth(min: 166, ideal: 180, max: 200)
       .safeAreaInset(edge: .top) {
-        HStack(spacing: 10) {
-          Image("NikoMark").resizable().scaledToFit().frame(width: 28, height: 28)
+        HStack(spacing: 8) {
+          Image("NikoMark").resizable().scaledToFit().frame(width: 24, height: 24)
             .accessibilityHidden(true)
-          VStack(alignment: .leading, spacing: 2) {
-            Text("NIKO").font(.system(size: 13, weight: .semibold)).tracking(1.4)
-            Text("SHOT").font(.system(size: 10, weight: .medium)).tracking(2)
-              .foregroundStyle(.secondary)
-          }
+          Text("NIKO SHOT").font(.system(size: 12, weight: .semibold)).tracking(1)
           Spacer(minLength: 0)
-        }.padding(.horizontal, 16).padding(.vertical, 16)
+        }.padding(.horizontal, 16).padding(.vertical, 12)
       }
       .safeAreaInset(edge: .bottom) {
-        HStack(spacing: 6) {
-          Text("macOS 原生").font(.caption)
-          Spacer()
-          Text(version).font(.caption).foregroundStyle(.secondary)
-        }.padding(.horizontal, 16).padding(.vertical, 12)
+        Text("niko-shot \(version)").font(.caption).foregroundStyle(.secondary)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, 16).padding(.vertical, 8)
       }
     } detail: {
       VStack(alignment: .leading, spacing: 0) {
@@ -89,25 +86,27 @@ public struct SettingsView: View {
           title: currentSection.title, subtitle: currentSection.subtitle,
           symbol: currentSection.symbol
         )
-        .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 8)
+        .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 4)
         if currentSection == .ocrTranslation {
           ocrContent
         } else {
           Form { content }
             .formStyle(.grouped)
             .scrollContentBackground(.hidden)
+            .controlSize(.small)
         }
       }
       .font(.system(size: 13))
-      .frame(maxWidth: 700, maxHeight: .infinity, alignment: .topLeading)
+      .frame(maxWidth: 660, maxHeight: .infinity, alignment: .topLeading)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       .background(NikoTheme.canvas)
     }
     .navigationSplitViewStyle(.balanced)
     .tint(NikoTheme.accent)
-    .frame(minWidth: 820, minHeight: 580)
+    .frame(minWidth: 780, minHeight: 540)
     .onAppear {
       launchAtLogin.refresh()
+      refreshPermissions()
       consumeNavigation()
     }
     .onChange(of: navigation.opensTranslation) { _, requested in
@@ -147,31 +146,32 @@ public struct SettingsView: View {
 
   private var generalContent: some View {
     Group {
-      SettingsGroup(title: "启动与外观") {
-        PreferenceRow(title: "运行方式") { Text("菜单栏常驻").foregroundStyle(.secondary) }
-        PreferenceRow(title: "外观") { Text("跟随系统").foregroundStyle(.secondary) }
-        Toggle(
-          "登录时打开 niko-shot",
-          isOn: Binding(
-            get: { launchAtLogin.isEnabled },
-            set: { enabled in Task { await launchAtLogin.setEnabled(enabled) } }
-          )
-        )
-        .toggleStyle(.switch).frame(minHeight: 30).disabled(launchAtLogin.isUpdating)
-        .accessibilityLabel("登录时自动打开 niko-shot")
-        VStack(alignment: .leading, spacing: 8) {
-          HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Label(
-              launchAtLogin.statusDescription,
-              systemImage: launchAtLogin.requiresApproval ? "clock" : "info.circle"
+      SettingsGroup(title: "启动", caption: "菜单栏常驻 · 外观跟随系统") {
+        VStack(alignment: .leading, spacing: 6) {
+          Toggle(
+            "登录时打开 niko-shot",
+            isOn: Binding(
+              get: { launchAtLogin.isEnabled },
+              set: { enabled in Task { await launchAtLogin.setEnabled(enabled) } }
             )
-            .font(.caption).foregroundStyle(.secondary)
-            .accessibilityLabel("登录启动状态：\(launchAtLogin.statusDescription)")
+          )
+          .toggleStyle(.switch).disabled(launchAtLogin.isUpdating)
+          .accessibilityLabel("登录时自动打开 niko-shot")
+          HStack(alignment: .firstTextBaseline, spacing: 10) {
+            if launchAtLogin.requiresApproval {
+              Label("等待系统批准", systemImage: "clock")
+                .font(.caption).foregroundStyle(NikoTheme.accent)
+            } else {
+              Text(launchAtLogin.isEnabled ? "已开启" : "已关闭")
+                .font(.caption).foregroundStyle(.secondary)
+            }
             Spacer(minLength: 8)
-            Button("打开登录项设置") { launchAtLogin.openSettings() }
+            Button("登录项设置…") { launchAtLogin.openSettings() }
               .accessibilityLabel("打开系统设置中的登录项")
-            Button("刷新状态") { launchAtLogin.refresh() }
-              .disabled(launchAtLogin.isUpdating).accessibilityLabel("刷新登录启动状态")
+            Button { launchAtLogin.refresh() } label: {
+              Image(systemName: "arrow.clockwise")
+            }.disabled(launchAtLogin.isUpdating)
+              .help("刷新登录启动状态").accessibilityLabel("刷新登录启动状态")
           }.controlSize(.small)
           if launchAtLogin.isUpdating {
             ProgressView("正在更新登录项…").controlSize(.small)
@@ -179,39 +179,54 @@ public struct SettingsView: View {
           }
           if let error = launchAtLogin.errorMessage {
             Label(error, systemImage: "exclamationmark.circle")
-              .font(.callout).foregroundStyle(.red).textSelection(.enabled)
+              .font(.caption).foregroundStyle(.red).textSelection(.enabled)
           }
         }
       }
       SettingsGroup(
-        title: "使用向导与权限",
-        caption: "截图与录屏需要屏幕录制权限。自动滚动使用辅助功能；手动滚动可直接使用。"
+        title: "权限",
+        caption: "麦克风与摄像头按录制选项授权。截图中按 Esc 取消、↩ 复制。"
       ) {
-        HStack {
-          Label("从第一张截图开始", systemImage: "sparkles")
-          Spacer()
-          Button("打开使用向导", action: onShowWizard)
+        permissionRow(
+          title: "屏幕录制", detail: "截图与录屏", allowed: screenCaptureAllowed,
+          pane: "Privacy_ScreenCapture")
+        permissionRow(
+          title: "辅助功能",
+          detail: accessibilityAllowed ? "自动滚动长截图" : "自动滚动需要；手动滚动无需授权",
+          allowed: accessibilityAllowed, pane: "Privacy_Accessibility")
+        HStack(spacing: 10) {
+          Button("打开使用向导…", action: onShowWizard)
             .keyboardShortcut("h", modifiers: [.command, .shift])
             .accessibilityLabel("打开三步使用和权限向导")
-        }.frame(minHeight: 30)
-        VStack(alignment: .leading, spacing: 8) {
-          HStack(spacing: 10) {
-            Button("屏幕录制权限") { openPrivacySettings("Privacy_ScreenCapture") }
-              .accessibilityLabel("打开屏幕录制权限系统设置")
-            Button("辅助功能权限") { openPrivacySettings("Privacy_Accessibility") }
-              .accessibilityLabel("打开自动滚动使用的辅助功能权限系统设置")
-          }.controlSize(.small)
-          Text("麦克风和摄像头仅在开启对应录制选项后按需授权。")
-            .font(.caption).foregroundStyle(.secondary)
-        }
-      }
-      HStack(spacing: 10) {
-        NikoShortcutHint(text: "Esc")
-        Text("取消截图").font(.caption).foregroundStyle(.secondary)
-        NikoShortcutHint(text: "↩")
-        Text("复制截图").font(.caption).foregroundStyle(.secondary)
+          Spacer(minLength: 8)
+          Button("刷新权限状态") { refreshPermissions() }
+            .help("重新读取系统授权状态，不请求新权限")
+        }.controlSize(.small)
       }
     }
+  }
+
+  private func permissionRow(
+    title: String, detail: String, allowed: Bool, pane: String
+  ) -> some View {
+    HStack(spacing: 12) {
+      VStack(alignment: .leading, spacing: 2) {
+        Text(title)
+        Text(detail).font(.caption).foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      Spacer(minLength: 8)
+      Label(allowed ? "已授权" : "未授权", systemImage: allowed ? "checkmark.circle.fill" : "circle")
+        .font(.caption).foregroundStyle(allowed ? Color.green : Color.secondary)
+        .fixedSize()
+      Button("设置…") { openPrivacySettings(pane) }
+        .accessibilityLabel("打开\(title)权限系统设置")
+    }.controlSize(.small)
+  }
+
+  private func refreshPermissions() {
+    screenCaptureAllowed = CGPreflightScreenCaptureAccess()
+    accessibilityAllowed = AXIsProcessTrusted()
   }
 
   private var hotkeyContent: some View {

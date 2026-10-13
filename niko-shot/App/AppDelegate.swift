@@ -104,12 +104,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func showSettings() {
         installApplicationMenu()
         if settingsWindow == nil {
-            let window = UtilityWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 650), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
+            let window = UtilityWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: 600), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
             window.title = "niko-shot 设置"
             window.toolbarStyle = .unified
             window.titlebarAppearsTransparent = true
             window.isReleasedWhenClosed = false
-            window.contentMinSize = CGSize(width: 820, height: 580)
+            window.contentMinSize = CGSize(width: 780, height: 540)
             window.titlebarSeparatorStyle = .line
             let restoredFrame = window.setFrameUsingName("NikoSettingsWorkspace")
             window.setFrameAutosaveName("NikoSettingsWorkspace")

@@ -110,6 +110,9 @@ final class ToolbarController {
                 self.onAction(action)
             }, onColor: { [weak self] in self?.onColor($0) }, onWidth: { [weak self] in self?.onWidth($0) }, confirmationTitle: confirmationTitle)
             let window = HUDPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            // AppKit assigns the ordinary floating level when this flag changes.
+            // Set it before assigning the capture level, or the screen overlays cover the HUD.
+            window.isFloatingPanel = true
             window.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
             window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             window.backgroundColor = .clear
@@ -118,7 +121,6 @@ final class ToolbarController {
             window.isReleasedWhenClosed = false
             window.hidesOnDeactivate = false
             window.becomesKeyOnlyIfNeeded = true
-            window.isFloatingPanel = true
             window.acceptsMouseMovedEvents = true
             window.contentView = content
             window.setAccessibilityLabel("截图标注工具条")

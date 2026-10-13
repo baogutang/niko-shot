@@ -70,8 +70,8 @@ struct MenuContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Image(systemName: "camera.viewfinder")
-                    .font(.system(size: 17, weight: .medium)).foregroundStyle(.tint)
+                Image("NikoMark")
+                    .resizable().scaledToFit().frame(width: 20, height: 20)
                     .accessibilityHidden(true)
                 Text("niko-shot").font(.system(size: 15, weight: .semibold))
                 Spacer()
@@ -82,12 +82,12 @@ struct MenuContent: View {
                         .frame(width: 26).accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("区域截图").font(.system(size: 14, weight: .semibold))
-                        Text("拖动框选，复制或标注").font(.system(size: 11)).foregroundStyle(.secondary)
+                        Text("框选后标注、复制或长截图").font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
                     NikoShortcutHint(text: shortcut(.region))
                 }
-                .padding(.horizontal, 12).frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+                .padding(.horizontal, 12).frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
             }
             .buttonStyle(NikoActionButtonStyle(prominent: true)).accessibilityLabel("区域截图")
             .help("区域截图 · \(shortcut(.region))")
@@ -107,7 +107,7 @@ struct MenuContent: View {
             .help("重复上次区域 · \(shortcut(.repeatRegion))")
             Divider()
             HStack {
-                Text("最近截图").font(.system(size: 12, weight: .semibold))
+                Text("最近截图").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
                 Button { action("history") } label: {
@@ -119,14 +119,14 @@ struct MenuContent: View {
             }
             if model.recents.isEmpty {
                 HStack(spacing: 10) {
-                    Image(systemName: "photo.on.rectangle").font(.system(size: 18, weight: .regular))
+                    Image(systemName: "photo.on.rectangle").font(.system(size: 16, weight: .regular))
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("第一张截图，从框选开始").font(.system(size: 12))
-                        Text("最近截图会出现在这里，可直接拖出文件。")
+                        Text("还没有截图").font(.system(size: 12))
+                        Text("截完后在这里查看，或直接拖出图片。")
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                 }
-                .foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 62, alignment: .leading)
+                .foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
             } else {
                 ScrollView(.horizontal) {
                     HStack(spacing: 6) {
@@ -152,7 +152,7 @@ struct MenuContent: View {
                 }.buttonStyle(NikoActionButtonStyle())
                     .accessibilityLabel("退出 niko-shot").keyboardShortcut("q", modifiers: .command)
             }
-        }.padding(.horizontal, 14).padding(.vertical, 8).frame(width: 364)
+        }.padding(.horizontal, 12).padding(.vertical, 8).frame(width: 348)
             .background(NikoTheme.canvas)
     }
 
@@ -171,7 +171,7 @@ struct MenuContent: View {
                         .accessibilityHidden(true)
                 }
                 Spacer(minLength: 0)
-            }.padding(.horizontal, 10).frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+            }.padding(.horizontal, 10).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         }.buttonStyle(NikoActionButtonStyle()).accessibilityLabel(entry.title).help("\(entry.title) · \(shortcut(entry))")
     }
 }
