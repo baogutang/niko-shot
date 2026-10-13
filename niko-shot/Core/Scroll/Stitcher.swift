@@ -97,6 +97,8 @@ public enum Stitcher {
         let currentMap = resampledColumns(
             resampledRows(current.profile, width: current.profileWidth, oldRows: current.profileHeight, newRows: currentRows),
             rows: currentRows, oldWidth: current.profileWidth, newWidth: columns)
+        let previousEdges = verticalEdges(previousMap, width: columns, height: previousRows)
+        let currentEdges = verticalEdges(currentMap, width: columns, height: currentRows)
         let coarse = try candidates(previous: pyramid(previousMap, width: columns, height: previousRows),
                                     previousRows: previousRows / 2,
                                     current: pyramid(currentMap, width: columns, height: currentRows), currentRows: currentRows / 2,
@@ -118,7 +120,7 @@ public enum Stitcher {
         let chosen = global.score > local.score + 0.001 ? global : local
         var peaks = [chosen]
         for candidate in scores.sorted(by: { $0.score > $1.score }) {
-            if peaks.count == 4 { break }
+            if peaks.count == 8 { break }
             if peaks.allSatisfy({ $0.backward != candidate.backward || abs($0.overlap - candidate.overlap) >= 4 }) {
                 peaks.append(candidate)
             }
@@ -141,7 +143,11 @@ public enum Stitcher {
                     width: previous.sampleWidth, height: rows)
                 let reference = peak.backward ? previous.top : previous.bottom
                 let offset = peak.backward ? 0 : (previous.bandHeight - rows) * previous.sampleWidth
-                let score = ncc(reference, offset: offset, patch, offset: 0, count: rows * previous.sampleWidth)
+                let detail = ncc(reference, offset: offset, patch, offset: 0, count: rows * previous.sampleWidth)
+                let agreement = distributedAgreement(previousEdges, previousRows: previousRows,
+                    currentEdges, currentRows: currentRows, columns: columns,
+                    overlap: max(2, overlap / stride), backward: peak.backward)
+                let score = min(detail, agreement)
                 verified.append(Candidate(overlap: overlap, score: score, backward: peak.backward))
             }
         }
@@ -274,6 +280,63 @@ public enum Stitcher {
         guard image.width > 0, image.height > 0, top >= 0, bottom >= 0,
               top < image.height, bottom < image.height - top else { throw ScrollCaptureError.invalidBands }
         return CGRect(x: 0, y: top, width: image.width, height: image.height - top - bottom)
+    }
+
+    private static func verticalEdges(_ values: [Float], width: Int, height: Int) -> [Float] {
+        guard height > 1 else { return [] }
+        return (0..<((height - 1) * width)).map { values[$0 + width] - values[$0] }
+    }
+
+    private static func distributedAgreement(_ previous: [Float], previousRows: Int,
+                                             _ current: [Float], currentRows: Int,
+                                             columns: Int, overlap: Int, backward: Bool) -> Float {
+        let sharedRows = min(overlap, previousRows, currentRows) - 1
+        guard sharedRows > 1 else { return 0 }
+        let previousStart = backward ? 0 : previousRows - overlap
+        let currentStart = backward ? currentRows - overlap : 0
+        var informativeRows = 0
+        for row in 0..<sharedRows {
+            let left = (previousStart + row) * columns, right = (currentStart + row) * columns
+            if max(signalEnergy(previous, offset: left, count: columns),
+                   signalEnergy(current, offset: right, count: columns)) > Float(columns) * 0.000_01 {
+                informativeRows += 1
+                if informativeRows >= 4 { break }
+            }
+        }
+        // A single separator has two identical edge rows and cannot establish a unique seam.
+        guard informativeRows >= 4 else { return 0 }
+        var agreements: [Float] = []
+        for part in 0..<4 {
+            let firstRow = sharedRows * part / 4, lastRow = sharedRows * (part + 1) / 4
+            let count = (lastRow - firstRow) * columns
+            let a = (previousStart + firstRow) * columns, b = (currentStart + firstRow) * columns
+            guard count > 1, a >= 0, b >= 0, a + count <= previous.count, b + count <= current.count else { continue }
+            // Empty regions add no evidence. Detail present in only one frame is a contradiction.
+            let left = signalVariance(previous, offset: a, count: count)
+            let right = signalVariance(current, offset: b, count: count)
+            if max(left, right) <= Float(count) * 0.000_01 { continue }
+            agreements.append(ncc(previous, offset: a, current, offset: b, count: count))
+        }
+        return agreements.min() ?? 0
+    }
+
+    private static func signalVariance(_ values: [Float], offset: Int, count: Int) -> Float {
+        var sum: Float = 0, squares: Float = 0
+        values.withUnsafeBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return }
+            vDSP_sve(base.advanced(by: offset), 1, &sum, vDSP_Length(count))
+            vDSP_svesq(base.advanced(by: offset), 1, &squares, vDSP_Length(count))
+        }
+        return max(0, squares - sum * sum / Float(count))
+    }
+
+    private static func signalEnergy(_ values: [Float], offset: Int, count: Int) -> Float {
+        var squares: Float = 0
+        values.withUnsafeBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return }
+            vDSP_svesq(base.advanced(by: offset), 1, &squares, vDSP_Length(count))
+        }
+        return squares
     }
 
     private static func luminance(_ image: CGImage, crop: CGRect, width: Int, height: Int) throws -> [Float] {

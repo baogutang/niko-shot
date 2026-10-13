@@ -5,17 +5,69 @@ import XCTest
 
 @MainActor
 final class ToolbarLayoutTests: XCTestCase {
+    func testDrawnLineArrowAndRectangleCanBeUndoneAndRedoneFromVisibleButtons() throws {
+        let pixels = try ImageUtilities.context(width: 400, height: 320)
+        let session = SelectionSession()
+        session.edit(image: try XCTUnwrap(pixels.makeImage()), pointSize: CGSize(width: 200, height: 160)) { _, _ in }
+        defer { session.finish() }
+        let hud = try XCTUnwrap(try shownPanel().contentView as? HUDContentView)
+        let canvas = try XCTUnwrap(NSApp.windows.compactMap(\.contentView).flatMap { allViews(in: $0) }
+            .compactMap { $0 as? AnnotationCanvasView }.first)
+        let undo = try button(ToolbarAction.undo.title, in: hud), redo = try button(ToolbarAction.redo.title, in: hud)
+        XCTAssertFalse(undo.isEnabled); XCTAssertFalse(redo.isEnabled)
+        for (index, tool) in [AnnotationTool.line, .arrow, .rectangle].enumerated() {
+            try button(tool.title, in: hud).performClick(nil)
+            for (type, point) in [(NSEvent.EventType.leftMouseDown, CGPoint(x: 20, y: 20)),
+                                  (.leftMouseDragged, CGPoint(x: 120, y: 90)), (.leftMouseUp, CGPoint(x: 120, y: 90))] {
+                let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: canvas.convert(point, to: nil),
+                    modifierFlags: [], timestamp: 0, windowNumber: canvas.window?.windowNumber ?? 0,
+                    context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+                switch type {
+                case .leftMouseDown: canvas.mouseDown(with: event)
+                case .leftMouseDragged: canvas.mouseDragged(with: event)
+                default: canvas.mouseUp(with: event)
+                }
+            }
+            XCTAssertEqual(canvas.document.commands.count, index + 1)
+            XCTAssertTrue(undo.isEnabled)
+            XCTAssertFalse(redo.isEnabled)
+        }
+        for count in stride(from: 2, through: 0, by: -1) {
+            undo.performClick(nil)
+            XCTAssertEqual(canvas.document.commands.count, count)
+            XCTAssertTrue(redo.isEnabled)
+            XCTAssertEqual(undo.isEnabled, count > 0)
+        }
+        for count in 1...3 {
+            redo.performClick(nil)
+            XCTAssertEqual(canvas.document.commands.count, count)
+            XCTAssertTrue(undo.isEnabled)
+            XCTAssertEqual(redo.isEnabled, count < 3)
+        }
+        undo.performClick(nil)
+        try button(AnnotationTool.pen.title, in: hud).performClick(nil)
+        let key = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: canvas.window?.windowNumber ?? 0, context: nil, characters: " ", charactersIgnoringModifiers: " ",
+            isARepeat: false, keyCode: 49))
+        canvas.keyDown(with: key)
+        let move = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: canvas.window?.windowNumber ?? 0, context: nil, characters: "", charactersIgnoringModifiers: "",
+            isARepeat: false, keyCode: 124))
+        canvas.keyDown(with: move); canvas.keyDown(with: key)
+        XCTAssertFalse(redo.isEnabled, "A new drawing invalidates the old redo branch")
+    }
+
     func testCompactBarHasOneRightmostCompletionAndDiscoverableScroll() throws {
         var actions: [ToolbarAction] = []
         let hud = HUDContentView(onTool: { _ in }, onAction: { actions.append($0) }, onColor: { _ in }, onWidth: { _ in })
         defer { hud.closeAuxiliaryControls() }
         layout(hud, width: 704)
         let buttons = allButtons(in: hud)
-        XCTAssertEqual(buttons.count, 18)
-        XCTAssertEqual(hud.frame.height, 46)
-        XCTAssertGreaterThanOrEqual(hud.frame.width, 600)
-        XCTAssertLessThanOrEqual(hud.frame.width, 680)
-        for tool in [AnnotationTool.rectangle, .ellipse, .arrow, .pen, .text, .mosaic] {
+        XCTAssertEqual(buttons.count, 19)
+        XCTAssertEqual(hud.frame.height, 80)
+        XCTAssertGreaterThanOrEqual(hud.frame.width, 400)
+        XCTAssertLessThanOrEqual(hud.frame.width, 520)
+        for tool in [AnnotationTool.rectangle, .ellipse, .line, .arrow, .pen, .text, .mosaic] {
             XCTAssertNotNil(try button(tool.title, in: hud))
         }
         XCTAssertFalse(hud.isAnnotationExpanded)
@@ -30,7 +82,16 @@ final class ToolbarLayoutTests: XCTestCase {
         let scroll = try button("长截图", in: hud)
         XCTAssertEqual(scroll.title, "长截图")
         XCTAssertEqual(scroll.imagePosition, .imageLeading)
-        try assertHitTargets(in: hud, expectedCount: 18)
+        for action in [ToolbarAction.undo, .redo, .ocr, .translate] {
+            let labeled = try button(action.title, in: hud)
+            XCTAssertEqual(labeled.title, action.title)
+            XCTAssertEqual(labeled.imagePosition, .imageLeading)
+        }
+        let undo = try button(ToolbarAction.undo.title, in: hud)
+        XCTAssertEqual(undo.convert(undo.bounds, to: hud).midY,
+                       try button(AnnotationTool.arrow.title, in: hud).convert(undo.bounds, to: hud).midY, accuracy: 0.5)
+        XCTAssertNotEqual(undo.convert(undo.bounds, to: hud).midY, completionFrame.midY)
+        try assertHitTargets(in: hud, expectedCount: 19)
         try button(ToolbarAction.translate.title, in: hud).performClick(nil)
         XCTAssertEqual(actions, [.translate])
         completion.performClick(nil)
@@ -91,7 +152,7 @@ final class ToolbarLayoutTests: XCTestCase {
                 hud.setAnnotationExpanded(expanded)
                 layout(hud, width: width)
                 XCTAssertLessThanOrEqual(hud.frame.width, width)
-                try assertHitTargets(in: hud, expectedCount: expanded ? 25 : 18)
+                try assertHitTargets(in: hud, expectedCount: expanded ? 25 : 19)
                 XCTAssertEqual(try button("长截图", in: hud).title, "长截图")
                 if expanded {
                     for tool in AnnotationTool.allCases { XCTAssertNotNil(try button(tool.title, in: hud)) }
@@ -231,7 +292,7 @@ final class ToolbarLayoutTests: XCTestCase {
         XCTAssertLessThan(result.frame.height, 280)
         XCTAssertGreaterThan(result.frame.height, 0)
         XCTAssertTrue(hud.bounds.contains(result.convert(result.bounds, to: hud)))
-        try assertHitTargets(in: hud, expectedCount: 18)
+        try assertHitTargets(in: hud, expectedCount: 19)
     }
 
     private func layout(_ hud: HUDContentView, width: CGFloat) {

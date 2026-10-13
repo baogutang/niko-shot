@@ -150,10 +150,55 @@ final class StitcherTests: XCTestCase {
             let moved = try await fixture.sparseText(start: movement)
             let difference = try await fixture.signatureDifference(first, moved)
             XCTAssertGreaterThan(difference, 0.004, "A real text scroll must pass both stable-frame and duplicate gates")
+            let match = try await fixture.match(first, moved)
+            XCTAssertEqual(match.overlap, first.height - movement, accuracy: 1)
+            XCTAssertGreaterThan(match.correlation, 0.99)
+            XCTAssertFalse(match.isAmbiguous)
         }
         let noisy = try await fixture.sparseText(start: 0, rasterPixel: true)
         let noiseDifference = try await fixture.signatureDifference(first, noisy)
         XCTAssertLessThan(noiseDifference, 0.002, "One isolated backing pixel must not imply document scrolling")
+    }
+
+    func testRepeatedSeparatorRequiresAgreementAcrossTheWholeOverlap() async throws {
+        let fixture = ScrollImageFixture()
+        let document = try await fixture.messageDocument()
+        let previous = try await fixture.viewport(document, start: 0, height: 1_000)
+        for movement in [1, 20, 60, 137, 300] {
+            let current = try await fixture.viewport(document, start: movement, height: 1_000)
+            let match = try await fixture.match(previous, current)
+            XCTAssertEqual(match.overlap, 1_000 - movement, accuracy: 1)
+            XCTAssertGreaterThan(match.correlation, 0.99)
+            XCTAssertFalse(match.isAmbiguous, "An identical separator alone must not make distinct body content ambiguous")
+            XCTAssertFalse(match.isBacktracking)
+        }
+    }
+
+    func testRetinaTextAndExactlyRepeatingLayoutsRemainDistinctDecisions() async throws {
+        let fixture = ScrollImageFixture()
+        let document = try await fixture.messageDocument(scale: 2)
+        let previous = try await fixture.viewport(document, start: 800, height: 2_000)
+        for movement in [1, 39, 137, 601] {
+            let current = try await fixture.viewport(document, start: 800 + movement, height: 2_000)
+            let match = try await fixture.match(previous, current)
+            XCTAssertEqual(match.overlap, 2_000 - movement, accuracy: 1)
+            XCTAssertGreaterThan(match.correlation, 0.99)
+            XCTAssertFalse(match.isAmbiguous)
+        }
+        let repeating = try await fixture.messageDocument(repeating: true)
+        let first = try await fixture.viewport(repeating, start: 0, height: 1_600)
+        let next = try await fixture.viewport(repeating, start: 60, height: 1_600)
+        let ambiguous = try await fixture.match(first, next)
+        XCTAssertTrue(ambiguous.isAmbiguous, "Identical full layouts have several valid offsets and still require confirmation")
+    }
+
+    func testSingleSeparatorAloneCannotAuthorizeAnAutomaticSeam() async throws {
+        let fixture = ScrollImageFixture()
+        let first = try await fixture.separatorOnly(start: 0)
+        let next = try await fixture.separatorOnly(start: 60)
+        let match = try await fixture.match(first, next)
+        XCTAssertLessThan(match.correlation, 0.9, "A single repeated horizontal edge provides insufficient seam evidence")
+        XCTAssertTrue(match.isAmbiguous)
     }
 }
 
@@ -164,6 +209,46 @@ struct ScrollPNGInspection: Sendable {
 
 /// Rasterizes and decodes fixture images away from MainActor; no fixture pixel arrays cross actors.
 actor ScrollImageFixture {
+    func separatorOnly(start: Int) throws -> CGImage {
+        let width = 640, height = 1_000
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { throw ScrollCaptureError.image }
+        context.setFillColor(CGColor(gray: 0.08, alpha: 1)); context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.setFillColor(CGColor(gray: 0.9, alpha: 1)); context.fill(CGRect(x: 20, y: height - 700 + start, width: width - 40, height: 3))
+        guard let image = context.makeImage() else { throw ScrollCaptureError.image }
+        return image
+    }
+
+    /// A generated document with identical bright separators and distinct paragraphs between them.
+    func messageDocument(width: Int = 800, height: Int = 3_600, scale: Int = 1, repeating: Bool = false) throws -> CGImage {
+        guard let context = CGContext(data: nil, width: width * scale, height: height * scale, bitsPerComponent: 8,
+            bytesPerRow: width * scale * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { throw ScrollCaptureError.image }
+        context.scaleBy(x: CGFloat(scale), y: CGFloat(scale))
+        context.setFillColor(CGColor(gray: 0.08, alpha: 1)); context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let attributes: [NSAttributedString.Key: Any] = [NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName("Helvetica" as CFString, 18, nil),
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: 0.75, alpha: 1)]
+        for block in 0..<(height / 500 + 1) {
+            context.setFillColor(CGColor(gray: 0.9, alpha: 1))
+            context.fill(CGRect(x: 20, y: height - block * 500 - 403, width: width - 40, height: 3))
+            let identity = repeating ? 0 : block
+            for line in 0..<3 {
+                let label = "Document section \(identity). Row \(line): \(String(repeating: "native ", count: 2 + identity % 5))"
+                context.textPosition = CGPoint(x: 35 + identity * 17 % 180, y: height - block * 500 - 150 - line * 40)
+                CTLineDraw(CTLineCreateWithAttributedString(NSAttributedString(string: label, attributes: attributes)), context)
+            }
+        }
+        guard let image = context.makeImage() else { throw ScrollCaptureError.image }
+        return image
+    }
+
+    func viewport(_ document: CGImage, start: Int, height: Int) throws -> CGImage {
+        guard start >= 0, height > 0, start <= document.height - height,
+              let image = document.cropping(to: CGRect(x: 0, y: start, width: document.width, height: height)) else { throw ScrollCaptureError.image }
+        return image
+    }
+
     /// Draws real CoreText on a mostly blank page on the actor executor.
     func sparseText(width: Int = 900, height: Int = 1_200, start: Int, rasterPixel: Bool = false) throws -> CGImage {
         guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,

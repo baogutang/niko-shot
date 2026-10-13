@@ -28,6 +28,7 @@ final class ScrollCoordinator {
     private var reselectionActions: ScrollReselectionActions?
     private var controls: ScrollControlBarController?
     private var livePreview: ScrollPreviewPanelController?
+    private var selectionOverlay: ScrollSelectionOverlayController?
     private var operationTask: Task<Void, Never>?
     private var operationID: UUID?
     private var operations: [UUID: Task<Void, Never>] = [:]
@@ -58,6 +59,7 @@ final class ScrollCoordinator {
          "worker": session == nil ? 0 : 1, "pendingImage": pendingImage == nil ? 0 : 1,
          "setup": setupWindow == nil ? 0 : 1, "controls": controls?.windowCount ?? 0,
          "livePreviewWindow": livePreview?.windowCount ?? 0, "livePreviewImage": state.preview == nil ? 0 : 1,
+         "selectionOverlay": selectionOverlay?.windowCount ?? 0, "captureStream": capture?.isStreaming == true ? 1 : 0,
          "reselectionAlert": reselectionAlert == nil ? 0 : 1,
          "reselectionActions": reselectionActions == nil ? 0 : 1,
          "displayObserver": screenObserver == nil ? 0 : 1,
@@ -253,6 +255,8 @@ final class ScrollCoordinator {
             state.status = "辅助功能未授权，请自行向下滚动。"
         }
         let worker = workflow.makeWorker(options); session = worker
+        if selectionOverlay == nil { selectionOverlay = ScrollSelectionOverlayController() }
+        selectionOverlay?.show(context: context)
         if controls == nil {
             controls = ScrollControlBarController(state: state, onFinish: { [weak self] in self?.finish() },
                 onCancel: { [weak self] in Task { await self?.cancel() } }, onRetry: { [weak self] in self?.retry() },
@@ -269,12 +273,11 @@ final class ScrollCoordinator {
         if state.showsPreview { livePreview?.show(near: context.globalRect, avoiding: controls?.panelFrame) }
         do {
             let prepared = try await workflow.prepare(context)
-            try Task.checkCancellation()
-            guard generation == token else { return }
+            guard generation == token, !Task.isCancelled else { await prepared.stop(); throw CancellationError() }
             capture = prepared
             try updateValidatedContext()
             workflow.activate(self.context ?? context)
-            try await Task.sleep(for: .milliseconds(150))
+            try await Task.sleep(for: .milliseconds(50))
             let provisional = try await prepared.capture()
             acceptedSignature = try await signature(for: provisional, options: options)
             guard let image = try await stableFrame(token: token, requireChange: false) else {
@@ -305,7 +308,11 @@ final class ScrollCoordinator {
         if let current = try capture?.validatedContext(forAutomaticScroll: forAutomaticScroll) {
             let moved = context?.globalRect != current.globalRect
             context = current
-            if moved { livePreview?.reposition(near: current.globalRect, avoiding: controls?.panelFrame) }
+            if moved {
+                selectionOverlay?.update(context: current)
+                controls?.show(near: current.globalRect)
+                livePreview?.reposition(near: current.globalRect, avoiding: controls?.panelFrame)
+            }
         }
     }
 
@@ -335,7 +342,7 @@ final class ScrollCoordinator {
         if case .appended(let height, let frames) = result {
             state.height = height; state.frames = frames; state.isBacktracking = false
             if !state.isPaused {
-                state.status = state.mode == .manual ? "向下滚动，稳定后自动拼接。" : "页面稳定后继续自动滚动…"
+                state.status = state.mode == .manual ? "向下滚动，可靠画面自动拼接。" : "正在检查下一屏并继续滚动…"
             }
         }
     }
@@ -407,7 +414,7 @@ final class ScrollCoordinator {
     private func stableFrame(token: UUID, requireChange: Bool = true, loop: UUID? = nil) async throws -> CGImage? {
         guard let capture, let options, let acceptedSignature else { throw CancellationError() }
         let started = ContinuousClock.now
-        var gate = StableFrameGate(), previous: StitchSignature?
+        var gate = StableFrameGate(), previous: StitchSignature? = acceptedSignature
         while generation == token, loop == nil || loopID == loop {
             try Task.checkCancellation()
             try updateValidatedContext()
@@ -416,19 +423,33 @@ final class ScrollCoordinator {
             try Task.checkCancellation()
             guard generation == token, loop == nil || loopID == loop else { throw CancellationError() }
             let elapsed = started.duration(to: .now)
+            let acceptedDifference = signature.normalizedDifference(to: acceptedSignature)
             let mode = requireChange && !state.isBacktracking ? state.mode : .automatic
+            // A complete compositor frame whose whole overlap agrees can become an anchor
+            // during scrolling. This prevents a fast gesture from outrunning the viewport.
+            if capture.isStreaming, !state.isBacktracking, acceptedDifference > 0.004, let worker = session,
+               try await worker.canAppendReliably(image) {
+                try Task.checkCancellation()
+                guard generation == token, loop == nil || loopID == loop else { throw CancellationError() }
+                return image
+            }
             if gate.observe(previousDifference: previous.map { signature.normalizedDifference(to: $0) } ?? .infinity,
-                            acceptedDifference: signature.normalizedDifference(to: acceptedSignature), elapsed: elapsed, mode: mode) { return image }
+                            acceptedDifference: acceptedDifference, elapsed: elapsed, mode: mode,
+                            minimumObservationTime: state.mode == .automatic && requireChange ? .milliseconds(450) : .zero) { return image }
             // A manual user may browse upward for as long as they need. The automatic gate
             // used to recognize the accepted boundary must not turn that into a six-second pause.
             if (state.mode == .automatic || !requireChange), elapsed >= .seconds(6) { return nil }
             previous = signature
-            try await Task.sleep(for: .milliseconds(120))
+            try await Task.sleep(for: .milliseconds(60))
         }
         throw CancellationError()
     }
 
     private func handleCaptureError(_ error: Error, token: UUID) async {
+        guard generation == token, !Task.isCancelled else { return }
+        let stoppedCapture = capture
+        capture = nil
+        await stoppedCapture?.stop()
         guard generation == token, !Task.isCancelled else { return }
         let progress = await session?.progress
         guard generation == token, !Task.isCancelled else { return }
@@ -463,25 +484,34 @@ final class ScrollCoordinator {
             }
             if progress.frames == 0 {
                 guard let context = self.context, let options = self.options else { return }
-                await worker.cancel(); self.session = nil; self.capture = nil
+                await worker.cancel(); self.session = nil
+                let oldCapture = self.capture; self.capture = nil; await oldCapture?.stop()
                 await self.beginCapture(context: context, mode: self.state.mode, options: options, token: token)
                 return
             }
             self.pendingImage = nil; self.state.isPaused = false; self.state.isMatching = false; self.state.correlation = nil
             self.state.status = "正在重新检查当前页面…"
+            if self.capture == nil, let context = self.context {
+                do {
+                    let prepared = try await self.workflow.prepare(context)
+                    guard self.generation == token, !Task.isCancelled else { await prepared.stop(); return }
+                    self.capture = prepared
+                } catch { await self.handleCaptureError(error, token: token); return }
+            }
             if let context = self.context { self.workflow.activate(context) }
             self.startLoop(token: token, captureCurrentFirst: true)
         }
     }
 
-    private func pause() {
+    func pause() {
         guard operationTask == nil, session != nil, !state.isPaused else { return }
-        let token = generation, activeLoop = loopTask
+        let token = generation, activeLoop = loopTask, source = capture
         loopID = UUID(); state.isPaused = true; state.status = "已暂停。可继续，或在高级选项中从首屏重新配置。"
         launchOperation { [weak self] in
             await activeLoop?.value
             guard let self, self.generation == token else { return }
             self.loopTask = nil
+            self.capture = nil; await source?.stop()
         }
     }
 
@@ -499,8 +529,8 @@ final class ScrollCoordinator {
         state.mode = .automatic; retry()
     }
 
-    private func openAdvanced() {
-        guard operationTask == nil, setupWindow == nil, let context, let capture else { return }
+    func openAdvanced() {
+        guard operationTask == nil, setupWindow == nil, let context else { return }
         let token = generation, activeLoop = loopTask, wasPaused = state.isPaused
         loopID = UUID(); state.isPaused = true
         launchOperation { [weak self] in
@@ -509,9 +539,19 @@ final class ScrollCoordinator {
             guard self.generation == token, !Task.isCancelled else { return }
             self.loopTask = nil
             do {
-                let image = try await capture.capture()
+                // Pausing releases the live stream. Advanced options can still reopen a
+                // validated source, take their reference image, and immediately release it.
+                if self.capture == nil {
+                    let prepared = try await self.workflow.prepare(context)
+                    guard self.generation == token, !Task.isCancelled else { await prepared.stop(); return }
+                    self.capture = prepared
+                }
+                guard let source = self.capture else { throw CancellationError() }
+                let image = try await source.capture()
                 try Task.checkCancellation()
                 guard self.generation == token else { return }
+                self.capture = nil; await source.stop()
+                guard self.generation == token, !Task.isCancelled else { return }
                 self.state.isPaused = wasPaused
                 self.showSetup(image: image, context: context)
             } catch { await self.handleCaptureError(error, token: token) }
@@ -520,11 +560,11 @@ final class ScrollCoordinator {
 
     private func restart(context: CaptureContext, mode: ScrollCaptureMode, options: ScrollCaptureOptions) {
         guard operationTask == nil, selection.state == .idle else { return }
-        let token = UUID(), activeLoop = loopTask, worker = session
+        let token = UUID(), activeLoop = loopTask, worker = session, source = capture
         generation = token; loopID = UUID(); state.isPaused = true
         launchOperation { [weak self] in
             guard let self else { return }
-            await activeLoop?.value; await worker?.cancel()
+            await activeLoop?.value; await worker?.cancel(); await source?.stop()
             guard self.generation == token, !Task.isCancelled else { return }
             self.loopTask = nil; self.session = nil; self.capture = nil; self.pendingImage = nil; self.acceptedSignature = nil
             self.removeScreenObserver()
@@ -610,6 +650,7 @@ final class ScrollCoordinator {
                     }
                 }
                 self.state.status = "正在生成长图…"
+                let source = self.capture; self.capture = nil; await source?.stop()
                 let folder = AppPaths.root.appendingPathComponent("ScrollPreviews", isDirectory: true)
                 let output = folder.appendingPathComponent("\(UUID().uuidString).png")
                 self.previewFile = output
@@ -624,6 +665,7 @@ final class ScrollCoordinator {
                 try Task.checkCancellation()
                 guard self.generation == token else { return }
                 self.controls?.close(); self.controls = nil; self.livePreview?.close(); self.livePreview = nil
+                self.selectionOverlay?.close(); self.selectionOverlay = nil
                 self.state.preview = nil; self.removeScreenObserver()
                 self.session = nil; self.capture = nil; self.options = nil; self.acceptedSignature = nil; self.pendingImage = nil
                 self.context = nil; self.previewFile = nil; self.isBusy = false; self.state.isWorking = false
@@ -691,14 +733,16 @@ final class ScrollCoordinator {
     private func cleanup(token: UUID, keepBusy: Bool = false, replacement: UUID = UUID(), error: Error? = nil, complete: Bool = true) async {
         guard generation == token else { return }
         generation = replacement; loopID = UUID()
-        let worker = session, activeLoop = loopTask
+        let worker = session, activeLoop = loopTask, source = capture
         activeLoop?.cancel()
         closeReselectionAlert()
         setupWindow?.onClose = nil; setupWindow?.close(); setupWindow = nil
         controls?.close(); controls = nil; livePreview?.close(); livePreview = nil; state.preview = nil; removeScreenObserver()
+        selectionOverlay?.close(); selectionOverlay = nil
         selection.finish(); isBusy = true
         await activeLoop?.value
         await worker?.cancel()
+        await source?.stop()
         guard generation == replacement else { return }
         loopTask = nil
         if let previewFile { try? FileManager.default.removeItem(at: previewFile) }

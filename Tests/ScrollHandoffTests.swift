@@ -40,7 +40,7 @@ final class ScrollHandoffTests: XCTestCase {
         try await waitUntil { panel.alphaValue >= 0.95 }
         let compactButtons = allButtons(in: hud)
         XCTAssertFalse(hud.isAnnotationExpanded)
-        XCTAssertEqual(compactButtons.count, 18, "Selection must begin with directly available common tools")
+        XCTAssertEqual(compactButtons.count, 19, "Selection must begin with directly available common tools")
         XCTAssertEqual(compactButtons.filter { $0.accessibilityLabel() == ToolbarAction.copy.title }.count, 1)
         XCTAssertFalse(compactButtons.contains { $0.accessibilityLabel() == "复制" })
         for tool in [AnnotationTool.rectangle, .ellipse, .arrow, .pen, .text, .mosaic] {
@@ -135,7 +135,7 @@ final class ScrollHandoffTests: XCTestCase {
         hud.frame.size = hud.configure(maximumWidth: 704)
         hud.layoutSubtreeIfNeeded()
         let compactButtons = allButtons(in: hud)
-        XCTAssertEqual(compactButtons.count, 18)
+        XCTAssertEqual(compactButtons.count, 19)
         let button = try XCTUnwrap(compactButtons.first { $0.accessibilityLabel() == "长截图" })
         XCTAssertEqual(button.title, "长截图", "The primary action must be discoverable without hovering")
         XCTAssertNotNil(button.image)

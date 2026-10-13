@@ -5,6 +5,69 @@ import XCTest
 
 @MainActor
 final class ScrollCoordinatorLifecycleTests: XCTestCase {
+    func testPausingReleasesTheStreamAndAdvancedOptionsCanReopenWithoutLosingAcceptedRows() async throws {
+        let fixture = try await ScrollFlowFixture.make(), source = ScrollFlowSource(images: fixture.images)
+        let selection = SelectionSession()
+        var prepared = 0, stops = 0
+        let workflow = ScrollCaptureWorkflow(freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
+            prepare: { context in
+                prepared += 1
+                return RegionSnapshot(capture: { source.current }, validate: { context },
+                                      stop: { stops += 1 }, continuous: true)
+            }, activate: { _ in })
+        let coordinator = ScrollCoordinator(engine: CaptureEngine(), selection: selection, windows: WindowList(),
+            onCapture: { _, _ in }, workflow: workflow)
+        coordinator.continueFromSelection(context: fixture.context)
+        try await waitUntil { coordinator.controlProgress.frames == 1 && !coordinator.controlProgress.isWorking }
+        coordinator.pause()
+        try await waitUntil { coordinator.resourceCounts["operation"] == 0 && coordinator.resourceCounts["capture"] == 0 }
+        XCTAssertEqual(stops, 1)
+        XCTAssertTrue(coordinator.controlProgress.isPaused)
+        XCTAssertEqual(coordinator.resourceCounts["livePreviewImage"], 1)
+        coordinator.openAdvanced()
+        try await waitUntil { coordinator.resourceCounts["setup"] == 1 && coordinator.resourceCounts["operation"] == 0 }
+        XCTAssertEqual(prepared, 2); XCTAssertEqual(stops, 2)
+        XCTAssertEqual(coordinator.resourceCounts["captureStream"], 0)
+        let setup = try XCTUnwrap(NSApp.windows.first { $0.title == "长截图高级选项" && $0.isVisible })
+        setup.close()
+        coordinator.retry()
+        try await waitUntil { coordinator.resourceCounts["captureStream"] == 1 && coordinator.resourceCounts["operation"] == 0 }
+        XCTAssertEqual(prepared, 3)
+        source.index = 1
+        try await waitUntil { coordinator.controlProgress.frames == 2 }
+        XCTAssertEqual(coordinator.controlProgress.height, 352)
+        await coordinator.cancel()
+        XCTAssertEqual(stops, 3)
+        XCTAssertEqual(coordinator.resourceCounts.values.reduce(0, +), 0)
+    }
+
+    func testContinuousFramesAdvanceBeforeScrollingStopsAndCloseTheirStream() async throws {
+        let fixture = try await ScrollFlowFixture.make()
+        let source = ScrollFlowSource(images: fixture.images)
+        var motion = false, stops = 0
+        let selection = SelectionSession()
+        let workflow = ScrollCaptureWorkflow(freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
+            prepare: { context in
+                RegionSnapshot(capture: {
+                    if motion { source.index = source.index == 1 ? 3 : 1 }
+                    return source.current
+                }, validate: { context }, stop: { stops += 1 }, continuous: true)
+            }, activate: { _ in })
+        let coordinator = ScrollCoordinator(engine: CaptureEngine(), selection: selection, windows: WindowList(),
+            onCapture: { _, _ in }, workflow: workflow)
+        coordinator.continueFromSelection(context: fixture.context)
+        try await waitUntil { coordinator.controlProgress.frames == 1 && !coordinator.controlProgress.isWorking }
+        XCTAssertGreaterThan(coordinator.resourceCounts["selectionOverlay"] ?? 0, 0)
+        XCTAssertEqual(coordinator.resourceCounts["captureStream"], 1)
+        motion = true
+        try await waitUntil { coordinator.controlProgress.frames >= 3 }
+        XCTAssertEqual(coordinator.controlProgress.height, 370)
+        XCTAssertFalse(coordinator.controlProgress.isMatching)
+        await coordinator.cancel()
+        XCTAssertEqual(stops, 1)
+        XCTAssertEqual(coordinator.resourceCounts.values.reduce(0, +), 0)
+    }
+
     func testSetupCancellationReleasesEveryOwnedResourceAndCanRepeat() async throws {
         let selection = SelectionSession()
         let coordinator = ScrollCoordinator(engine: CaptureEngine(), selection: selection, windows: WindowList(), onCapture: { _, _ in })

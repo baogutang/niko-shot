@@ -93,7 +93,8 @@ final class CaptureEngine {
                                           width: pixels.width / screen.scale, height: pixels.height / screen.scale)
         configuration.showsCursor = false; configuration.captureResolution = .best
         configuration.colorSpaceName = CGColorSpace.sRGB
-        return RegionSnapshot(filter: filter, configuration: configuration)
+        let source = try await ScrollFrameSource.start(filter: filter, configuration: configuration)
+        return RegionSnapshot(capture: { try await source.capture() }, stop: { await source.stop() }, continuous: true)
     }
 
     /// Prepares a fixed window identity or a geometry-checked display viewport for scrolling.
@@ -119,7 +120,8 @@ final class CaptureEngine {
         guard context.kind == "window", let id = context.windowID, let originalWindow else {
             let prepared = try await regionCapture(screen: context.screen, rect: context.localRect)
             return RegionSnapshot(capture: { try await prepared.capture() },
-                                  validate: validation, validateScroll: scrollValidation)
+                                  validate: validation, validateScroll: scrollValidation,
+                                  stop: { await prepared.stop() }, continuous: true)
         }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         try Task.checkCancellation()
@@ -142,17 +144,9 @@ final class CaptureEngine {
                               width: context.globalRect.width, height: context.globalRect.height)
         let crop = CGRect(x: (relative.minX * scale).rounded(), y: (relative.minY * scale).rounded(),
                           width: (relative.width * scale).rounded(), height: (relative.height * scale).rounded())
-        return RegionSnapshot(capture: {
-            let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
-            try Task.checkCancellation()
-            let worker = Task.detached(priority: .userInitiated) { () throws -> CGImage in
-                try Task.checkCancellation()
-                guard CGRect(x: 0, y: 0, width: image.width, height: image.height).contains(crop),
-                      let result = image.cropping(to: crop) else { throw ScrollTargetError.windowResized }
-                return result
-            }
-            return try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
-        }, validate: validation, validateScroll: scrollValidation)
+        let source = try await ScrollFrameSource.start(filter: filter, configuration: configuration, crop: crop)
+        return RegionSnapshot(capture: { try await source.capture() }, validate: validation,
+                              validateScroll: scrollValidation, stop: { await source.stop() }, continuous: true)
     }
 
     private static func screenGeometries() -> [ScreenGeometry] {
@@ -175,6 +169,10 @@ final class CaptureEngine {
         let above = CGWindowListCopyWindowInfo([.optionOnScreenAboveWindow, .excludeDesktopElements], windowID) as? [[String: Any]] ?? []
         let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
         for info in above {
+            if let owner = info[kCGWindowOwnerPID as String] as? NSNumber,
+               owner.int32Value == ProcessInfo.processInfo.processIdentifier,
+               let number = info[kCGWindowNumber as String] as? NSNumber,
+               NSApp.windows.contains(where: { $0.windowNumber == number.intValue && $0.ignoresMouseEvents }) { continue }
             guard (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1 > 0,
                   let bounds = info[kCGWindowBounds as String] as? NSDictionary,
                   let rect = CGRect(dictionaryRepresentation: bounds) else { continue }
@@ -191,16 +189,23 @@ final class RegionSnapshot {
     private let request: @MainActor () async throws -> CGImage
     private let validation: @MainActor () throws -> CaptureContext?
     private let scrollValidation: @MainActor (CGPoint) throws -> Void
+    private let stopRequest: @MainActor () async -> Void
+    private let continuous: Bool
+    private var stopped = false
+    var isStreaming: Bool { continuous && !stopped }
     init(filter: SCContentFilter, configuration: SCStreamConfiguration) {
         request = { try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration) }
         validation = { nil }; scrollValidation = { _ in }
+        stopRequest = {}; continuous = false
     }
 
     /// Injects a real image source and geometry check without requiring capture consent in flow tests.
     init(capture: @escaping @MainActor () async throws -> CGImage,
          validate: @escaping @MainActor () throws -> CaptureContext? = { nil },
-         validateScroll: @escaping @MainActor (CGPoint) throws -> Void = { _ in }) {
+         validateScroll: @escaping @MainActor (CGPoint) throws -> Void = { _ in },
+         stop: @escaping @MainActor () async -> Void = {}, continuous: Bool = false) {
         request = capture; validation = validate; scrollValidation = validateScroll
+        stopRequest = stop; self.continuous = continuous
     }
 
     /// Validates identity and geometry before dispatching any event to the native target.
@@ -215,11 +220,19 @@ final class RegionSnapshot {
     /// Captures a fresh viewport without retaining previous samples or installing any listener.
     func capture() async throws -> CGImage {
         try Task.checkCancellation()
+        guard !stopped else { throw CancellationError() }
         _ = try validation()
         let image = try await request()
         try Task.checkCancellation()
+        guard !stopped else { throw CancellationError() }
         _ = try validation()
         return image
+    }
+
+    func stop() async {
+        guard !stopped else { return }
+        stopped = true
+        await stopRequest()
     }
 }
 

@@ -298,11 +298,11 @@ private final class HUDPanel: NSPanel {
     override func cancelOperation(_ sender: Any?) { onCancel?() }
 }
 
-/// A compact desktop toolbar with common tools, one additional row and optional inline text results.
+/// Two compact desktop rows, additional tools on demand, and optional inline text results.
 @MainActor
 final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
     private let column = NSStackView()
-    private static let commonTools: [AnnotationTool] = [.rectangle, .ellipse, .arrow, .pen, .text, .mosaic]
+    private static let commonTools: [AnnotationTool] = [.rectangle, .ellipse, .line, .arrow, .pen, .text, .mosaic]
     private var commonToolGroups: [[NSView]] = []
     private var toolGroups: [[NSView]] = []
     private var styleGroups: [[NSView]] = []
@@ -361,7 +361,7 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
         layer?.masksToBounds = true
         layer?.borderWidth = 0.5
         column.orientation = .vertical
-        column.alignment = .centerX
+        column.alignment = .trailing
         column.spacing = 2
         column.translatesAutoresizingMaskIntoConstraints = false
         addSubview(column)
@@ -388,7 +388,7 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
         if confirmationTitle == nil {
             let annotation = HUDIconButton(symbol: "ellipsis", title: "更多标注工具")
             annotation.setAccessibilityExpanded(false)
-            annotation.setAccessibilityHelp("展开直线、模糊、高亮、序号、便签、放大标注和调整选区。")
+            annotation.setAccessibilityHelp("展开模糊、高亮、序号、便签、放大标注和调整选区。")
             annotation.onPress = { [weak self] in
                 guard let self else { return }
                 self.setAnnotationExpanded(!self.isAnnotationExpanded)
@@ -419,10 +419,12 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
                 let button = HUDIconButton(symbol: action.symbol, title: title,
                                            tint: action == .copy ? HUDPalette.accent : nil,
                                            prominent: action == .copy,
-                                           visibleTitle: action == .scroll ? "长截图"
+                                           visibleTitle: [.undo, .redo, .ocr, .translate, .scroll].contains(action) ? title
                                                 : action == .copy && confirmationTitle != nil ? title : nil)
                 if action == .undo || action == .redo { button.isEnabled = false }
                 button.toolTip = action.keyHint.map { "\(title) · \($0)" } ?? title
+                if action == .ocr { button.toolTip = "识别文字 · 提取截图原文，可编辑、复制与查看译文" }
+                if action == .translate { button.toolTip = "翻译 · 自动识别截图文字并显示目标语言译文" }
                 button.onPress = { onAction(action) }
                 actionButtons[action] = button
                 views.append(button)
@@ -512,8 +514,10 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
         annotationButton?.constrainWidth(to: limit)
         var largest: CGFloat = 32
         var rowCount = 0
-        let primaryGroups = commonToolGroups + styleGroups + editingGroups + commandGroups
-        let rows = isAnnotationExpanded ? [primaryGroups, toolGroups + advancedActionGroups] : [primaryGroups]
+        // Keep drawing/history together and text/output together instead of spilling
+        // whichever actions happen to exceed one long row onto an accidental extra row.
+        var rows = confirmationOnly ? [commandGroups] : [commonToolGroups + styleGroups + editingGroups, commandGroups]
+        if isAnnotationExpanded { rows.append(toolGroups + advancedActionGroups) }
         for groups in rows {
             var rowViews: [NSView] = []
             var rowWidth: CGFloat = 0
@@ -588,7 +592,7 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
         annotationButton?.setSelected(isAnnotationExpanded || advancedTool != nil)
         annotationButton?.setAccessibilityExpanded(isAnnotationExpanded)
         annotationButton?.toolTip = isAnnotationExpanded ? "收起更多标注工具"
-            : advancedTool.map { "当前工具：\($0.title) · 展开更多标注工具" } ?? "更多标注工具 · 直线、模糊、高亮、序号、便签、放大标注与调整选区"
+            : advancedTool.map { "当前工具：\($0.title) · 展开更多标注工具" } ?? "更多标注工具 · 模糊、高亮、序号、便签、放大标注与调整选区"
         if let advancedTool, !isAnnotationExpanded { annotationButton?.setAccessibilityValue("当前工具：\(advancedTool.title)") }
     }
 
@@ -861,7 +865,7 @@ private final class HUDIconButton: NSButton {
             let focused = window?.firstResponder === self
             layer?.borderWidth = focused ? 2 : selected ? 0.5 : 0
             layer?.borderColor = HUDPalette.accent.withAlphaComponent(focused ? 0.9 : 0.4).cgColor
-            layer?.opacity = isEnabled ? 1 : 0.35
+            layer?.opacity = isEnabled ? 1 : 0.55
         }
         if invalidate { needsDisplay = true }
     }

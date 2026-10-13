@@ -43,6 +43,19 @@ public actor ScrollCaptureSession {
     /// Appends a retained candidate only after the user explicitly confirms its overlap.
     public func append(_ image: CGImage, forcedOverlap: Int) throws -> ScrollAppendResult { try appendFrame(image, forcedOverlap: forcedOverlap) }
 
+    /// Complete stream frames may advance during motion only when their overlap is nearly identical.
+    /// Rejected provisional frames neither pause the session nor replace its accepted boundary.
+    func canAppendReliably(_ image: CGImage) throws -> Bool {
+        try checkOpen()
+        guard let previous else { return false }
+        let next = try Stitcher.analyze(image, top: options.ignoredTop, bottom: options.ignoredBottom)
+        guard previous.width == next.width, previous.signature.normalizedDifference(to: next.signature) > 0.004 else { return false }
+        let match = try Stitcher.match(previous: previous, current: next, currentImage: image, ignoringTop: options.ignoredTop)
+        try checkCancellation()
+        return !match.isAmbiguous && !match.isBacktracking && match.correlation >= max(0.995, options.minimumCorrelation) &&
+            match.overlap >= min(previous.height, next.height) / 4 && match.overlap < min(previous.height, next.height)
+    }
+
     /// Streams a PNG and atomically commits it; an existing user file is protected until all rows succeed.
     public func finish(to destination: URL) throws -> URL {
         try checkOpen()
