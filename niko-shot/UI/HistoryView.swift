@@ -56,6 +56,7 @@ struct HistoryView: View {
                     List(selection: $selectedID) {
                         ForEach(records) { record in
                             HistoryRow(record: record, selected: selectedID == record.id, deleting: deleting.contains(record.id),
+                                       onSelect: { selectedID = record.id },
                                        onOCR: { onOCR(record) }, onPin: { onPin(record) },
                                        onEdit: { onEdit(record) }, onDelete: { Task { await remove(record) } })
                                 .tag(record.id)
@@ -188,6 +189,7 @@ private struct HistoryRow: View {
     let record: HistoryRecord
     let selected: Bool
     let deleting: Bool
+    let onSelect: () -> Void
     let onOCR: () -> Void
     let onPin: () -> Void
     let onEdit: () -> Void
@@ -236,7 +238,8 @@ private struct HistoryRow: View {
         .contentShape(Rectangle())
         .background(Color.primary.opacity(hovering && !selected ? 0.025 : 0), in: RoundedRectangle(cornerRadius: 4))
         .onHover { hovering = $0 }
-        .onTapGesture(count: 2, perform: onEdit)
+        .simultaneousGesture(TapGesture().onEnded { onSelect() })
+        .simultaneousGesture(TapGesture(count: 2).onEnded { onSelect(); onEdit() })
         .contextMenu { rowActions }
         .task(id: record.id) { thumbnail = NSImage(data: record.thumbnail) }
     }

@@ -106,12 +106,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.isReleasedWhenClosed = false
             window.contentMinSize = CGSize(width: 820, height: 580)
             window.titlebarSeparatorStyle = .line
+            let restoredFrame = window.setFrameUsingName("NikoSettingsWorkspace")
             window.setFrameAutosaveName("NikoSettingsWorkspace")
             if let hotkeys {
                 window.contentView = NSHostingView(rootView: SettingsView(hotkeys: hotkeys,
                     onShowWizard: { [weak self] in self?.showWizard() }))
             }
-            window.center()
+            if !restoredFrame { window.center() }
             window.onClose = { [weak self] in self?.settingsWindow = nil }
             settingsWindow = window
         }
@@ -330,8 +331,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let window = makeUtilityWindow(title: "识别与翻译")
             window.contentMinSize = CGSize(width: 920, height: 560)
             window.setContentSize(CGSize(width: 1120, height: 680))
+            let restoredFrame = window.setFrameUsingName("NikoTextWorkspace")
             window.setFrameAutosaveName("NikoTextWorkspace")
-            window.center()
+            if !restoredFrame { window.center() }
             window.onClose = { [weak self] in self?.ocrWindow = nil }; ocrWindow = window
         }
         ocrWindow?.contentView = NSHostingView(rootView: OCRView(model: model))
@@ -385,6 +387,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         application.addItem(settings); application.addItem(.separator())
         application.addItem(NSMenuItem(title: "退出 niko-shot", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         applicationItem.submenu = application; main.addItem(applicationItem)
+        let fileItem = NSMenuItem()
+        let file = NSMenu(title: "文件")
+        file.addItem(NSMenuItem(title: "关闭窗口", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w"))
+        fileItem.submenu = file; main.addItem(fileItem)
         let editItem = NSMenuItem()
         let edit = NSMenu(title: "编辑")
         for (title, action, key) in [("撤销", "undo:", "z"), ("剪切", "cut:", "x"),
@@ -406,7 +412,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let history = NSMenuItem(title: "截图历史", action: #selector(showHistory), keyEquivalent: "")
         history.target = self; tools.addItem(history)
         toolsItem.submenu = tools; main.addItem(toolsItem)
+        let windowItem = NSMenuItem()
+        let window = NSMenu(title: "窗口")
+        window.addItem(NSMenuItem(title: "最小化", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m"))
+        window.addItem(NSMenuItem(title: "缩放", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: ""))
+        window.addItem(.separator())
+        window.addItem(NSMenuItem(title: "全部置于前面", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: ""))
+        windowItem.submenu = window; main.addItem(windowItem)
         NSApp.mainMenu = main
+        NSApp.windowsMenu = window
     }
 
     @objc private func performMenuAction(_ item: NSMenuItem) {

@@ -25,15 +25,14 @@ struct TranslationPane: View {
             HStack(spacing: 10) {
                 Image(systemName: "globe").foregroundStyle(.secondary).accessibilityHidden(true)
                 TranslationServicePicker(settings: settings).labelsHidden().frame(maxWidth: 210)
-                Button(action: openTranslationSettings) { Image(systemName: "slider.horizontal.3").frame(width: 26, height: 26) }
-                    .buttonStyle(.borderless).help("配置翻译服务").accessibilityLabel("配置当前翻译服务")
+                Button(action: openTranslationSettings) { Label("配置当前翻译服务", systemImage: "slider.horizontal.3").labelStyle(.iconOnly).frame(width: 26, height: 26) }
+                    .buttonStyle(.borderless).help("配置翻译服务")
                 Spacer(minLength: 10)
                 Toggle("自动翻译", isOn: $settings.automaticTranslation)
                     .toggleStyle(.switch).controlSize(.small).font(.system(size: 12)).fixedSize()
-                    .accessibilityLabel("文字识别完成后自动翻译")
-                Button { showsSetupGuide = true } label: { Image(systemName: "questionmark.circle").frame(width: 26, height: 26) }
+                    .help("文字识别完成后自动翻译")
+                Button { showsSetupGuide = true } label: { Label("打开申请与接入指南", systemImage: "questionmark.circle").labelStyle(.iconOnly).frame(width: 26, height: 26) }
                     .buttonStyle(.borderless).help("当前服务的申请步骤与官方入口")
-                    .accessibilityLabel("打开申请与接入指南")
             }
             .padding(.horizontal, 16).frame(height: 48).background(NikoTheme.canvas)
             Divider()
@@ -53,9 +52,11 @@ struct TranslationPane: View {
                 }
                 if let error = model.errorMessage {
                     HStack(alignment: .top, spacing: 12) {
-                        Label(error, systemImage: "exclamationmark.circle")
-                            .font(.system(size: 12)).foregroundStyle(.red).textSelection(.enabled)
-                            .accessibilityLabel("翻译错误：\(error)")
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Image(systemName: "exclamationmark.circle").accessibilityHidden(true)
+                            Text(error).textSelection(.enabled)
+                        }
+                        .font(.system(size: 12)).foregroundStyle(.red)
                         Spacer(minLength: 0)
                         Button("查看配置", action: openTranslationSettings).buttonStyle(.borderless).font(.system(size: 12))
                     }
@@ -73,12 +74,11 @@ struct TranslationPane: View {
                     }
                     Spacer()
                     if model.isTranslating {
-                        Button("取消翻译") { model.cancel() }.accessibilityLabel("取消当前翻译")
+                        Button("取消翻译") { model.cancel() }
                     } else {
                         Button("翻译", systemImage: "character.bubble") { model.translate(text: text, settings: settings) }
                             .buttonStyle(.borderedProminent)
                             .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isRecognizing || model.unsupportedReason(settings: settings) != nil)
-                            .accessibilityLabel("使用当前服务翻译所选文字")
                     }
                 }.frame(minHeight: 28)
             }.padding(.horizontal, 16).padding(.vertical, 10).background(NikoTheme.canvas)
@@ -131,7 +131,7 @@ struct TranslationPane: View {
                     .disabled(!supports(language, asSource: true))
                     .help(supports(language, asSource: true) ? language.displayName : "当前服务不支持此原文语言")
             }
-        }.labelsHidden().accessibilityLabel("原文语言")
+        }.labelsHidden()
     }
 
     private var targetPicker: some View {
@@ -142,7 +142,7 @@ struct TranslationPane: View {
                     .disabled(!supports(language, asSource: false))
                     .help(supports(language, asSource: false) ? language.displayName : "当前服务不支持此译文语言")
             }
-        }.labelsHidden().accessibilityLabel("译文语言")
+        }.labelsHidden()
     }
 
     private func textPanel(title: String, content: String, placeholder: String, isResult: Bool) -> some View {
@@ -157,9 +157,9 @@ struct TranslationPane: View {
                     Button {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(content, forType: .string)
-                    } label: { Image(systemName: "doc.on.doc").frame(width: 24, height: 24) }
+                    } label: { Label("复制译文", systemImage: "doc.on.doc").labelStyle(.iconOnly).frame(width: 24, height: 24) }
                     .buttonStyle(.borderless).disabled(content.isEmpty)
-                    .help("复制译文").accessibilityLabel("复制译文")
+                    .help("复制译文")
                 }
             }.padding(.horizontal, 16).frame(height: 42)
             Divider()
@@ -178,7 +178,6 @@ struct TranslationPane: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .accessibilityLabel(isResult ? "翻译结果" : "原文预览")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .textBackgroundColor))
@@ -200,7 +199,7 @@ struct TranslationServicePicker: View {
             ForEach(settings.customTranslationServices) { configuration in
                 Text(configuration.name).tag("instance.\(configuration.id.uuidString)")
             }
-        }.accessibilityLabel("当前翻译服务")
+        }
     }
 
     private var selection: Binding<String> {

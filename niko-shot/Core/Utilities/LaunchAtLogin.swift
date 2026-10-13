@@ -28,7 +28,7 @@ public final class LaunchAtLogin {
         case .enabled: "已启用，将在登录时打开 niko-shot。"
         case .requiresApproval: "等待批准。请在系统设置的登录项中允许 niko-shot。"
         case .notRegistered: "登录时不自动打开。"
-        case .notFound: "系统未找到应用。请将 niko-shot 安装到应用程序文件夹后重试。"
+        case .notFound: "系统未找到登录启动项。可重新开启登录启动；若仍失败，请查看登录项设置。"
         @unknown default: "暂时无法读取登录项状态。"
         }
     }

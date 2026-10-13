@@ -28,22 +28,18 @@ struct OCRView: View {
                 ToolbarItem(placement: .navigation) {
                     Button {
                         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) { showsBlocks.toggle() }
-                    } label: { Label("文字区块", systemImage: "sidebar.left") }
+                    } label: { Label(showsBlocks ? "隐藏文字区块" : "显示文字区块", systemImage: "sidebar.left") }
                     .help(showsBlocks ? "隐藏文字区块，展开原文与译文" : "显示文字区块，勾选或编辑识别结果")
-                    .accessibilityLabel(showsBlocks ? "隐藏文字区块" : "显示文字区块")
-                    .accessibilityAddTraits(showsBlocks ? .isSelected : [])
                 }
                 ToolbarItem(placement: .status) {
                     Text("\(selectedCount) 段 · \(model.selectedText.count) 字")
                         .font(.system(size: 12)).foregroundStyle(.secondary).monospacedDigit()
-                        .accessibilityLabel("选择 \(selectedCount) 个文字区块，共 \(model.selectedText.count) 字")
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button("复制文字", systemImage: "doc.on.clipboard") { model.copySelected() }
                         .keyboardShortcut(.return, modifiers: .command)
                         .disabled(model.selectedText.isEmpty || model.isRecognizing)
                         .help("复制所有勾选区块 · ⌘↩")
-                        .accessibilityLabel("复制所有勾选的文字区块")
                 }
             }
         }
@@ -65,13 +61,14 @@ struct OCRView: View {
                 }
                 .buttonStyle(.borderless).font(.system(size: 12))
                 .disabled(model.blocks.isEmpty || model.isRecognizing)
-                .accessibilityLabel(allSelected ? "取消选择全部文字区块" : "选择全部文字区块")
             }.padding(.horizontal, 14).frame(height: 42)
             Divider()
             if let error = model.errorMessage {
-                Label(error, systemImage: "exclamationmark.circle")
-                    .font(.callout).foregroundStyle(.red).textSelection(.enabled)
-                    .padding(12).accessibilityLabel("识别错误：\(error)")
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: "exclamationmark.circle").accessibilityHidden(true)
+                    Text(error).textSelection(.enabled)
+                }
+                .font(.callout).foregroundStyle(.red).padding(12)
             }
             if model.blocks.isEmpty {
                 VStack(spacing: 12) {
@@ -99,10 +96,9 @@ struct OCRView: View {
             Divider()
             DisclosureGroup(isExpanded: $formattingExpanded) {
                 VStack(alignment: .leading, spacing: 10) {
-                    Toggle("合并段落", isOn: $model.mergeParagraphs).accessibilityLabel("复制时合并段落")
-                    Toggle("去掉换行", isOn: $model.stripLineBreaks).accessibilityLabel("复制时去掉多余换行")
+                    Toggle("合并段落", isOn: $model.mergeParagraphs)
+                    Toggle("去掉换行", isOn: $model.stripLineBreaks)
                     Toggle("中文标点转英文", isOn: $model.englishPunctuation)
-                        .accessibilityLabel("复制时将中文标点转换为英文标点")
                 }.toggleStyle(.checkbox).font(.system(size: 12)).padding(.top, 10)
             } label: { Text("文字整理").font(.system(size: 12, weight: .medium)) }
                 .padding(14)
@@ -122,8 +118,7 @@ private struct OCRBlockEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                Toggle("区块 \(number)", isOn: $block.selected).toggleStyle(.checkbox).labelsHidden()
-                    .accessibilityLabel("选择第 \(number) 个文字区块")
+                Toggle("选择第 \(number) 个文字区块", isOn: $block.selected).toggleStyle(.checkbox).labelsHidden()
                 Text(number.formatted(.number.precision(.integerLength(2))))
                     .font(.system(size: 11, weight: .medium, design: .monospaced)).foregroundStyle(.secondary)
                     .accessibilityHidden(true)
@@ -131,15 +126,12 @@ private struct OCRBlockEditor: View {
                 Text(Double(block.confidence), format: .percent.precision(.fractionLength(0)))
                     .font(.system(size: 10)).foregroundStyle(.tertiary).monospacedDigit()
                     .help("Vision 识别置信度")
-                    .accessibilityLabel("识别置信度 \(Int(block.confidence * 100))%")
-                Button(action: onCopy) { Image(systemName: "doc.on.doc").frame(width: 24, height: 24) }
+                Button(action: onCopy) { Label("复制第 \(number) 个文字区块", systemImage: "doc.on.doc").labelStyle(.iconOnly).frame(width: 24, height: 24) }
                     .buttonStyle(.borderless).help("复制这段文字")
-                    .disabled(block.text.isEmpty).accessibilityLabel("复制第 \(number) 个文字区块")
+                    .disabled(block.text.isEmpty)
             }
-            TextEditor(text: $block.text)
-                .font(.system(size: 13)).scrollContentBackground(.hidden)
+            NativeTextEditor(text: $block.text, accessibilityLabel: "编辑第 \(number) 个文字区块")
                 .padding(.horizontal, -4).frame(height: editorHeight)
-                .accessibilityLabel("编辑第 \(number) 个文字区块")
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
         .background(block.selected ? NikoTheme.surface.opacity(0.6) : .clear)

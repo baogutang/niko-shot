@@ -22,11 +22,17 @@
 
 本机已实际打开新版设置、切换翻译配置、打开和用 Esc 关闭 DeepL 指南、打开和取消录屏设置。切换到 DeepL 配置时，当前翻译服务仍为百度。真实窗口检查发现表单空行和输入框标签重复，已修正后重新进入构建门禁。截图和录屏不会因为设置页的开关状态而判为通过。
 
-新构建的屏幕录制调用返回权限错误，系统列表却显示 niko-shot 已开启。刷新该授权时，macOS 要求用户本机输入登录密码；没有读取、输入或保存密码。需要完成身份验证后再核对最终构建的实际截图、标注弹出框焦点和录屏交互。已有屏幕录制授权不扩展为辅助功能、麦克风或摄像头授权。
+后续实机操作发现并修正历史单击选择被双击手势阻断的问题；实际单击启用工具栏，上下键切换选中行，双击进入标注。加载同一张公开历史样本，Vision 返回 20 个区块、784 字；侧栏收起／展开、区块勾选、滚动至第 20 段、中文粘贴和原生撤销／重做均已检查。十二种标注工具的键盘循环与 Esc 返回历史通过。原生「文件／窗口」菜单补齐关闭、最小化与缩放；Command+W 实际关闭历史窗口并回到设置。
+
+OCR 窗口曾在重复可访问性查询后出现主线程 AX label 递归栈溢出。逐步隔离后，控件名称改由真实 Toggle／Picker／Label 标题提供，区块编辑改用原生 NSTextView 标签，移除冗余的 SwiftUI 标签覆盖；保留可编辑、选文及全部子控件。重复查询、收起／展开和编辑后的查询未再复现。不能从只有系统栈帧的崩溃报告推定某个单独修饰器是唯一原因，也不把此次查询检查当作完整 VoiceOver 验收。
+
+新构建的屏幕录制调用返回权限错误，此前系统列表却显示 niko-shot 已开启。刷新该授权时，macOS 要求用户本机输入登录密码；没有读取、输入或保存密码。后续实际查看系统列表，已没有当前安装副本的条目，需要对最终安装副本重新核对授权与真实捕获。历史图片编辑不需要屏幕授权；标注浮动弹出框焦点与新构建录屏仍需完成。已有屏幕录制授权不扩展为辅助功能、麦克风或摄像头授权。系统旁白开关本轮已实际确认关闭，原先待恢复状态已结束；完整旁白走查仍未完成。
 
 ## 验证与预览
 
 首轮完整严格干净构建测试 **169 项通过、0 失败、0 跳过**，Swift 6 完整并发和编译警告作为错误；独立 universal Release 也通过。首轮证据为 `build/evidence/precision-ui-tests.xcresult`、`precision-ui-tests-summary.json` 和 `precision-ui-release.log`。表单细节修正后的最终门禁再次通过 **169 项、0 失败、0 跳过、0 编译警告**，结果为 `precision-ui-verified-tests.xcresult` 与 `precision-ui-verified-tests-summary.json`。最终 universal Release 包含 arm64／x86_64、App Intents 元数据，应用文件总计 7,890,754 字节；严格签名完整性校验通过，仍为未公证的 ad hoc 开发签名。证据为 `precision-ui-verified-release.log` 与 `precision-ui-verified-release-verification.json`。
+
+历史、可访问性与标准窗口菜单修正后的末次严格干净门禁为 **169 项通过、0 失败、0 跳过、0 编译警告**，报告为 `precision-ui-native-final-tests.xcresult` 与 `precision-ui-native-final-tests-summary.json`。独立干净 universal Release 总计 7,910,242 字节，arm64／x86_64、App Intents 元数据和签名完整性检查通过；证据为 `precision-ui-native-final-release.log` 与 `precision-ui-native-final-release-verification.json`。实际操作证据为 `precision-ui-native-live-checks.json` 及 `niko-precision-real-ocr-fixed.png`、`niko-precision-real-translation-final.png`；官网 OCR 浅／深色及半尺寸预览已按当前原生编辑器重新渲染。
 
 官网与 README 使用当前产品源码的浅／深色**离屏渲染预览**，只含公开合成文字、图像及隔离设置／数据库。窗口未激活，部分控件显示非活动外观；这类预览用于排版检查，不替代真实应用、键盘焦点、VoiceOver 或拖拽验收。本机 iShot 参考截图与真实验收资料仅保存在忽略的 `build/evidence` 中。
 
