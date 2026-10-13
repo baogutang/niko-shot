@@ -10,7 +10,7 @@ final class ScrollControlState {
     var mode: ScrollCaptureMode = .manual
     /// The stitched image's current height in pixels.
     var height = 0
-    /// Number of accepted screen-sized frames.
+    /// Number of accepted samples; a small wheel movement adds a partial-screen segment.
     var frames = 0
     /// Current capture or recovery message.
     var status = "准备开始"
@@ -36,6 +36,9 @@ final class ScrollControlState {
     var isBacktracking = false
     var ignoredTop = 0
     var ignoredBottom = 0
+    /// Shares the actor's bounded accepted-result thumbnail with the companion preview panel.
+    var preview: ScrollPreviewSnapshot?
+    var showsPreview = true
 
     var progress: ScrollControlProgress {
         ScrollControlProgress(mode: mode, height: height, frames: frames, status: status,
@@ -75,16 +78,19 @@ final class ScrollControlBarController {
     private let onAdvancedSettings: () -> Void
     private let onAutomaticMode: () -> Void
     private let onPause: () -> Void
+    private let onTogglePreview: () -> Void
     private var selectionGlobal: CGRect?
 
     /// Retained HUD count for lifecycle assertions.
     var windowCount: Int { panel == nil ? 0 : 1 }
+    var panelFrame: CGRect? { panel?.frame }
 
     /// Creates controls without allocating a panel or running a timer.
     init(state: ScrollControlState, onFinish: @escaping () -> Void, onCancel: @escaping () -> Void,
          onRetry: @escaping () -> Void, onManualOverlap: @escaping (Int) -> Void,
          onManualMode: @escaping () -> Void, onAdvancedSettings: @escaping () -> Void = {},
-         onAutomaticMode: @escaping () -> Void = {}, onPause: @escaping () -> Void = {}) {
+         onAutomaticMode: @escaping () -> Void = {}, onPause: @escaping () -> Void = {},
+         onTogglePreview: @escaping () -> Void = {}) {
         self.state = state
         self.onFinish = onFinish
         self.onCancel = onCancel
@@ -92,6 +98,7 @@ final class ScrollControlBarController {
         self.onManualOverlap = onManualOverlap
         self.onManualMode = onManualMode
         self.onAdvancedSettings = onAdvancedSettings; self.onAutomaticMode = onAutomaticMode; self.onPause = onPause
+        self.onTogglePreview = onTogglePreview
     }
 
     deinit {
@@ -136,6 +143,7 @@ final class ScrollControlBarController {
             onManualMode: { [weak self] in self?.onManualMode() },
             onAdvancedSettings: { [weak self] in self?.onAdvancedSettings() },
             onAutomaticMode: { [weak self] in self?.onAutomaticMode() }, onPause: { [weak self] in self?.onPause() },
+            onTogglePreview: { [weak self] in self?.onTogglePreview() },
             onLayoutChanged: { [weak self] in self?.resizeForState() }))
         hosting.translatesAutoresizingMaskIntoConstraints = false
         effect.addSubview(hosting)
@@ -219,6 +227,7 @@ private struct ScrollControlBar: View {
     let onAdvancedSettings: () -> Void
     let onAutomaticMode: () -> Void
     let onPause: () -> Void
+    let onTogglePreview: () -> Void
     let onLayoutChanged: () -> Void
     @State private var overlapText: String
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -226,12 +235,13 @@ private struct ScrollControlBar: View {
     init(state: ScrollControlState, onFinish: @escaping () -> Void, onCancel: @escaping () -> Void,
          onRetry: @escaping () -> Void, onManualOverlap: @escaping (Int) -> Void,
          onManualMode: @escaping () -> Void, onAdvancedSettings: @escaping () -> Void,
-         onAutomaticMode: @escaping () -> Void, onPause: @escaping () -> Void,
+         onAutomaticMode: @escaping () -> Void, onPause: @escaping () -> Void, onTogglePreview: @escaping () -> Void,
          onLayoutChanged: @escaping () -> Void) {
         self.state = state
         self.onFinish = onFinish; self.onCancel = onCancel; self.onRetry = onRetry
         self.onManualOverlap = onManualOverlap; self.onManualMode = onManualMode
         self.onAdvancedSettings = onAdvancedSettings; self.onAutomaticMode = onAutomaticMode; self.onPause = onPause
+        self.onTogglePreview = onTogglePreview
         self.onLayoutChanged = onLayoutChanged
         _overlapText = State(initialValue: String(state.overlap))
     }
@@ -245,11 +255,14 @@ private struct ScrollControlBar: View {
                         Text(max(0, state.height).formatted()).font(.system(size: 16, weight: .semibold)).monospacedDigit()
                         Text("px").font(.system(size: 11)).foregroundStyle(.secondary)
                     }
-                    Text("\(state.mode.title) · \(max(0, state.frames)) 屏")
+                    Text("\(state.mode.title) · \(max(0, state.frames)) 段")
                         .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
                 }.frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityElement(children: .combine)
-                    .accessibilityLabel("\(state.mode.title)，长截图高度 \(state.height) 像素，已捕获 \(state.frames) 屏")
+                    .accessibilityLabel("\(state.mode.title)，长截图高度 \(state.height) 像素，已拼接 \(state.frames) 段")
+                ScrollHUDButton(title: state.showsPreview ? "收起实时预览" : "显示实时预览", symbol: "sidebar.right",
+                    tint: state.showsPreview ? NikoTheme.accent : .primary, action: onTogglePreview)
+                    .accessibilityValue(state.showsPreview ? "已显示" : "已收起")
                 ScrollHUDButton(title: state.showsAdvanced ? "收起高级操作" : "展开高级操作", symbol: "slider.horizontal.3",
                     showsTitle: true, visibleTitle: "高级") { state.showsAdvanced.toggle() }
                     .keyboardShortcut(",", modifiers: .command)

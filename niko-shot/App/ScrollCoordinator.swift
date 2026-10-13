@@ -9,7 +9,7 @@ struct ScrollCaptureWorkflow {
     var freezeScreens: () async throws -> [FrozenFrame]
     var windows: () async throws -> [WindowCandidate]
     var prepare: (CaptureContext) async throws -> RegionSnapshot
-    var makeWorker: (ScrollCaptureOptions) -> ScrollCaptureSession = { ScrollCaptureSession(options: $0) }
+    var makeWorker: (ScrollCaptureOptions) -> ScrollCaptureSession = { ScrollCaptureSession(options: $0, previewEnabled: true) }
     var activate: (CaptureContext) -> Void = { context in
         guard !context.appBundleID.isEmpty else { return }
         NSRunningApplication.runningApplications(withBundleIdentifier: context.appBundleID).first?.activate(options: [])
@@ -27,6 +27,7 @@ final class ScrollCoordinator {
     private var reselectionAlert: NSAlert?
     private var reselectionActions: ScrollReselectionActions?
     private var controls: ScrollControlBarController?
+    private var livePreview: ScrollPreviewPanelController?
     private var operationTask: Task<Void, Never>?
     private var operationID: UUID?
     private var operations: [UUID: Task<Void, Never>] = [:]
@@ -40,6 +41,7 @@ final class ScrollCoordinator {
     private var context: CaptureContext?
     private var acceptedSignature: StitchSignature?
     private var pendingImage: CGImage?
+    private var finalViewportPending = false
     private var previewFile: URL?
     private var screenObserver: NSObjectProtocol?
     private var automationID: UUID?
@@ -49,11 +51,13 @@ final class ScrollCoordinator {
     var selectedViewport: CaptureContext? { context }
     /// Scalar state for diagnostics and native workflow regression tests, with no retained pixels.
     var controlProgress: ScrollControlProgress { state.progress }
+    var previewProgress: ScrollPreviewDiagnostics? { livePreview?.diagnostics }
     var resourceCounts: [String: Int] {
         ["operation": operations.count, "loop": loopTask == nil ? 0 : 1,
          "cleanup": cleanupTask == nil ? 0 : 1, "capture": capture == nil ? 0 : 1,
          "worker": session == nil ? 0 : 1, "pendingImage": pendingImage == nil ? 0 : 1,
          "setup": setupWindow == nil ? 0 : 1, "controls": controls?.windowCount ?? 0,
+         "livePreviewWindow": livePreview?.windowCount ?? 0, "livePreviewImage": state.preview == nil ? 0 : 1,
          "reselectionAlert": reselectionAlert == nil ? 0 : 1,
          "reselectionActions": reselectionActions == nil ? 0 : 1,
          "displayObserver": screenObserver == nil ? 0 : 1,
@@ -238,6 +242,8 @@ final class ScrollCoordinator {
 
     private func beginCapture(context: CaptureContext, mode: ScrollCaptureMode, options: ScrollCaptureOptions, token: UUID) async {
         self.context = context; self.options = options; isBusy = true
+        state.preview = nil
+        finalViewportPending = false
         state.mode = mode; state.height = 0; state.frames = 0; state.isPaused = false; state.isMatching = false
         state.isWorking = true; state.requiresRestart = false; state.requiresReselection = false; state.isBacktracking = false
         state.correlation = nil; state.overlap = 150; state.status = "正在捕获首屏…"
@@ -252,9 +258,15 @@ final class ScrollCoordinator {
                 onCancel: { [weak self] in Task { await self?.cancel() } }, onRetry: { [weak self] in self?.retry() },
                 onManualOverlap: { [weak self] in self?.confirmOverlap($0) }, onManualMode: { [weak self] in self?.switchToManual() },
                 onAdvancedSettings: { [weak self] in self?.openAdvanced() },
-                onAutomaticMode: { [weak self] in self?.switchToAutomatic() }, onPause: { [weak self] in self?.pause() })
+                onAutomaticMode: { [weak self] in self?.switchToAutomatic() }, onPause: { [weak self] in self?.pause() },
+                onTogglePreview: { [weak self] in self?.togglePreview() })
         }
         controls?.show(near: context.globalRect)
+        if livePreview == nil {
+            livePreview = ScrollPreviewPanelController(state: state)
+            livePreview?.onUserClose = { [weak self] in self?.state.showsPreview = false }
+        }
+        if state.showsPreview { livePreview?.show(near: context.globalRect, avoiding: controls?.panelFrame) }
         do {
             let prepared = try await workflow.prepare(context)
             try Task.checkCancellation()
@@ -276,6 +288,7 @@ final class ScrollCoordinator {
             try Task.checkCancellation()
             guard generation == token else { return }
             acceptedSignature = signature; apply(result)
+            await refreshPreview(worker: worker, token: token)
             state.maximumOverlap = image.height - options.ignoredTop - options.ignoredBottom - 1
             state.isWorking = false
             installScreenObserver()
@@ -289,7 +302,25 @@ final class ScrollCoordinator {
     }
 
     private func updateValidatedContext(forAutomaticScroll: Bool = false) throws {
-        if let current = try capture?.validatedContext(forAutomaticScroll: forAutomaticScroll) { context = current }
+        if let current = try capture?.validatedContext(forAutomaticScroll: forAutomaticScroll) {
+            let moved = context?.globalRect != current.globalRect
+            context = current
+            if moved { livePreview?.reposition(near: current.globalRect, avoiding: controls?.panelFrame) }
+        }
+    }
+
+    private func refreshPreview(worker: ScrollCaptureSession, token: UUID) async {
+        let snapshot = await worker.livePreview
+        guard generation == token, !Task.isCancelled else { return }
+        state.preview = snapshot
+    }
+
+    /// Keeps capture running when the companion is hidden; reopening displays the current accepted image.
+    func togglePreview() {
+        guard isBusy, let context, let livePreview else { return }
+        state.showsPreview = livePreview.windowCount == 0
+        if state.showsPreview { livePreview.show(near: context.globalRect, avoiding: controls?.panelFrame) }
+        else { livePreview.close() }
     }
 
     private func signature(for image: CGImage, options: ScrollCaptureOptions) async throws -> StitchSignature {
@@ -344,6 +375,7 @@ final class ScrollCoordinator {
                         let signature = try await self.signature(for: image, options: options)
                         guard self.generation == token else { return }
                         duplicates = 0; self.acceptedSignature = signature; self.apply(result)
+                        await self.refreshPreview(worker: worker, token: token)
                     case .duplicate:
                         guard self.loopID == id else { return }
                         if self.state.isBacktracking {
@@ -387,7 +419,9 @@ final class ScrollCoordinator {
             let mode = requireChange && !state.isBacktracking ? state.mode : .automatic
             if gate.observe(previousDifference: previous.map { signature.normalizedDifference(to: $0) } ?? .infinity,
                             acceptedDifference: signature.normalizedDifference(to: acceptedSignature), elapsed: elapsed, mode: mode) { return image }
-            if mode == .automatic, elapsed >= .seconds(6) { return nil }
+            // A manual user may browse upward for as long as they need. The automatic gate
+            // used to recognize the accepted boundary must not turn that into a six-second pause.
+            if (state.mode == .automatic || !requireChange), elapsed >= .seconds(6) { return nil }
             previous = signature
             try await Task.sleep(for: .milliseconds(120))
         }
@@ -525,6 +559,7 @@ final class ScrollCoordinator {
                 guard self.generation == token else { return }
                 self.loopTask = nil; self.pendingImage = nil; self.acceptedSignature = signature
                 self.state.isWorking = false; self.state.isPaused = false; self.state.isMatching = false; self.state.correlation = nil; self.apply(result)
+                await self.refreshPreview(worker: worker, token: token)
                 if let context = self.context { self.workflow.activate(context) }
                 self.startLoop(token: token)
             } catch { await self.handleCaptureError(error, token: token) }
@@ -535,7 +570,9 @@ final class ScrollCoordinator {
     func finish() {
         guard isBusy, operationTask == nil, let worker = session, let context, state.frames > 0, !state.requiresRestart else { return }
         let token = generation, activeLoop = loopTask
-        loopID = UUID(); state.isPaused = true; state.isMatching = false; state.isWorking = true; state.status = "正在逐行生成 PNG…"
+        let collectLastViewport = !state.isPaused || finalViewportPending
+        loopID = UUID(); state.isPaused = true; state.isMatching = false; state.isWorking = true
+        state.status = collectLastViewport ? "正在收取最后一屏…" : "正在生成长图…"
         launchOperation { [weak self] in
             guard let self else { return }
             do {
@@ -543,6 +580,36 @@ final class ScrollCoordinator {
                 try Task.checkCancellation()
                 guard self.generation == token else { return }
                 self.loopTask = nil
+                if collectLastViewport {
+                    self.finalViewportPending = true
+                    do {
+                        guard let image = try await self.stableFrame(token: token, requireChange: false) else {
+                            self.state.isWorking = false
+                            self.state.status = "最后一屏仍在移动，请停稳后点击完成，或继续捕获。"
+                            return
+                        }
+                        let result = try await worker.append(image)
+                        try Task.checkCancellation()
+                        guard self.generation == token else { return }
+                        self.finalViewportPending = false
+                        if case .needsConfirmation(let match) = result {
+                            self.pendingImage = image; self.state.isMatching = true; self.state.showsAdvanced = true
+                            self.state.correlation = match.correlation; self.state.overlap = match.overlap
+                            self.state.maximumOverlap = image.height - (self.options?.ignoredTop ?? 0) - (self.options?.ignoredBottom ?? 0) - 1
+                            self.state.isWorking = false
+                            self.state.status = "最后一屏接缝待确认。确认后可继续；点击完成会输出已经截取的部分。"
+                            return
+                        }
+                        self.apply(result)
+                        await self.refreshPreview(worker: worker, token: token)
+                    } catch is CancellationError { throw CancellationError() }
+                    catch {
+                        self.finalViewportPending = false
+                        await self.handleCaptureError(error, token: token)
+                        return
+                    }
+                }
+                self.state.status = "正在生成长图…"
                 let folder = AppPaths.root.appendingPathComponent("ScrollPreviews", isDirectory: true)
                 let output = folder.appendingPathComponent("\(UUID().uuidString).png")
                 self.previewFile = output
@@ -556,7 +623,8 @@ final class ScrollCoordinator {
                 let image = try await withTaskCancellationHandler { try await decode.value } onCancel: { decode.cancel() }
                 try Task.checkCancellation()
                 guard self.generation == token else { return }
-                self.controls?.close(); self.controls = nil; self.removeScreenObserver()
+                self.controls?.close(); self.controls = nil; self.livePreview?.close(); self.livePreview = nil
+                self.state.preview = nil; self.removeScreenObserver()
                 self.session = nil; self.capture = nil; self.options = nil; self.acceptedSignature = nil; self.pendingImage = nil
                 self.context = nil; self.previewFile = nil; self.isBusy = false; self.state.isWorking = false
                 self.selection.edit(image: image, pointSize: CGSize(width: CGFloat(image.width) / context.screen.scale,
@@ -627,7 +695,7 @@ final class ScrollCoordinator {
         activeLoop?.cancel()
         closeReselectionAlert()
         setupWindow?.onClose = nil; setupWindow?.close(); setupWindow = nil
-        controls?.close(); controls = nil; removeScreenObserver()
+        controls?.close(); controls = nil; livePreview?.close(); livePreview = nil; state.preview = nil; removeScreenObserver()
         selection.finish(); isBusy = true
         await activeLoop?.value
         await worker?.cancel()
@@ -646,6 +714,9 @@ final class ScrollCoordinator {
         state.height = 0; state.frames = 0; state.showsAdvanced = false
         state.ignoredTop = 0; state.ignoredBottom = 0; state.overlap = 150; state.maximumOverlap = 199
         state.mode = .manual; state.status = "准备选择滚动窗口"
+        state.preview = nil
+        state.showsPreview = true
+        finalViewportPending = false
     }
 
     private func installScreenObserver() {

@@ -1,5 +1,6 @@
 // Validates real pixel translations, fixed-band trimming and NCC rejection on a worker executor.
 import CoreGraphics
+import CoreText
 import Foundation
 import ImageIO
 import XCTest
@@ -33,7 +34,7 @@ final class StitcherTests: XCTestCase {
     func testNaturalWheelAndTrackpadStepsSearchTheWholeViewport() async throws {
         let fixture = ScrollImageFixture()
         let previous = try await fixture.frame(width: 193, height: 1_000, start: 0)
-        for movement in [20, 60, 300] {
+        for movement in [1, 2, 5, 20, 60, 300] {
             let current = try await fixture.frame(width: 193, height: 1_000, start: movement)
             let result = try await fixture.match(previous, current)
             XCTAssertEqual(result.overlap, 1_000 - movement, accuracy: 1)
@@ -46,7 +47,7 @@ final class StitcherTests: XCTestCase {
     func testUpwardMovementIsIdentifiedWithoutConvertingItToAForwardSeam() async throws {
         let fixture = ScrollImageFixture()
         let previous = try await fixture.frame(width: 193, height: 1_000, start: 300)
-        for movement in [20, 60, 300] {
+        for movement in [1, 2, 5, 20, 60, 300] {
             let earlier = try await fixture.frame(width: 193, height: 1_000, start: 300 - movement)
             let result = try await fixture.match(previous, earlier)
             XCTAssertEqual(result.overlap, 1_000 - movement, accuracy: 1)
@@ -83,9 +84,9 @@ final class StitcherTests: XCTestCase {
 
     func testBlankDocumentRowsAtTheViewportEdgeDoNotHideForwardOrBackwardMovement() async throws {
         let fixture = ScrollImageFixture()
-        for backward in [false, true] {
+        for backward in [false, true] { for blankHeight in [100, 200, 300, 500] {
             let start = backward ? 300 : 0
-            let blank = backward ? 300..<400 : 900..<1_000
+            let blank = backward ? start..<(start + blankHeight) : (1_000 - blankHeight)..<1_000
             let previous = try await fixture.frame(width: 193, height: 1_000, start: start, blankDocumentRows: blank)
             let current = try await fixture.frame(width: 193, height: 1_000, start: start + (backward ? -60 : 60), blankDocumentRows: blank)
             let result = try await fixture.match(previous, current)
@@ -93,7 +94,7 @@ final class StitcherTests: XCTestCase {
             XCTAssertGreaterThan(result.correlation, 0.99)
             XCTAssertFalse(result.isAmbiguous)
             XCTAssertEqual(result.isBacktracking, backward)
-        }
+        } }
     }
 
     func testFixedHeaderAndFooterAreRemovedBeforeMatchingAndSignatures() async throws {
@@ -141,6 +142,19 @@ final class StitcherTests: XCTestCase {
         XCTAssertGreaterThan(movedDifference, 0.002)
         XCTAssertEqual(shapeDifference, 1)
     }
+
+    func testSparseTextMovementSurvivesBlankPageWithoutAmplifyingOnePixelRasterNoise() async throws {
+        let fixture = ScrollImageFixture()
+        let first = try await fixture.sparseText(start: 0)
+        for movement in [1, 5, 20, 60] {
+            let moved = try await fixture.sparseText(start: movement)
+            let difference = try await fixture.signatureDifference(first, moved)
+            XCTAssertGreaterThan(difference, 0.004, "A real text scroll must pass both stable-frame and duplicate gates")
+        }
+        let noisy = try await fixture.sparseText(start: 0, rasterPixel: true)
+        let noiseDifference = try await fixture.signatureDifference(first, noisy)
+        XCTAssertLessThan(noiseDifference, 0.002, "One isolated backing pixel must not imply document scrolling")
+    }
 }
 
 struct ScrollPNGInspection: Sendable {
@@ -150,6 +164,24 @@ struct ScrollPNGInspection: Sendable {
 
 /// Rasterizes and decodes fixture images away from MainActor; no fixture pixel arrays cross actors.
 actor ScrollImageFixture {
+    /// Draws real CoreText on a mostly blank page on the actor executor.
+    func sparseText(width: Int = 900, height: Int = 1_200, start: Int, rasterPixel: Bool = false) throws -> CGImage {
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { throw ScrollCaptureError.image }
+        context.setFillColor(CGColor(gray: 1, alpha: 1)); context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let attributes: [NSAttributedString.Key: Any] = [NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName("Helvetica" as CFString, 14, nil),
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: 0.15, alpha: 1)]
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: "Small real text on a mostly empty document.", attributes: attributes))
+        context.textPosition = CGPoint(x: 30, y: height - 530 + start)
+        CTLineDraw(line, context)
+        if rasterPixel {
+            context.setFillColor(CGColor(gray: 0, alpha: 1))
+            context.fill(CGRect(x: width - 20, y: height - 40, width: 1, height: 1))
+        }
+        guard let image = context.makeImage() else { throw ScrollCaptureError.image }
+        return image
+    }
+
     func frame(width: Int, height: Int, start: Int, seed: UInt64 = 1, top: Int = 0, bottom: Int = 0,
                chrome: UInt8 = 70, alpha: Bool = false, periodic: Bool = false,
                blankDocumentRows: Range<Int>? = nil) throws -> CGImage {

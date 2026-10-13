@@ -124,6 +124,75 @@ final class ScrollCoordinatorLifecycleTests: XCTestCase {
         }
     }
 
+    func testFinishingImmediatelyAfterScrollingCollectsTheLastViewportAndClosesLivePreview() async throws {
+        let fixture = try await ScrollFlowFixture.make(), source = ScrollFlowSource(images: fixture.images)
+        let selection = SelectionSession()
+        var output: CGImage?
+        let workflow = ScrollCaptureWorkflow(freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
+            prepare: { context in RegionSnapshot(capture: { source.current }, validate: { context }) }, activate: { _ in })
+        let coordinator = ScrollCoordinator(engine: CaptureEngine(), selection: selection, windows: WindowList(),
+            onCapture: { image, _ in output = image }, workflow: workflow)
+        coordinator.continueFromSelection(context: fixture.context)
+        try await waitUntil { coordinator.controlProgress.frames == 1 && !coordinator.controlProgress.isWorking }
+        XCTAssertEqual(coordinator.resourceCounts["livePreviewWindow"], 1)
+        XCTAssertEqual(coordinator.resourceCounts["livePreviewImage"], 1)
+        source.index = 1
+        coordinator.finish() // Do not give the sampling loop a turn to observe this final scroll.
+        try await waitUntil { selection.state == .annotating && coordinator.resourceCounts["operation"] == 0 }
+        XCTAssertEqual(coordinator.controlProgress.height, 352, "Finish must not truncate the last unsettled viewport")
+        XCTAssertEqual(coordinator.resourceCounts["livePreviewWindow"], 0)
+        XCTAssertEqual(coordinator.resourceCounts["livePreviewImage"], 0)
+        selection.confirm()
+        try await waitUntil { output != nil }
+        XCTAssertEqual(output?.height, 352)
+        await coordinator.cancel()
+        XCTAssertEqual(coordinator.resourceCounts.values.reduce(0, +), 0)
+    }
+
+    func testAnUncertainFinalSeamKeepsTheAcceptedLivePreviewAndWaitsForConfirmation() async throws {
+        let fixture = try await ScrollFlowFixture.make()
+        let unrelated = try await ScrollImageFixture().frame(width: 220, height: 320, start: 0, seed: 999)
+        let source = ScrollFlowSource(images: [fixture.images[0], unrelated]), selection = SelectionSession()
+        let workflow = ScrollCaptureWorkflow(freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
+            prepare: { context in RegionSnapshot(capture: { source.current }, validate: { context }) }, activate: { _ in })
+        let coordinator = ScrollCoordinator(engine: CaptureEngine(), selection: selection, windows: WindowList(),
+            onCapture: { _, _ in XCTFail("An unconfirmed last viewport must not be exported") }, workflow: workflow)
+        coordinator.continueFromSelection(context: fixture.context)
+        try await waitUntil { coordinator.controlProgress.frames == 1 && !coordinator.controlProgress.isWorking }
+        source.index = 1; coordinator.finish()
+        try await waitUntil { coordinator.controlProgress.isMatching && coordinator.resourceCounts["operation"] == 0 }
+        XCTAssertEqual(selection.state, .idle)
+        XCTAssertEqual(coordinator.controlProgress.height, 320)
+        XCTAssertTrue(coordinator.controlProgress.status.contains("最后一屏"))
+        XCTAssertFalse(coordinator.controlProgress.isWorking)
+        XCTAssertEqual(coordinator.resourceCounts["livePreviewImage"], 1)
+        await coordinator.cancel()
+        XCTAssertEqual(coordinator.resourceCounts.values.reduce(0, +), 0)
+    }
+
+    func testHidingPreviewKeepsCaptureRunningAndReopeningShowsLatestAcceptedRows() async throws {
+        let fixture = try await ScrollFlowFixture.make(), source = ScrollFlowSource(images: fixture.images)
+        let selection = SelectionSession()
+        let workflow = ScrollCaptureWorkflow(freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
+            prepare: { context in RegionSnapshot(capture: { source.current }, validate: { context }) }, activate: { _ in })
+        let coordinator = ScrollCoordinator(engine: CaptureEngine(), selection: selection, windows: WindowList(),
+            onCapture: { _, _ in }, workflow: workflow)
+        coordinator.continueFromSelection(context: fixture.context)
+        try await waitUntil { coordinator.previewProgress?.frames == 1 && !coordinator.controlProgress.isWorking }
+        coordinator.togglePreview()
+        XCTAssertEqual(coordinator.resourceCounts["livePreviewWindow"], 0)
+        XCTAssertEqual(coordinator.resourceCounts["livePreviewImage"], 1)
+        source.index = 1
+        try await waitUntil { coordinator.controlProgress.frames == 2 }
+        XCTAssertFalse(coordinator.controlProgress.isPaused)
+        coordinator.togglePreview()
+        try await waitUntil { coordinator.previewProgress?.frames == 2 }
+        XCTAssertEqual(coordinator.previewProgress?.sourceSize.height, 352)
+        XCTAssertEqual(coordinator.resourceCounts["livePreviewWindow"], 1)
+        await coordinator.cancel()
+        XCTAssertEqual(coordinator.resourceCounts.values.reduce(0, +), 0)
+    }
+
     func testWindowTranslationFollowsIdentityWhileMovedRegionAndResizeAreRejected() throws {
         let screen = ScreenGeometry(id: 99, frame: CGRect(x: 0, y: 0, width: 800, height: 600), scale: 2)
         let original = ScrollWindowGeometry(id: 42, ownerPID: 123, frame: CGRect(x: 20, y: 120, width: 220, height: 320), isOnScreen: true)

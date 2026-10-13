@@ -14,21 +14,26 @@ public actor ScrollCaptureSession {
     private var frames = 0
     private var width = 0, height = 0, peakBufferBytes = 0
     private var exportDirectory: URL?
+    private var preview: ScrollPreviewAccumulator?
 
     /// Creates a lazy transaction inside a unique child of the supplied working directory.
-    public init(options: ScrollCaptureOptions = ScrollCaptureOptions(), workingDirectory: URL = FileManager.default.temporaryDirectory) {
+    public init(options: ScrollCaptureOptions = ScrollCaptureOptions(), workingDirectory: URL = FileManager.default.temporaryDirectory,
+                previewEnabled: Bool = false) {
         self.options = ScrollCaptureOptions(ignoredTop: options.ignoredTop, ignoredBottom: options.ignoredBottom,
                                             minimumCorrelation: options.minimumCorrelation)
         directory = workingDirectory.appendingPathComponent("niko-scroll-\(UUID().uuidString)", isDirectory: true)
+        if previewEnabled { preview = ScrollPreviewAccumulator() }
     }
 
     /// A scalar snapshot; no CGImage or pixel pointer is exposed to UI.
     public var progress: ScrollCaptureProgress { ScrollCaptureProgress(width: width, height: height, frames: frames, state: state) }
+    /// A bounded, complete thumbnail of accepted rows; nil before the first accepted frame or after cleanup.
+    public var livePreview: ScrollPreviewSnapshot? { preview?.snapshot }
     /// Counts open descriptors/stages and bounded owned buffers, including their observed maximum.
     public var resourceCounts: ScrollResourceCounts {
         ScrollResourceCounts(openFiles: writer?.openFiles ?? 0, chunkFiles: writer?.chunks.count ?? 0,
             ownedDirectories: (writer == nil ? 0 : 1) + (exportDirectory == nil ? 0 : 1),
-            residentBufferBytes: (previous?.residentBytes ?? 0) + (writer?.residentBufferBytes ?? 0),
+            residentBufferBytes: (previous?.residentBytes ?? 0) + (writer?.residentBufferBytes ?? 0) + (preview?.residentBufferBytes ?? 0),
             peakBufferBytes: peakBufferBytes)
     }
 
@@ -122,7 +127,13 @@ public actor ScrollCaptureSession {
             guard let writer else { throw ScrollCaptureError.noFrames }
             try writer.append(image: image, firstRow: options.ignoredTop + overlap, numberOfRows: next.height - overlap)
             previous = next; frames += 1; height = writer.height; state = .capturing
-            peakBufferBytes = max(peakBufferBytes, writer.peakBufferBytes + next.residentBytes * 2)
+            if preview != nil {
+                do { try preview?.append(image, firstRow: options.ignoredTop + overlap, rows: next.height - overlap,
+                                         sourceHeight: height, frames: frames) }
+                catch is CancellationError { throw CancellationError() }
+                catch { preview = nil } // Preview allocation must never destroy accepted full-resolution content.
+            }
+            peakBufferBytes = max(peakBufferBytes, writer.peakBufferBytes + next.residentBytes * 2 + (preview?.residentBufferBytes ?? 0) * 2)
             return .appended(height: height, frames: frames)
         } catch {
             if error is CancellationError || Task.isCancelled || cancellation.withLock({ $0 }) {
@@ -140,7 +151,7 @@ public actor ScrollCaptureSession {
         }
     }
     private func cleanup() {
-        writer?.cleanup(); writer = nil; previous = nil
+        writer?.cleanup(); writer = nil; previous = nil; preview = nil
         if let exportDirectory { try? FileManager.default.removeItem(at: exportDirectory) }
         exportDirectory = nil
     }

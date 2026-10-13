@@ -9,17 +9,19 @@ public struct StitchSignature: Sendable {
     public let height: Int
     private let values: [Float]
     init(width: Int, height: Int, values: [Float]) { self.width = width; self.height = height; self.values = values }
-    /// Returns normalized absolute luminance difference; shape changes always return one.
+    /// Keeps localized text motion visible without letting the surrounding blank page dilute it.
     public func normalizedDifference(to other: StitchSignature) -> Float {
         guard width == other.width, height == other.height, values.count == other.values.count, !values.isEmpty else { return 1 }
-        var difference: Float = 0
-        for index in values.indices { difference += abs(values[index] - other.values[index]) }
-        return min(1, max(0, difference / Float(values.count)))
+        let differences = values.indices.map { abs(values[$0] - other.values[$0]) }.sorted(by: >)
+        // Average an upper tail rather than one maximum pixel, so subpixel raster jitter stays small.
+        let count = max(1, (differences.count + 49) / 50)
+        return min(1, max(0, differences.prefix(count).reduce(0, +) / Float(count)))
     }
 }
 
 struct StitchFrameAnalysis: Sendable {
     let width: Int, height: Int, sampleWidth: Int, bandHeight: Int
+    let topInset: Int, bottomInset: Int
     let top: [Float], bottom: [Float]
     let profileWidth: Int, profileHeight: Int
     let profile: [Float]
@@ -48,17 +50,23 @@ public enum Stitcher {
     static func analyze(_ image: CGImage, top: Int, bottom: Int) throws -> StitchFrameAnalysis {
         let rect = try contentRect(image, top: top, bottom: bottom)
         let height = Int(rect.height), bandHeight = min(200, height), width = min(256, image.width)
-        let upper = CGRect(x: 0, y: rect.minY, width: CGFloat(image.width), height: CGFloat(bandHeight))
-        let lower = CGRect(x: 0, y: rect.maxY - CGFloat(bandHeight), width: CGFloat(image.width), height: CGFloat(bandHeight))
         // Spend the fixed sample budget on native rows before columns: vertically reducing text
         // can hide odd small movements. Extremely tall inputs still use a bounded coarse map.
         let profileHeight = min(65_536, height)
         let profileWidth = min(32, image.width, max(1, 65_536 / profileHeight))
+        let profile = try luminance(image, crop: rect, width: profileWidth, height: profileHeight)
+        let topInset = informativeBandInset(profile, width: profileWidth, height: profileHeight,
+                                           nativeHeight: height, bandHeight: bandHeight, backward: true)
+        let bottomInset = informativeBandInset(profile, width: profileWidth, height: profileHeight,
+                                              nativeHeight: height, bandHeight: bandHeight, backward: false)
+        let upper = CGRect(x: 0, y: rect.minY + CGFloat(topInset), width: CGFloat(image.width), height: CGFloat(bandHeight))
+        let lower = CGRect(x: 0, y: rect.maxY - CGFloat(bottomInset + bandHeight), width: CGFloat(image.width), height: CGFloat(bandHeight))
         return try StitchFrameAnalysis(width: image.width, height: height, sampleWidth: width, bandHeight: bandHeight,
+            topInset: topInset, bottomInset: bottomInset,
             top: luminance(image, crop: upper, width: width, height: bandHeight),
             bottom: luminance(image, crop: lower, width: width, height: bandHeight),
             profileWidth: profileWidth, profileHeight: profileHeight,
-            profile: luminance(image, crop: rect, width: profileWidth, height: profileHeight),
+            profile: profile,
             signature: signature(for: image, ignoringTop: top, ignoringBottom: bottom))
     }
 
@@ -93,12 +101,12 @@ public enum Stitcher {
                                     previousRows: previousRows / 2,
                                     current: pyramid(currentMap, width: columns, height: currentRows), currentRows: currentRows / 2,
                                     columns: max(1, columns / 2), first: max(1, first / 2), band: 32,
-                                    maximumBand: max(1, 100 / stride))
+                                    maximumBand: max(1, previousRows / 2))
         // Scan the narrow map at its original row phase as well. A pyramid alone can hide an odd
         // one-pixel shift in high-frequency text/noise; wide native verification is restricted to peaks.
         let scores = try candidates(previous: previousMap, previousRows: previousRows,
                                     current: currentMap, currentRows: currentRows, columns: columns, first: first, band: 64,
-                                    maximumBand: max(1, 200 / stride))
+                                    maximumBand: previousRows)
         guard let global = scores.max(by: { $0.score < $1.score }) else {
             return StitchMatch(overlap: 0, correlation: 0, isAmbiguous: true)
         }
@@ -121,8 +129,13 @@ public enum Stitcher {
             let center = peak.overlap * stride
             for overlap in max(80, center - radius)...min(maximum, center + radius) {
                 try Task.checkCancellation()
-                let rows = min(previous.bandHeight, current.bandHeight, overlap)
-                let firstRow = peak.backward ? current.height - overlap : overlap - rows
+                let inset = peak.backward ? previous.topInset : previous.bottomInset
+                let rows = min(previous.bandHeight, current.bandHeight, overlap - inset)
+                guard rows > 1 else {
+                    verified.append(Candidate(overlap: overlap, score: 0, backward: peak.backward))
+                    continue
+                }
+                let firstRow = peak.backward ? current.height - overlap + inset : overlap - inset - rows
                 let patch = try luminance(currentImage,
                     crop: CGRect(x: 0, y: ignoringTop + firstRow, width: current.width, height: rows),
                     width: previous.sampleWidth, height: rows)
@@ -186,6 +199,31 @@ public enum Stitcher {
             if let best { choices.append(best) }
         }
         return choices
+    }
+
+    private static func informativeBandInset(_ values: [Float], width: Int, height: Int,
+                                             nativeHeight: Int, bandHeight: Int, backward: Bool) -> Int {
+        let rows = max(1, min(height, bandHeight * height / nativeHeight)), count = rows * width
+        let limit = height - rows
+        func variance(at distance: Int) -> Float {
+            let offset = (backward ? distance : height - rows - distance) * width
+            var sum: Float = 0, squares: Float = 0
+            values.withUnsafeBufferPointer { buffer in
+                guard let base = buffer.baseAddress else { return }
+                vDSP_sve(base.advanced(by: offset), 1, &sum, vDSP_Length(count))
+                vDSP_svesq(base.advanced(by: offset), 1, &squares, vDSP_Length(count))
+            }
+            return max(0, squares - sum * sum / Float(count))
+        }
+        var bestVariance = variance(at: 0), bestDistance = 0
+        // Keep existing edge verification whenever it contains identifiable detail.
+        if bestVariance > Float(count) * 0.000_01 { return 0 }
+        for distance in stride(from: 0, through: limit, by: max(1, rows / 4)) {
+            let value = variance(at: distance)
+            if value > bestVariance { bestVariance = value; bestDistance = distance }
+        }
+        if variance(at: limit) > bestVariance { bestDistance = limit }
+        return min(nativeHeight - bandHeight, bestDistance * nativeHeight / height)
     }
 
     private static func ncc(_ first: [Float], reference: ReferenceWindow, _ second: [Float], offset b: Int, count: Int) -> Float {

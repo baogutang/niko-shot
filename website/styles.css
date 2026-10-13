@@ -170,7 +170,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .preview-tabs button:focus-visible { outline-offset: -4px; }
 .native-image-wrap { display: flex; align-items: center; justify-content: center; height: clamp(360px, 52vw, 660px); padding: 24px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--surface); overflow: hidden; }
 .native-image-wrap img { width: auto; max-width: 100%; max-height: 100%; height: auto; box-shadow: 0 20px 48px -22px var(--shadow); border-radius: 8px; }
-.native-image-wrap img.scroll-preview { max-width: min(100%, 384px); }
+.native-image-wrap img.scroll-preview { max-width: min(100%, 880px); }
 .native-preview figcaption { font-size: 11px; line-height: 1.8; color: var(--muted); margin-top: 16px; max-width: 800px; }
 .translation-section { display: grid; grid-template-columns: 1fr 1fr; gap: 80px; align-items: start; padding-top: 38px; }
 .translation-heading > p { max-width: 380px; margin-top: 22px; font-size: 15px; line-height: 1.85; }
