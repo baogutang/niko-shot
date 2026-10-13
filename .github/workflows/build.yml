@@ -243,12 +243,17 @@ jobs:
           version="${RELEASE_TAG#v}"
           gh release create "$RELEASE_TAG" distribution/* --verify-tag --target "$RELEASE_SHA" \
             --draft --latest=false --title "niko-shot $version" --notes-file release-notes.md
-          gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" > uploaded-release.json
+          # Drafts have an untagged URL and cannot be read through the tag endpoint.
+          gh api "repos/$GH_REPO/releases?per_page=100" --paginate --slurp > release-pages.json
           python3 - <<'PYTHON'
           import hashlib, json, os
           from pathlib import Path
-          release = json.loads(Path('uploaded-release.json').read_text())
-          assert release['tag_name'] == os.environ['RELEASE_TAG']
+          pages = json.loads(Path('release-pages.json').read_text())
+          matches = [release for page in pages for release in page
+                     if release['tag_name'] == os.environ['RELEASE_TAG']]
+          assert len(matches) == 1, 'Expected exactly one release for this version.'
+          release = matches[0]
+          assert release['target_commitish'] == os.environ['RELEASE_SHA']
           assert release['draft'] is True and release['prerelease'] is False
           files = {path.name: path for path in Path('distribution').iterdir()}
           assets = release['assets']
@@ -258,7 +263,10 @@ jobs:
               path = files[asset['name']]
               assert asset['state'] == 'uploaded' and asset['size'] == path.stat().st_size
               assert asset['digest'] == 'sha256:' + hashlib.sha256(path.read_bytes()).hexdigest()
+          assert type(release['id']) is int and release['id'] > 0
+          Path('release-id.txt').write_text(str(release['id']))
           PYTHON
+          release_id="$(cat release-id.txt)"
           if gh api "repos/$GH_REPO/releases/latest" > latest-release.json 2> latest-error.txt; then
             mark_latest="$(python3 - <<'PYTHON'
           import json, os, re
@@ -275,8 +283,8 @@ jobs:
             cat latest-error.txt >&2
             exit 1
           fi
-          gh release edit "$RELEASE_TAG" --verify-tag --draft=false --prerelease=false --latest="$mark_latest"
-          gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" > published-release.json
+          gh api --method PATCH "repos/$GH_REPO/releases/$release_id" \
+            -F draft=false -F prerelease=false -f make_latest="$mark_latest" > published-release.json
           python3 - <<'PYTHON'
           import json, os
           from pathlib import Path
