@@ -31,7 +31,7 @@ struct ScrollSetupView: View {
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 16) {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack(spacing: 12) {
                             Text("滚动方式").fontWeight(.semibold).accessibilityAddTraits(.isHeader)
@@ -41,12 +41,12 @@ struct ScrollSetupView: View {
                             Spacer()
                         }
                         Text(mode == .automatic
-                             ? "自动向下滚动并拼接。请保持窗口位置，等待捕获完成。"
-                             : "自行向下滚动，画面稳定后自动捕获；完成时点“结束”。")
+                             ? "自动向下滚动并拼接，请保持窗口静止。"
+                             : "自行向下滚动，稳定后自动捕获；完成点“结束”。")
                             .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         if mode == .automatic && !automaticAllowed {
                             HStack(alignment: .firstTextBaseline, spacing: 12) {
-                                Label("未授予辅助功能权限，将使用手动滚动。", systemImage: "info.circle")
+                                Label("未授权，开始后将转为手动滚动。", systemImage: "info.circle")
                                     .font(.system(size: 12)).foregroundStyle(.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
                                 Spacer(minLength: 0)
@@ -71,7 +71,7 @@ struct ScrollSetupView: View {
                             }.pickerStyle(.segmented).labelsHidden().frame(width: 250).accessibilityLabel("选择要编辑的固定栏")
                             Spacer()
                         }
-                        Text("拖动预览中的分界线，或输入像素数。高亮固定栏会从每一帧裁去。")
+                        Text("拖动分界线或输入像素，固定栏将从每帧裁去。")
                             .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         preview.frame(height: 258)
                         HStack(spacing: 20) {
@@ -82,7 +82,7 @@ struct ScrollSetupView: View {
                             Text("\(image.width) × \(image.height) px").foregroundStyle(.secondary)
                             Spacer()
                             Label("有效高度 \(usableHeight) px", systemImage: usableHeight >= 240 ? "checkmark.circle" : "exclamationmark.circle")
-                                .foregroundStyle(usableHeight >= 240 ? Color.secondary : Color.red)
+                                .foregroundStyle(usableHeight >= 240 ? NikoTheme.accent : Color.red)
                         }.font(.system(size: 12)).monospacedDigit()
                         if image.height < 240 {
                             Text("滚动区域高度至少需要 240 px，请取消后重新框选。")
@@ -91,17 +91,21 @@ struct ScrollSetupView: View {
                     }
                 }.padding(20)
             }
+            .background(NikoTheme.surface)
             Divider()
             HStack(spacing: 12) {
                 Button("取消", action: onCancel).keyboardShortcut(.cancelAction).accessibilityLabel("取消长截图设置")
                 Spacer()
                 Button("开始长截图") { onStart(mode, ignoredTop, ignoredBottom) }
                     .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                    .foregroundStyle(NikoTheme.onAccent)
                     .disabled(usableHeight < 240).accessibilityLabel("使用所选滚动方式和忽略区域开始长截图")
             }.padding(.horizontal, 20).padding(.vertical, 12)
+                .background(NikoTheme.raisedSurface.opacity(0.35))
         }
         .font(.system(size: 13)).controlSize(.regular)
         .background(NikoTheme.canvas)
+        .tint(NikoTheme.accent)
         .frame(minWidth: 560, idealWidth: 620, minHeight: 560, idealHeight: 640)
     }
 
@@ -144,8 +148,8 @@ struct ScrollSetupView: View {
                 boundary(width: width, active: edge == .bottom).offset(y: height - bottom)
             }
             .frame(width: width, height: height).background(NikoTheme.canvas)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(NikoTheme.separator.opacity(0.45), lineWidth: 0.5))
+            .clipShape(RoundedRectangle(cornerRadius: NikoTheme.cornerRadius))
+            .overlay(RoundedRectangle(cornerRadius: NikoTheme.cornerRadius).strokeBorder(NikoTheme.separator.opacity(0.45), lineWidth: 0.5))
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0).onChanged { event in
                 guard height > 0 else { return }
@@ -162,7 +166,7 @@ struct ScrollSetupView: View {
     }
 
     private func ignoredBand(height: CGFloat, count: Int) -> some View {
-        Rectangle().fill(Color.accentColor.opacity(0.28)).frame(height: height)
+        Rectangle().fill(NikoTheme.accent.opacity(0.28)).frame(height: height)
             .overlay {
                 if height >= 22 {
                     Text("忽略 \(count) px").font(.caption.weight(.medium)).monospacedDigit()
@@ -172,9 +176,9 @@ struct ScrollSetupView: View {
     }
 
     private func boundary(width: CGFloat, active: Bool) -> some View {
-        Rectangle().fill(active ? Color.accentColor : Color.primary.opacity(0.5)).frame(width: width, height: 2)
+        Rectangle().fill(active ? NikoTheme.accent : Color.primary.opacity(0.5)).frame(width: width, height: 2)
             .overlay {
-                Capsule().fill(active ? Color.accentColor : Color.secondary).frame(width: 28, height: 5)
+                Capsule().fill(active ? NikoTheme.accent : Color.secondary).frame(width: 28, height: 5)
             }
     }
 }

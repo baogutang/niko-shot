@@ -8,6 +8,14 @@ struct CaptureContext: Sendable {
     var appBundleID: String = ""
     var windowID: UInt32?
     var globalRect: CGRect { CoordinateSpace.localToGlobal(localRect, screen: screen) }
+
+    /// Imported and stitched images use a synthetic display and cannot identify live screen pixels.
+    var hasLiveScreenRegion: Bool {
+        screen.id != 0 && screen.scale.isFinite && screen.scale > 0 &&
+        localRect.origin.x.isFinite && localRect.origin.y.isFinite &&
+        localRect.width.isFinite && localRect.height.isFinite &&
+        localRect.width > 0 && localRect.height > 0 && screen.localBounds.contains(localRect)
+    }
 }
 
 @MainActor
@@ -25,6 +33,7 @@ final class SelectionSession {
     private var confirmationTitle: String?
     private var appBundleID = ""
     private var windowID: UInt32?
+    private var windowCandidates: [WindowCandidate] = []
     private var toolbar: ToolbarController?
     private var canvas: AnnotationCanvasView?
     private var editorContext: CaptureContext?
@@ -33,6 +42,8 @@ final class SelectionSession {
     private var resumedDocument: AnnotationDocument?
     private var resumedContext: CaptureContext?
     var onFinish: ((Bool) -> Void)?
+    /// Receives the original viewport after overlays close; nil explicitly requires screen reselection.
+    var onScrollCapture: ((CaptureContext?) -> Void)?
     var outputAction: ToolbarAction = .copy
     private var annotationColor = AnnotationColor.red
     private var annotationWidth: CGFloat = 3
@@ -121,7 +132,10 @@ final class SelectionSession {
         generation = UUID()
         outputAction = .copy
         captureKind = kind
+        appBundleID = initial?.appBundleID ?? ""
+        windowID = initial?.windowID
         self.confirmationTitle = confirmationTitle
+        windowCandidates = candidates
         store.replace(frames)
         state = .frozen
         for frame in frames {
@@ -129,8 +143,10 @@ final class SelectionSession {
             view.candidates = candidates
             view.windowMode = kind == "window"
             view.onSelection = { [weak self, weak view] rect in
-                self?.appBundleID = view?.selectedWindow?.appBundleID ?? ""
-                self?.windowID = view?.selectedWindow?.id
+                let global = CoordinateSpace.localToGlobal(rect, screen: frame.screen)
+                let target = view?.selectedWindow ?? self?.windowCandidates.first { $0.frame.contains(CGPoint(x: global.midX, y: global.midY)) }
+                self?.appBundleID = target?.appBundleID ?? ""
+                self?.windowID = target?.id
                 self?.select(frame: frame, rect: rect)
             }
             view.onConfirm = { [weak self] in self?.confirm() }
@@ -152,6 +168,7 @@ final class SelectionSession {
         if let initial, let frame = store.frames[initial.screen.id],
            let view = windows.first(where: { ($0.contentView as? SelectionView)?.frameInfo.screen.id == frame.screen.id })?.contentView as? SelectionView {
             view.selection = SelectionGeometry.clamp(initial.localRect, bounds: frame.screen.localBounds)
+            view.selectedWindow = candidates.first { $0.id == initial.windowID }
             select(frame: frame, rect: view.selection)
             if autoConfirm { confirm() }
         }
@@ -169,6 +186,7 @@ final class SelectionSession {
         selected = (frame, rect)
         state = rect.isEmpty ? .selecting : .selected
         if !rect.isEmpty { showToolbar(context: CaptureContext(screen: frame.screen, localRect: rect, kind: captureKind, appBundleID: appBundleID, windowID: windowID)) }
+        updateScrollAvailability()
     }
 
     private func showToolbar(context: CaptureContext) {
@@ -181,6 +199,42 @@ final class SelectionSession {
         }
         if let window = imageEditorWindow { toolbar?.show(near: window.frame, screenFrame: window.screen?.frame ?? NSScreen.main?.frame ?? window.frame) }
         else { toolbar?.show(near: context.globalRect, screenFrame: context.screen.frame) }
+        updateScrollAvailability()
+    }
+
+    private var scrollCaptureContext: CaptureContext? {
+        guard imageEditorWindow == nil else { return nil }
+        if let editorContext, editorContext.hasLiveScreenRegion { return editorContext }
+        guard let (frame, rect) = selected else { return nil }
+        let context = CaptureContext(screen: frame.screen, localRect: rect, kind: captureKind,
+                                     appBundleID: appBundleID, windowID: windowID)
+        return context.hasLiveScreenRegion ? context : nil
+    }
+
+    private var scrollUnavailableReason: String? {
+        guard state == .selected || state == .annotating else {
+            return state == .exporting ? "正在输出截图，请等待完成。" : "请先框选要滚动捕获的屏幕区域。"
+        }
+        if imageEditorWindow != nil { return nil }
+        guard let context = scrollCaptureContext else { return "请先框选要滚动捕获的屏幕区域。" }
+        guard context.localRect.height * context.screen.scale >= 240 else { return "选区高度不足 240 像素，请增大选区后开始长截图。" }
+        return nil
+    }
+
+    private func updateScrollAvailability() {
+        let reason = scrollUnavailableReason
+        toolbar?.setScrollAvailability(enabled: reason == nil,
+            explanation: reason ?? (imageEditorWindow == nil ? "沿当前选区捕获滚动内容。" : "历史或导入图片没有屏幕选区；点击后重新选择屏幕区域。"))
+    }
+
+    /// Hands live coordinates to scrolling without exporting or baking the current annotations.
+    func requestScrollCapture() {
+        guard scrollUnavailableReason == nil else { return }
+        outputAction = .scroll
+        guard let callback = onScrollCapture else { confirm(); return }
+        let context = scrollCaptureContext
+        finish(completed: true)
+        callback(context)
     }
 
     /// Crops, archives and releases the full-screen backing images before native annotation.
@@ -236,16 +290,18 @@ final class SelectionSession {
         case .undo: canvas?.undo()
         case .redo: canvas?.redo()
         case .close: finish()
+        case .scroll: requestScrollCapture()
         case .selection:
             if imageEditorWindow != nil { toggleEditorSelection(); return }
             guard let archive else { return }
             let callback = completion, kind = captureKind, savedDocument = canvas?.document, savedContext = editorContext, token = generation
+            let candidates = windowCandidates
             let gate = afterImageOperation
             runOperation { [weak self] in
                 do {
                     let frame = try await Self.imageWork(after: gate) { try SnapshotArchive.read(archive) }
                     guard !Task.isCancelled, let self, self.generation == token, let callback else { return }
-                    self.start(frames: [frame], kind: kind, initial: savedContext, autoConfirm: false, completion: callback)
+                    self.start(frames: [frame], candidates: candidates, kind: kind, initial: savedContext, autoConfirm: false, completion: callback)
                     self.resumedDocument = savedDocument; self.resumedContext = savedContext
                 } catch {
                     guard !Task.isCancelled, self?.generation == token else { return }
@@ -274,7 +330,10 @@ final class SelectionSession {
         let view = SelectionView(frameInfo: source)
         view.selection = editorContext?.localRect ?? source.screen.localBounds
         selected = (source, view.selection); state = .selected
-        view.onSelection = { [weak self] rect in self?.selected = (source, rect); self?.state = rect.isEmpty ? .selecting : .selected }
+        view.onSelection = { [weak self] rect in
+            self?.selected = (source, rect); self?.state = rect.isEmpty ? .selecting : .selected
+            self?.updateScrollAvailability()
+        }
         view.onConfirm = { [weak self] in self?.applyEditorCrop(output: .copy) }
         view.onAnnotate = { [weak self] in self?.applyEditorCrop() }
         view.onSave = { [weak self] in self?.applyEditorCrop(output: .save) }
@@ -311,6 +370,7 @@ final class SelectionSession {
         if imageEditorWindow != nil, state == .selected { applyEditorCrop(output: outputAction); return }
         if let canvas, let context = editorContext, state == .annotating {
             state = .exporting
+            updateScrollAvailability()
             let document = canvas.document, base = canvas.base, callback = completion
             let token = generation
             let scale = CGFloat(base.width) / max(1, document.canvasSize.width)
@@ -331,6 +391,7 @@ final class SelectionSession {
         let pixels = CoordinateSpace.imagePixelRect(fromSelection: rect, screen: frame.screen)
         guard pixels.width >= 1, pixels.height >= 1 else { return }
         state = .exporting
+        updateScrollAvailability()
         let callback = completion
         let token = generation
         let context = CaptureContext(screen: frame.screen, localRect: rect, kind: captureKind, appBundleID: appBundleID, windowID: windowID)
@@ -370,6 +431,7 @@ final class SelectionSession {
         selected = nil
         activeScreen = nil
         appBundleID = ""; windowID = nil; confirmationTitle = nil
+        windowCandidates.removeAll()
         completion = nil
         monitorCount = 0
         toolbar?.close(); toolbar = nil
@@ -386,6 +448,11 @@ final class SelectionSession {
     /// Completes native rendering and preview cancellation before application termination.
     func finishAndDrain() async {
         finish()
+        await drainPendingOperations()
+    }
+
+    /// Waits for cancelled crop/render/preview workers without changing a newer session's state.
+    func drainPendingOperations() async {
         while !operations.isEmpty || !retiringCanvases.isEmpty {
             let pending = Array(operations.values) + Array(retiringCanvases.values)
             for operation in pending { await operation.value }

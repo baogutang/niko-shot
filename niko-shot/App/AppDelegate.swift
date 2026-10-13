@@ -54,6 +54,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
+        selectionSession.onScrollCapture = { [weak self] context in
+            guard let self, !self.isTerminating, !self.recording.isBusy, !self.scrolling.isBusy else { return }
+            self.installApplicationMenu()
+            self.scrolling.continueFromSelection(context: context)
+        }
         LaunchDiagnostics.record("before-activation-policy")
         if NSApp.activationPolicy() != .accessory { NSApp.setActivationPolicy(.accessory) }
         LaunchDiagnostics.record("activation-policy")
@@ -180,8 +185,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func handleCapture(_ image: CGImage, context: CaptureContext) {
         if selectionSession.outputAction == .scroll {
-            if context.screen.id == 0 { scrolling.select() }
-            else { scrolling.showSetup(image: image, context: context) }
+            guard !isTerminating else { return }
+            scrolling.continueFromSelection(context: context.hasLiveScreenRegion ? context : nil)
             return
         }
         if context.screen.id != 0 {

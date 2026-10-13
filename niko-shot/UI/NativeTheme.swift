@@ -2,28 +2,51 @@
 import AppKit
 import SwiftUI
 
-/// Semantic system colors; the system controls light, dark and increased-contrast appearances.
+/// Warm, adaptive surfaces; text and separators retain native system contrast behavior.
 @MainActor
 enum NikoTheme {
-  static var canvas: Color { Color(nsColor: .windowBackgroundColor) }
-  static var surface: Color { Color(nsColor: .controlBackgroundColor) }
+  static var canvas: Color {
+    adaptive(light: (0.965, 0.960, 0.949), dark: (0.095, 0.099, 0.108))
+  }
+  static var surface: Color {
+    adaptive(light: (1.000, 0.997, 0.987), dark: (0.135, 0.140, 0.150))
+  }
+  static var raisedSurface: Color {
+    adaptive(light: (0.945, 0.937, 0.923), dark: (0.175, 0.180, 0.190))
+  }
+  static var accent: Color {
+    adaptive(light: (0.620, 0.380, 0.105), dark: (0.955, 0.705, 0.365))
+  }
+  static var onAccent: Color {
+    adaptive(light: (1.000, 1.000, 1.000), dark: (0.115, 0.100, 0.075))
+  }
+  static var selection: Color { accent.opacity(0.12) }
   static var separator: Color { Color(nsColor: .separatorColor) }
-  static let cornerRadius: CGFloat = 8
+  static let cornerRadius: CGFloat = 10
+
+  private static func adaptive(
+    light: (Double, Double, Double), dark: (Double, Double, Double)
+  ) -> Color {
+    Color(nsColor: NSColor(name: nil) { appearance in
+      let value = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+      return NSColor(srgbRed: value.0, green: value.1, blue: value.2, alpha: 1)
+    })
+  }
 }
 
 /// A quiet symbol tile used to identify a task or a preference category.
 @MainActor
 struct NikoSymbolBadge: View {
   let symbol: String
-  var tint: Color = .accentColor
+  var tint: Color = NikoTheme.accent
   var size: CGFloat = 24
 
   var body: some View {
     Image(systemName: symbol)
       .font(.system(size: size * 0.54, weight: .medium))
-      .foregroundStyle(.white)
+      .foregroundStyle(tint)
       .frame(width: size, height: size)
-      .background(tint, in: RoundedRectangle(cornerRadius: size * 0.22))
+      .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: size * 0.25))
       .accessibilityHidden(true)
   }
 }
@@ -36,14 +59,15 @@ struct NikoPageHeader: View {
   let symbol: String
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      Label(title, systemImage: symbol)
-        .font(.system(size: 20, weight: .semibold))
-        .labelStyle(.titleOnly)
-        .accessibilityAddTraits(.isHeader)
-      if !subtitle.isEmpty {
-        Text(subtitle).font(.system(size: 12)).foregroundStyle(.secondary)
-          .fixedSize(horizontal: false, vertical: true)
+    HStack(alignment: .top, spacing: 10) {
+      NikoSymbolBadge(symbol: symbol, size: 28)
+      VStack(alignment: .leading, spacing: 4) {
+        Text(title).font(.system(size: 20, weight: .semibold))
+          .accessibilityAddTraits(.isHeader)
+        if !subtitle.isEmpty {
+          Text(subtitle).font(.system(size: 12)).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -54,6 +78,7 @@ struct NikoPageHeader: View {
 @MainActor
 struct NikoPanel<Content: View>: View {
   private let content: Content
+  @Environment(\.colorSchemeContrast) private var contrast
 
   init(@ViewBuilder content: () -> Content) { self.content = content() }
 
@@ -63,7 +88,9 @@ struct NikoPanel<Content: View>: View {
       .background(NikoTheme.surface, in: RoundedRectangle(cornerRadius: NikoTheme.cornerRadius))
       .overlay {
         RoundedRectangle(cornerRadius: NikoTheme.cornerRadius)
-          .strokeBorder(NikoTheme.separator.opacity(0.35), lineWidth: 0.5)
+          .strokeBorder(
+            NikoTheme.separator.opacity(contrast == .increased ? 1 : 0.5),
+            lineWidth: contrast == .increased ? 1 : 0.5)
       }
   }
 }
@@ -85,7 +112,7 @@ struct NikoSection<Content: View>: View {
     Section {
       content
     } header: {
-      Text(title).font(.system(size: 13, weight: .semibold))
+      Text(title).font(.system(size: 12, weight: .semibold))
         .accessibilityAddTraits(.isHeader)
     } footer: {
       if let footer {
@@ -147,6 +174,26 @@ struct NikoShortcutHint: View {
   }
 }
 
+/// A compact empty state that identifies the next useful action without oversized decoration.
+@MainActor
+struct NikoEmptyState: View {
+  let title: String
+  let symbol: String
+  let detail: String
+
+  var body: some View {
+    VStack(spacing: 12) {
+      Image(systemName: symbol).font(.system(size: 28, weight: .light))
+        .foregroundStyle(NikoTheme.accent.opacity(0.7)).accessibilityHidden(true)
+      Text(title).font(.system(size: 15, weight: .medium))
+      Text(detail).font(.system(size: 12)).foregroundStyle(.secondary)
+        .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: 280)
+    }
+    .padding(24).frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+}
+
 /// Subtle native hover and press feedback for the task launcher; keyboard focus stays visible.
 @MainActor
 struct NikoActionButtonStyle: ButtonStyle {
@@ -165,7 +212,7 @@ struct NikoActionButtonStyle: ButtonStyle {
       .overlay {
         RoundedRectangle(cornerRadius: 6)
           .strokeBorder(
-            Color.accentColor.opacity(isFocused ? 0.8 : prominent ? 0.18 : 0),
+            NikoTheme.accent.opacity(isFocused ? 0.8 : prominent ? 0.28 : 0),
             lineWidth: isFocused ? 2 : 0.5)
       }
       .opacity(isEnabled ? 1 : 0.45)
@@ -175,7 +222,7 @@ struct NikoActionButtonStyle: ButtonStyle {
   }
 
   private func background(pressed: Bool) -> Color {
-    if prominent { return Color.accentColor.opacity(pressed ? 0.21 : hovering ? 0.17 : 0.1) }
+    if prominent { return NikoTheme.accent.opacity(pressed ? 0.21 : hovering ? 0.17 : 0.1) }
     return Color.primary.opacity(pressed ? 0.09 : hovering ? 0.055 : 0.025)
   }
 }

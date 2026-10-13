@@ -47,7 +47,9 @@ public struct SettingsView: View {
           Section(category.title) {
             ForEach(category.sections) { item in
               HStack(spacing: 8) {
-                NikoSymbolBadge(symbol: item.symbol, tint: item.tint, size: 22)
+                NikoSymbolBadge(
+                  symbol: item.symbol, tint: currentSection == item ? NikoTheme.accent : .secondary,
+                  size: 22)
                 Text(item.title).font(.system(size: 13))
                 Spacer(minLength: 0)
               }
@@ -59,11 +61,24 @@ public struct SettingsView: View {
         }
       }
       .listStyle(.sidebar)
+      .tint(NikoTheme.accent)
       .accessibilityLabel("设置分类")
       .navigationSplitViewColumnWidth(min: 180, ideal: 190, max: 220)
+      .safeAreaInset(edge: .top) {
+        HStack(spacing: 10) {
+          Image("NikoMark").resizable().scaledToFit().frame(width: 28, height: 28)
+            .accessibilityHidden(true)
+          VStack(alignment: .leading, spacing: 2) {
+            Text("NIKO").font(.system(size: 13, weight: .semibold)).tracking(1.4)
+            Text("SHOT").font(.system(size: 10, weight: .medium)).tracking(2)
+              .foregroundStyle(.secondary)
+          }
+          Spacer(minLength: 0)
+        }.padding(.horizontal, 16).padding(.vertical, 16)
+      }
       .safeAreaInset(edge: .bottom) {
         HStack(spacing: 6) {
-          Text("niko-shot").font(.caption.weight(.medium))
+          Text("macOS 原生").font(.caption)
           Spacer()
           Text(version).font(.caption).foregroundStyle(.secondary)
         }.padding(.horizontal, 16).padding(.vertical, 12)
@@ -89,6 +104,7 @@ public struct SettingsView: View {
       .background(NikoTheme.canvas)
     }
     .navigationSplitViewStyle(.balanced)
+    .tint(NikoTheme.accent)
     .frame(minWidth: 820, minHeight: 580)
     .onAppear {
       launchAtLogin.refresh()
@@ -102,7 +118,7 @@ public struct SettingsView: View {
 
   private var currentSection: SettingsSection { section ?? .general }
   private var version: String {
-    Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
+    Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "开发版"
   }
 
   @ViewBuilder private var content: some View {
@@ -539,15 +555,15 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
   }
   var subtitle: String {
     switch self {
-    case .general: "启动方式、权限和使用向导。"
-    case .hotkeys: "为截图与常用动作设置快捷键。"
-    case .capture: "调整框选提示、延时和常用尺寸。"
-    case .annotation: "标注工具与画布快捷操作。"
-    case .output: "选择默认格式、图片质量和文件名。"
-    case .ocrTranslation: "识别文字，并接入你选择的翻译服务。"
-    case .recording: "视频、GIF 与音频的默认录制选项。"
-    case .history: "管理截图历史的保留时间。"
-    case .about: "版本与系统信息。"
+    case .general: "启动、权限与使用向导"
+    case .hotkeys: "常用动作的全局快捷键"
+    case .capture: "框选、延时与预设尺寸"
+    case .annotation: "工具与画布操作"
+    case .output: "格式、质量与文件名"
+    case .ocrTranslation: "文字识别与翻译服务"
+    case .recording: "视频、GIF 与音频"
+    case .history: "截图历史的保留时间"
+    case .about: "版本与系统信息"
     }
   }
   var symbol: String {
@@ -561,19 +577,6 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     case .recording: "record.circle"
     case .history: "clock"
     case .about: "info.circle"
-    }
-  }
-  var tint: Color {
-    switch self {
-    case .general: .gray
-    case .hotkeys: .purple
-    case .capture: .blue
-    case .annotation: .orange
-    case .output: .green
-    case .ocrTranslation: .indigo
-    case .recording: .red
-    case .history: .teal
-    case .about: .gray
     }
   }
 }

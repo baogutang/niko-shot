@@ -29,7 +29,7 @@ struct GifExportView: View {
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 16) {
                     VStack(alignment: .leading, spacing: 14) {
                         Text("输出选项").font(.system(size: 13, weight: .semibold)).accessibilityAddTraits(.isHeader)
                         formRow("宽度") {
@@ -47,7 +47,7 @@ struct GifExportView: View {
                                 ForEach([5, 10, 15, 24, 30], id: \.self) { Text("\($0)").tag($0) }
                             }.pickerStyle(.segmented).labelsHidden().accessibilityLabel("GIF 帧率，每秒帧数")
                         }
-                        Text("宽度默认不超过 800 px；降低尺寸或帧率可减小文件。")
+                        Text("默认 800 px · 降低尺寸或帧率可减小文件")
                             .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }.disabled(isExporting)
                     Divider()
@@ -55,7 +55,8 @@ struct GifExportView: View {
                         HStack(alignment: .firstTextBaseline) {
                             Text("预计体积").foregroundStyle(.secondary)
                             Spacer()
-                            Text(sizeDescription).font(.system(size: 20, weight: .medium)).monospacedDigit()
+                            Text(sizeDescription).font(.system(size: 18, weight: .medium))
+                                .foregroundStyle(NikoTheme.accent).monospacedDigit()
                         }.accessibilityElement(children: .combine)
                         HStack(alignment: .top, spacing: 20) {
                             metric("尺寸", value: "\(outputWidth) × \(outputHeight) px")
@@ -68,6 +69,7 @@ struct GifExportView: View {
                     }
                 }.padding(20)
             }
+            .background(NikoTheme.surface)
             Divider()
             VStack(spacing: 12) {
                 if isExporting {
@@ -91,12 +93,15 @@ struct GifExportView: View {
                     Spacer()
                     Button("导出 GIF…") { onExport(GifOptions(width: outputWidth, fps: outputFPS)) }
                         .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                        .foregroundStyle(NikoTheme.onAccent)
                         .disabled(isExporting || safeDuration == 0).accessibilityLabel("选择保存位置并导出 GIF")
                 }
             }.padding(.horizontal, 20).padding(.vertical, 12)
+                .background(NikoTheme.raisedSurface.opacity(0.35))
         }
         .font(.system(size: 13)).controlSize(.regular)
         .background(NikoTheme.canvas)
+        .tint(NikoTheme.accent)
         .frame(minWidth: 460, idealWidth: 500, minHeight: 340, idealHeight: 380)
     }
 

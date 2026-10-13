@@ -23,7 +23,7 @@ struct TranslationPane: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Image(systemName: "globe").foregroundStyle(.secondary).accessibilityHidden(true)
+                Image(systemName: "globe").foregroundStyle(NikoTheme.accent).accessibilityHidden(true)
                 TranslationServicePicker(settings: settings).labelsHidden().frame(maxWidth: 210)
                 Button(action: openTranslationSettings) { Label("配置当前翻译服务", systemImage: "slider.horizontal.3").labelStyle(.iconOnly).frame(width: 26, height: 26) }
                     .buttonStyle(.borderless).help("配置翻译服务")
@@ -34,14 +34,14 @@ struct TranslationPane: View {
                 Button { showsSetupGuide = true } label: { Label("打开申请与接入指南", systemImage: "questionmark.circle").labelStyle(.iconOnly).frame(width: 26, height: 26) }
                     .buttonStyle(.borderless).help("当前服务的申请步骤与官方入口")
             }
-            .padding(.horizontal, 16).frame(height: 48).background(NikoTheme.canvas)
+            .padding(.horizontal, 16).frame(height: 46).background(NikoTheme.raisedSurface.opacity(0.45))
             Divider()
             HSplitView {
                 textPanel(title: "原文", content: text,
-                    placeholder: isRecognizing ? "正在读取图中文字…" : "选择需要的文字区块。", isResult: false)
+                    placeholder: isRecognizing ? "正在识别…" : "勾选左侧文字区块", isResult: false)
                     .frame(minWidth: 235)
                 textPanel(title: "译文", content: model.translatedText,
-                    placeholder: model.isTranslating ? "正在翻译…" : "选择目标语言，然后开始翻译。", isResult: true)
+                    placeholder: model.isTranslating ? "正在翻译…" : "等待翻译", isResult: true)
                     .frame(minWidth: 235)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -78,11 +78,13 @@ struct TranslationPane: View {
                     } else {
                         Button("翻译", systemImage: "character.bubble") { model.translate(text: text, settings: settings) }
                             .buttonStyle(.borderedProminent)
+                            .foregroundStyle(NikoTheme.onAccent)
                             .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isRecognizing || model.unsupportedReason(settings: settings) != nil)
                     }
                 }.frame(minHeight: 28)
             }.padding(.horizontal, 16).padding(.vertical, 10).background(NikoTheme.canvas)
         }
+        .tint(NikoTheme.accent)
         .sheet(isPresented: $showsSetupGuide) { ProviderSetupGuideView(provider: settings.translationProvider) }
         .onAppear { automaticTranslateIfReady() }
         .onChange(of: isRecognizing) { old, new in
@@ -148,7 +150,8 @@ struct TranslationPane: View {
     private func textPanel(title: String, content: String, placeholder: String, isResult: Bool) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+                Text(title).font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(isResult ? NikoTheme.accent : .secondary)
                     .accessibilityAddTraits(.isHeader)
                 if isResult { targetPicker.frame(maxWidth: 160) }
                 else { sourcePicker.frame(maxWidth: 160) }
@@ -168,19 +171,20 @@ struct TranslationPane: View {
                     VStack(spacing: 12) {
                         if model.isTranslating && isResult { ProgressView().controlSize(.small) }
                         Image(systemName: isResult ? "character.bubble" : "text.alignleft")
-                            .font(.system(size: 26, weight: .light)).foregroundStyle(.tertiary)
+                            .font(.system(size: 22, weight: .light))
+                            .foregroundStyle(NikoTheme.accent.opacity(0.55))
                         Text(placeholder).font(.system(size: 13)).foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                     }.frame(maxWidth: .infinity, minHeight: 240).padding(24)
                 } else {
-                    Text(content).font(.system(size: 14)).lineSpacing(6).textSelection(.enabled)
+                    Text(content).font(.system(size: 14)).lineSpacing(5).textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .topLeading).padding(20)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(NikoTheme.surface)
     }
 
 }

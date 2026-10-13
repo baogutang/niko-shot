@@ -20,7 +20,7 @@ public struct ProviderSetupGuideView: View {
       VStack(alignment: .leading, spacing: 4) {
         Text(guide.title).font(.system(size: 20, weight: .semibold))
           .accessibilityAddTraits(.isHeader)
-        Text("申请与接入指南 · \(guide.verifiedDate) 核验").font(.system(size: 12)).foregroundStyle(
+        Text("官方资料核验 · \(guide.verifiedDate)").font(.system(size: 12)).foregroundStyle(
           .secondary
         )
         .accessibilityLabel("申请与接入指南，官方资料核验日期 \(guide.verifiedDate)")
@@ -32,18 +32,26 @@ public struct ProviderSetupGuideView: View {
           Text(guide.summary).font(.system(size: 13))
             .fixedSize(horizontal: false, vertical: true)
         }
-        ForEach(guide.steps) { step in
-          NikoSection(title: "\(step.id). \(step.title)") {
-            VStack(alignment: .leading, spacing: 8) {
-              Text(step.detail).font(.system(size: 13))
-                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-              if let link = step.link {
-                Link(destination: link.url) {
-                  Label(link.title, systemImage: "arrow.up.right.square")
-                    .font(.system(size: 12))
-                    .frame(minHeight: 24, alignment: .leading)
+        NikoSection(title: "接入流程") {
+          ForEach(guide.steps) { step in
+            HStack(alignment: .top, spacing: 12) {
+              Text("\(step.id)").font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(NikoTheme.accent).frame(width: 24, height: 24)
+                .background(NikoTheme.selection, in: RoundedRectangle(cornerRadius: 6))
+                .accessibilityHidden(true)
+              VStack(alignment: .leading, spacing: 8) {
+                Text(step.title).font(.system(size: 13, weight: .medium))
+                  .accessibilityAddTraits(.isHeader)
+                Text(step.detail).font(.system(size: 12)).foregroundStyle(.secondary)
+                  .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                if let link = step.link {
+                  Link(destination: link.url) {
+                    Label(link.title, systemImage: "arrow.up.right.square")
+                      .font(.system(size: 12))
+                      .frame(minHeight: 24, alignment: .leading)
+                  }
+                  .accessibilityLabel("打开官方页面：\(link.title)")
                 }
-                .accessibilityLabel("打开官方页面：\(link.title)")
               }
             }
           }
@@ -83,5 +91,6 @@ public struct ProviderSetupGuideView: View {
     .onExitCommand { dismiss() }
     .frame(width: 580, height: 600)
     .background(NikoTheme.canvas)
+    .tint(NikoTheme.accent)
   }
 }

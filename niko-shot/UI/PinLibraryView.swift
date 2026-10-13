@@ -7,7 +7,7 @@ import SwiftUI
 @MainActor
 struct PinLibraryView: View {
     @Bindable private var manager: PinWindowManager
-    private let columns = [GridItem(.adaptive(minimum: 176, maximum: 244), spacing: 20, alignment: .top)]
+    private let columns = [GridItem(.adaptive(minimum: 176, maximum: 244), spacing: 16, alignment: .top)]
     @State private var selectedID: UUID?
 
     /// Shares the application's observable pin manager rather than creating a second pin store.
@@ -17,11 +17,11 @@ struct PinLibraryView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 if manager.pins.isEmpty {
-                    ContentUnavailableView("贴图库为空", systemImage: "pin",
-                                           description: Text("截图后选择“贴图”，即可将图片悬浮在其他窗口上。"))
+                    NikoEmptyState(title: "还没有贴图", symbol: "pin",
+                                   detail: "截图后选择“贴图”，让图片留在桌面上。")
                 } else {
                     ScrollView {
-                        LazyVGrid(columns: columns, alignment: .leading, spacing: 20) {
+                        LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
                             ForEach(manager.pins) { pin in
                                 PinLibraryTile(pin: pin, selected: selectedID == pin.id,
                                                onSelect: { selectedID = pin.id },
@@ -41,6 +41,7 @@ struct PinLibraryView: View {
                     Text("双击显示 · 拖出文件")
                 }.font(.system(size: 11)).foregroundStyle(.secondary)
                     .padding(.horizontal, 16).padding(.vertical, 8)
+                    .background(NikoTheme.raisedSurface.opacity(0.45))
             }
             .navigationTitle("贴图库")
             .toolbar {
@@ -69,6 +70,7 @@ struct PinLibraryView: View {
         }
         .font(.system(size: 13))
         .background(NikoTheme.canvas)
+        .tint(NikoTheme.accent)
         .frame(minWidth: 600, minHeight: 440)
     }
 
@@ -99,12 +101,12 @@ private struct PinLibraryTile: View {
             }
             .frame(maxWidth: .infinity)
             .frame(height: 142)
-            .background(selected ? Color.accentColor.opacity(0.06) : NikoTheme.surface,
-                        in: RoundedRectangle(cornerRadius: 8))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .background(selected ? NikoTheme.selection : NikoTheme.surface,
+                        in: RoundedRectangle(cornerRadius: NikoTheme.cornerRadius))
+            .clipShape(RoundedRectangle(cornerRadius: NikoTheme.cornerRadius))
             .overlay {
-                RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(selected || focused ? Color.accentColor : NikoTheme.separator.opacity(hovering ? 0.9 : 0.45),
+                RoundedRectangle(cornerRadius: NikoTheme.cornerRadius)
+                    .strokeBorder(selected || focused ? NikoTheme.accent : NikoTheme.separator.opacity(hovering ? 0.9 : 0.45),
                                   lineWidth: selected || focused ? 2 : 0.5)
             }
             .help("双击显示贴图，或拖入 Finder 和其他应用")
@@ -112,7 +114,7 @@ private struct PinLibraryTile: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(metadata?.dimensions ?? "贴图").font(.system(size: 12, weight: .medium)).monospacedDigit()
-                        .foregroundStyle(selected ? Color.accentColor : Color.primary)
+                        .foregroundStyle(selected ? NikoTheme.accent : Color.primary)
                     if let date = metadata?.date {
                         Text(date, format: .dateTime.year().month().day().hour().minute())
                             .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit().help("文件日期")

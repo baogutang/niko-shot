@@ -11,6 +11,8 @@ final class ScrollCoordinator {
     private let onCapture: (CGImage, CaptureContext) -> Void
     private let state = ScrollControlState()
     private var setupWindow: UtilityWindow?
+    private var reselectionAlert: NSAlert?
+    private var reselectionActions: ScrollReselectionActions?
     private var controls: ScrollControlBarController?
     private var operationTask: Task<Void, Never>?
     private var cleanupTask: Task<Void, Never>?
@@ -28,19 +30,26 @@ final class ScrollCoordinator {
     private var manualReason: String?
     private var automationID: UUID?
     private var automationCompletion: ((Result<(CGImage, CaptureContext), Error>) -> Void)?
+    private let capturePreview: (@MainActor (CaptureContext) async throws -> CGImage)?
     private(set) var isBusy = false
+    /// The actual display viewport, including its original window identity, while confirming or capturing.
+    var selectedViewport: CaptureContext? { context }
     var resourceCounts: [String: Int] {
         ["operation": operationTask == nil ? 0 : 1, "loop": loopTask == nil ? 0 : 1,
          "cleanup": cleanupTask == nil ? 0 : 1, "capture": capture == nil ? 0 : 1,
          "worker": session == nil ? 0 : 1, "pendingImage": pendingImage == nil ? 0 : 1,
          "setup": setupWindow == nil ? 0 : 1, "controls": controls?.windowCount ?? 0,
+         "reselectionAlert": reselectionAlert == nil ? 0 : 1,
+         "reselectionActions": reselectionActions == nil ? 0 : 1,
          "displayObserver": screenObserver == nil ? 0 : 1,
          "automation": automationCompletion == nil ? 0 : 1]
     }
 
     init(engine: CaptureEngine, selection: SelectionSession, windows: WindowList,
-         onCapture: @escaping (CGImage, CaptureContext) -> Void) {
+         onCapture: @escaping (CGImage, CaptureContext) -> Void,
+         capturePreview: (@MainActor (CaptureContext) async throws -> CGImage)? = nil) {
         self.engine = engine; self.selection = selection; self.windows = windows; self.onCapture = onCapture
+        self.capturePreview = capturePreview
     }
 
     /// Selects, stitches and edits through the regular native workflow, resuming on output or cancellation.
@@ -70,7 +79,7 @@ final class ScrollCoordinator {
     }
 
     /// Starts the same frozen-frame region selector used by screenshots.
-    func select() {
+    func select(reselecting: Bool = false) {
         guard !isBusy, selection.state == .idle else { return }
         isBusy = true
         let token = UUID(); generation = token
@@ -78,14 +87,19 @@ final class ScrollCoordinator {
             guard let self else { return }
             defer { if self.generation == token { self.operationTask = nil } }
             do {
+                await self.selection.drainPendingOperations()
+                try Task.checkCancellation()
+                guard self.generation == token else { return }
                 let frames = try await self.engine.freezeScreens()
                 let candidates = try await self.windows.windows()
                 try Task.checkCancellation()
                 guard self.generation == token else { return }
-                self.selection.start(frames: frames, candidates: candidates, kind: "scroll", confirmationTitle: "选择滚动区域") { [weak self] image, selected in
+                self.selection.start(frames: frames, candidates: candidates, kind: "scroll",
+                    confirmationTitle: reselecting ? "确认新滚动区域" : "选择滚动区域") { [weak self] image, selected in
                     var selected = selected
-                    if selected.appBundleID.isEmpty {
-                        selected.appBundleID = candidates.first(where: { $0.frame.contains(CGPoint(x: selected.globalRect.midX, y: selected.globalRect.midY)) })?.appBundleID ?? ""
+                    if let target = candidates.first(where: { $0.frame.contains(CGPoint(x: selected.globalRect.midX, y: selected.globalRect.midY)) }) {
+                        if selected.appBundleID.isEmpty { selected.appBundleID = target.appBundleID }
+                        if selected.windowID == nil { selected.windowID = target.id }
                     }
                     self?.showSetup(image: image, context: selected)
                 }
@@ -97,15 +111,89 @@ final class ScrollCoordinator {
         }
     }
 
+    /// Reuses the selected live viewport after screenshot overlays close; a saved image requires reselection.
+    func continueFromSelection(context: CaptureContext?) {
+        guard !isBusy, operationTask == nil, selection.state == .idle else { return }
+        guard let context, context.hasLiveScreenRegion else { explainReselection(); return }
+        isBusy = true
+        self.context = context
+        let token = UUID(); generation = token
+        operationTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if self.generation == token { self.operationTask = nil } }
+            do {
+                await self.selection.drainPendingOperations()
+                try Task.checkCancellation()
+                guard self.generation == token else { return }
+                let image: CGImage
+                if let capturePreview = self.capturePreview {
+                    image = try await capturePreview(context)
+                } else {
+                    let prepared = try await self.engine.regionCapture(screen: context.screen, rect: context.localRect)
+                    try Task.checkCancellation()
+                    guard self.generation == token else { return }
+                    self.capture = prepared
+                    image = try await prepared.capture()
+                }
+                try Task.checkCancellation()
+                guard self.generation == token, self.selection.state == .idle else { return }
+                self.showSetup(image: image, context: context)
+            } catch is CancellationError { await self.cleanup(token: token) }
+            catch { await self.fail(error, token: token) }
+        }
+    }
+
+    private func explainReselection() {
+        isBusy = true
+        let token = UUID(); generation = token
+        let alert = NSAlert()
+        alert.messageText = "重新选择长截图区域"
+        alert.informativeText = "这张图片没有正在捕获的屏幕选区。请选择当前屏幕中的滚动内容，再开始长截图。"
+        alert.alertStyle = .informational
+        let choose = alert.addButton(withTitle: "选择屏幕区域")
+        choose.keyEquivalent = "\r"; choose.tag = 1
+        let cancel = alert.addButton(withTitle: "取消")
+        cancel.keyEquivalent = "\u{1b}"; cancel.tag = 0
+        let actions = ScrollReselectionActions { [weak self] accepted in
+            guard let self, self.generation == token else { return }
+            self.closeReselectionAlert()
+            self.isBusy = false
+            if accepted { self.select(reselecting: true) }
+            else { self.completeAutomation(.failure(CancellationError())) }
+        }
+        alert.layout()
+        for button in alert.buttons {
+            button.target = actions; button.action = #selector(ScrollReselectionActions.respond(_:))
+        }
+        reselectionAlert = alert
+        reselectionActions = actions
+        alert.window.isReleasedWhenClosed = false
+        alert.window.styleMask.insert(.closable)
+        alert.window.delegate = actions
+        alert.window.center(); alert.window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func closeReselectionAlert() {
+        guard let alert = reselectionAlert else { return }
+        reselectionAlert = nil
+        reselectionActions?.onResponse = nil; reselectionActions = nil
+        alert.window.delegate = nil
+        for button in alert.buttons { button.target = nil; button.action = nil }
+        alert.window.orderOut(nil); alert.window.close()
+    }
+
     /// Opens mode confirmation and the fixed-header/footer crop controls for a chosen viewport.
     func showSetup(image: CGImage, context: CaptureContext) {
         guard session == nil, selection.state == .idle else { return }
+        guard context.hasLiveScreenRegion else { explainReselection(); return }
         setupWindow?.close(); isBusy = true
+        self.context = context
         let window = UtilityWindow(contentRect: CGRect(x: 0, y: 0, width: 620, height: 660),
                                    styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "滚动长截图"; window.isReleasedWhenClosed = false
         window.onClose = { [weak self] in
-            self?.setupWindow = nil; self?.isBusy = false
+            self?.setupWindow = nil; self?.isBusy = false; self?.context = nil; self?.capture = nil
             self?.completeAutomation(.failure(CancellationError()))
         }
         window.contentView = NSHostingView(rootView: ScrollSetupView(image: image, scale: context.screen.scale,
@@ -377,6 +465,7 @@ final class ScrollCoordinator {
     /// Stops capture before removing owned chunks and awaiting all outstanding native work.
     func cancel() async {
         if let cleanupTask { await cleanupTask.value; return }
+        closeReselectionAlert()
         let token = generation, activeLoop = loopTask, operation = operationTask
         activeLoop?.cancel(); operation?.cancel()
         let cleanup = Task {
@@ -406,6 +495,7 @@ final class ScrollCoordinator {
         let worker = session
         loopTask?.cancel(); loopTask = nil
         operationTask = nil
+        closeReselectionAlert()
         setupWindow?.close(); controls?.close(); controls = nil
         removeScreenObserver()
         selection.finish()
@@ -424,4 +514,13 @@ final class ScrollCoordinator {
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
     }
+}
+
+/// Routes native alert controls without an application-modal loop that would block async cancellation.
+@MainActor
+private final class ScrollReselectionActions: NSObject, NSWindowDelegate {
+    var onResponse: ((Bool) -> Void)?
+    init(onResponse: @escaping (Bool) -> Void) { self.onResponse = onResponse; super.init() }
+    @objc func respond(_ sender: NSButton) { onResponse?(sender.tag == 1) }
+    func windowWillClose(_ notification: Notification) { onResponse?(false) }
 }

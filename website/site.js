@@ -11,10 +11,15 @@
   const isDark = () => root.dataset.theme ? root.dataset.theme === "dark" : systemTheme.matches;
   const updateThemeButton = () => {
     if (!themeButton) return;
-    const label = isDark() ? "切换浅色外观" : "切换深色外观";
+    const current = root.dataset.theme || "system";
+    const names = { system: "系统", light: "浅色", dark: "深色" };
+    const next = { system: "浅色", light: "深色", dark: "跟随系统" };
+    const label = `外观：${names[current]}。点击切换${next[current]}。`;
     themeButton.setAttribute("aria-label", label);
     themeButton.title = label;
-    themeButton.querySelector("use").setAttribute("href", `assets/icons.svg#${isDark() ? "sun" : "moon"}`);
+    themeButton.querySelector("use").setAttribute("href", `assets/icons.svg#${isDark() ? "moon" : "sun"}`);
+    const themeLabel = themeButton.querySelector(".theme-label");
+    if (themeLabel) themeLabel.textContent = names[current];
   };
   const previewImages = {
     ocr: { alt: "当前原生 OCR 窗口，左侧编辑文字，右侧并排核对原文和译文", width: 2240, height: 1360 },
@@ -29,14 +34,19 @@
     nativeImage.src = `assets/app-${preview}${isDark() ? "-dark" : ""}.png`;
     const stem = `assets/app-${preview}${isDark() ? "-dark" : ""}`;
     nativeImage.srcset = `${stem}-compact.png ${previewImages[preview].width / 2}w, ${stem}.png ${previewImages[preview].width}w`;
-    nativeImage.sizes = "(max-width: 720px) calc(100vw - 88px), (max-width: 980px) calc(100vw - 152px), 1080px";
+    nativeImage.sizes = "(max-width: 720px) calc(100vw - 60px), (max-width: 980px) calc(100vw - 108px), 1080px";
     nativeImage.alt = previewImages[preview].alt;
     nativeImage.width = previewImages[preview].width;
     nativeImage.height = previewImages[preview].height;
   };
   themeButton?.addEventListener("click", () => {
-    root.dataset.theme = isDark() ? "light" : "dark";
-    try { localStorage.setItem("niko-shot-appearance", root.dataset.theme); } catch { /* Theme still works. */ }
+    const next = { system: "light", light: "dark", dark: "system" }[root.dataset.theme || "system"];
+    if (next === "system") delete root.dataset.theme;
+    else root.dataset.theme = next;
+    try {
+      if (next === "system") localStorage.removeItem("niko-shot-appearance");
+      else localStorage.setItem("niko-shot-appearance", next);
+    } catch { /* Theme still works without persistent storage. */ }
     updateThemeButton(); updatePreview();
   });
   systemTheme.addEventListener("change", () => { updateThemeButton(); updatePreview(); });
@@ -60,6 +70,39 @@
       event.preventDefault(); selectPreview(tabs[next]); tabs[next].focus();
     });
   });
+  document.querySelectorAll("[data-show-preview]").forEach(link => {
+    link.addEventListener("click", () => {
+      const tab = tabs.find(item => item.dataset.preview === link.dataset.showPreview);
+      if (tab) selectPreview(tab);
+    });
+  });
+  const navigationButton = document.querySelector(".nav-toggle");
+  const siteHeader = document.querySelector(".site-header");
+  if (navigationButton && siteHeader) {
+    navigationButton.hidden = false;
+    const setNavigationOpen = open => {
+      siteHeader.dataset.menuOpen = String(open);
+      navigationButton.setAttribute("aria-expanded", String(open));
+      navigationButton.setAttribute("aria-label", open ? "收起导航" : "展开导航");
+      navigationButton.querySelector("use").setAttribute("href", `assets/icons.svg#${open ? "x" : "menu-2"}`);
+    };
+    navigationButton.addEventListener("click", () => setNavigationOpen(navigationButton.getAttribute("aria-expanded") !== "true"));
+    siteHeader.querySelectorAll(".nav-links a").forEach(link => link.addEventListener("click", () => setNavigationOpen(false)));
+    siteHeader.addEventListener("keydown", event => {
+      if (event.key === "Escape" && navigationButton.getAttribute("aria-expanded") === "true") {
+        event.preventDefault(); setNavigationOpen(false); navigationButton.focus();
+      }
+    });
+  }
+  const guideLinks = [...document.querySelectorAll(".guide-nav a")];
+  if (guideLinks.length) {
+    const updateGuideLocation = () => guideLinks.forEach(link => {
+      if (link.hash === (location.hash || guideLinks[0].hash)) link.setAttribute("aria-current", "location");
+      else link.removeAttribute("aria-current");
+    });
+    updateGuideLocation();
+    window.addEventListener("hashchange", updateGuideLocation);
+  }
   // Progressive enhancement: no observer or JS still leaves all text and imagery visible.
   if ("IntersectionObserver" in window && !reducedMotion.matches) {
     root.classList.add("js-ready");
@@ -106,7 +149,7 @@
       destinations.forEach(([kind, url]) => { document.querySelector(`[data-download="${kind}"]`).href = url; });
       const published = release.published_at ? new Date(release.published_at) : null;
       const date = published && !Number.isNaN(published.getTime()) ? published.toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" }) : "";
-      releaseStatus.textContent = `GitHub 开发候选已可下载${date ? `，发布于 ${date}` : ""}。`;
+      releaseStatus.textContent = `最近成功的 GitHub 开发候选${date ? ` · ${date}` : ""}。`;
     }).catch(() => {
       releaseStatus.textContent = "暂时无法读取构建信息。下载按钮会带你前往 GitHub 产物页。";
     }).finally(() => clearTimeout(timeout));
@@ -123,7 +166,7 @@
   const undoButton = document.querySelector("#undo-demo");
   const playButton = document.querySelector("#play-demo");
   const source = new Image();
-  const defaultSelection = () => ({ x: .24, y: .15, w: .61, h: .65 });
+  const defaultSelection = () => ({ x: .08, y: .085, w: .84, h: .8 });
   let selection = defaultSelection();
   let tool = "crop";
   let annotations = [];
@@ -145,7 +188,7 @@
   const drawStroke = (ctx, stroke, width, height) => {
     if (!stroke || !stroke.points.length) return;
     const first = stroke.points[0]; const last = stroke.points[stroke.points.length - 1];
-    ctx.strokeStyle = "#82b6ff"; ctx.lineWidth = Math.max(3, width * .004); ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.strokeStyle = "#b8790f"; ctx.lineWidth = Math.max(3, width * .004); ctx.lineCap = "round"; ctx.lineJoin = "round";
     ctx.beginPath();
     if (stroke.tool === "rectangle") ctx.rect(first.x * width, first.y * height, (last.x - first.x) * width, (last.y - first.y) * height);
     else { ctx.moveTo(first.x * width, first.y * height); stroke.points.slice(1).forEach(point => ctx.lineTo(point.x * width, point.y * height)); }
@@ -163,15 +206,15 @@
     const width = canvas.width; const height = canvas.height;
     context.clearRect(0, 0, width, height); context.drawImage(source, 0, 0, width, height);
     const { x, y, w, h } = selection;
-    context.fillStyle = "rgba(6,12,21,.49)";
+    context.fillStyle = "rgba(22,20,17,.48)";
     context.fillRect(0, 0, width, y * height); context.fillRect(0, (y + h) * height, width, (1 - y - h) * height);
     context.fillRect(0, y * height, x * width, h * height); context.fillRect((x + w) * width, y * height, (1 - x - w) * width, h * height);
     annotations.forEach(stroke => drawStroke(context, stroke, width, height)); drawStroke(context, currentStroke, width, height);
-    context.strokeStyle = "#94c4ff"; context.lineWidth = 2; context.strokeRect(x * width, y * height, w * width, h * height);
-    context.fillStyle = "#c7dfff";
+    context.strokeStyle = "#e8a333"; context.lineWidth = 2; context.strokeRect(x * width, y * height, w * width, h * height);
+    context.fillStyle = "#f9d999";
     [[x,y],[x+w,y],[x,y+h],[x+w,y+h]].forEach(([cx,cy]) => context.fillRect(cx * width - 4, cy * height - 4, 8, 8));
     if (document.activeElement === canvas && tool !== "crop") {
-      context.strokeStyle = "#f0f6ff"; context.lineWidth = 1.5; const cx = keyboardPoint.x * width; const cy = keyboardPoint.y * height;
+      context.strokeStyle = "#332b1d"; context.lineWidth = 1.5; const cx = keyboardPoint.x * width; const cy = keyboardPoint.y * height;
       context.beginPath(); context.moveTo(cx - 9, cy); context.lineTo(cx + 9, cy); context.moveTo(cx, cy - 9); context.lineTo(cx, cy + 9); context.stroke();
     }
     sizeLabel.textContent = `${Math.round(w * source.naturalWidth)} × ${Math.round(h * source.naturalHeight)} px`;
@@ -271,7 +314,7 @@
     if (playing) { stopDemo(); announce("演示已暂停，可以自行编辑。"); return; }
     if (!source.naturalWidth) return;
     selection = defaultSelection(); annotations = []; currentStroke = null; setTool("crop", false);
-    const arrow = { tool: "arrow", points: [{x:.42,y:.62},{x:.64,y:.34}] };
+    const arrow = { tool: "arrow", points: [{x:.67,y:.48},{x:.43,y:.48}] };
     if (reducedMotion.matches) { annotations.push(arrow); announce("减少动态效果已开启，直接展示框选与箭头标注结果。"); requestDraw(); return; }
     playing = true; lab.classList.add("is-playing"); playButton.querySelector("span").textContent = "暂停演示"; playButton.querySelector("use").setAttribute("href", "assets/icons.svg#player-pause");
     announce("演示：冻结图像并框选区域。"); requestDraw();
@@ -280,18 +323,9 @@
   });
   source.onload = () => { announce("拖动框选，按 A 画箭头，Enter 确认。"); requestDraw(); };
   source.onerror = () => { announce("演示图片暂时无法载入，请刷新页面。下载和接入指南仍可使用。"); sizeLabel.textContent = "图片载入失败"; document.querySelectorAll(".lab-toolbar button").forEach(button => button.disabled = true); playButton.disabled = true; };
-  // Load the full-resolution demo when it enters view; the hero has its own responsive source.
-  let imageObserver = null;
-  if ("IntersectionObserver" in window) {
-    imageObserver = new IntersectionObserver(entries => {
-      if (entries.some(entry => entry.isIntersecting)) {
-        source.src = "assets/capture-sculpture.jpg";
-        imageObserver.disconnect();
-      }
-    });
-    imageObserver.observe(lab);
-  } else source.src = "assets/capture-sculpture.jpg";
+  // The original same-origin SVG has no external resources and remains safe for PNG export.
+  source.src = "assets/capture-sample.svg";
   document.addEventListener("visibilitychange", () => { if (document.hidden) stopDemo(); });
   reducedMotion.addEventListener("change", () => { if (reducedMotion.matches) stopDemo(); });
-  window.addEventListener("pagehide", () => { stopDemo(); imageObserver?.disconnect(); if (frame) cancelAnimationFrame(frame); }, { once: true });
+  window.addEventListener("pagehide", () => { stopDemo(); if (frame) cancelAnimationFrame(frame); }, { once: true });
 })();

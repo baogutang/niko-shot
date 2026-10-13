@@ -1,6 +1,6 @@
 # 构建、候选下载与官网部署
 
-自动化流程只生成可安装的开发候选，不代表 [完整验收](ACCEPTANCE.md) 或整体 DoD 已通过。应用版本仍为 **0.1.0**；最低 macOS 14，同时包含 Apple Silicon `arm64` 和 Intel `x86_64`。当前没有 Developer ID 证书，默认产物是 **ad hoc 开发签名、未公证**；签名完整性校验不能替代 Apple 公证。
+自动化流程只生成可安装的开发候选，不代表 [完整验收](ACCEPTANCE.md) 或整体 DoD 已通过。当前应用版本为 **0.1.1**；最低 macOS 14，同时包含 Apple Silicon `arm64` 和 Intel `x86_64`。当前没有 Developer ID 证书，默认产物是 **ad hoc 开发签名、未公证**；签名完整性校验不能替代 Apple 公证。
 
 ## 下载与安装
 

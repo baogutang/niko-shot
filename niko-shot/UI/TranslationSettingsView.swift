@@ -94,6 +94,7 @@ struct TranslationSettingsView: View {
     .formStyle(.grouped)
     .scrollContentBackground(.hidden)
     .font(.system(size: 13))
+    .tint(NikoTheme.accent)
     .onAppear {
       if drafts.editingProvider == nil { drafts.editingProvider = settings.translationProvider }
       if drafts.editingCustomID == nil {
@@ -122,10 +123,13 @@ struct TranslationSettingsView: View {
         .accessibilityLabel("查看\(editingProvider.displayName)的官方申请与接入指南")
       }
       HStack(spacing: 8) {
-        Text(isEditingCurrent ? "此服务正用于翻译" : "当前使用：\(currentName)")
-          .font(.system(size: 12)).foregroundStyle(.secondary)
+        Label(
+          isEditingCurrent ? "当前服务" : "当前使用：\(currentName)",
+          systemImage: isEditingCurrent ? "checkmark.circle.fill" : "circle"
+        )
+        .font(.system(size: 12)).foregroundStyle(isEditingCurrent ? NikoTheme.accent : .secondary)
         Spacer(minLength: 8)
-        Button(isEditingCurrent ? "正在使用" : "设为当前服务") { useEditingService() }
+        Button(isEditingCurrent ? "已设为当前" : "设为当前服务") { useEditingService() }
           .controlSize(.small)
           .disabled(isEditingCurrent || (editingProvider == .custom && editingCustom == nil))
           .accessibilityLabel("将\(editingCustom?.name ?? editingProvider.displayName)设为当前翻译服务")
@@ -318,11 +322,11 @@ private struct ProviderCredentialEditor: View {
     VStack(alignment: .leading, spacing: 8) {
       HStack(spacing: 8) {
         Image(systemName: isReady ? "checkmark.circle.fill" : "circle.dashed")
-          .foregroundStyle(isReady ? Color.green : .secondary).accessibilityHidden(true)
+          .foregroundStyle(isReady ? NikoTheme.accent : .secondary).accessibilityHidden(true)
         Text(!requiresCredentials ? "此模板无需 API Key" : isReady ? "凭据已配置" : "填写凭据以连接服务")
           .font(.system(size: 12))
         Spacer()
-        if hasPending { Text("有待保存的输入").font(.caption).foregroundStyle(.orange) }
+        if hasPending { Text("待保存").font(.caption).foregroundStyle(NikoTheme.accent) }
       }
       if provider == .google {
         Text("使用 Google Cloud Translation Basic v2 的 API Key。")
@@ -357,10 +361,11 @@ private struct ProviderCredentialEditor: View {
           .accessibilityLabel("移除\(provider.displayName)已保存的\(field.title)")
         }
       }
-      Text("保存在系统钥匙串。•••• 为已有值；留空保留，移除才删除。")
+      Text("钥匙串保存 · •••• 表示已有值 · 留空保留，移除才删除")
         .font(.system(size: 11)).foregroundStyle(.secondary)
       HStack(spacing: 10) {
-        Button("保存凭据") { save() }.buttonStyle(.borderedProminent).disabled(!hasPending)
+        Button("保存凭据") { save() }.buttonStyle(.borderedProminent)
+          .foregroundStyle(NikoTheme.onAccent).disabled(!hasPending)
           .accessibilityLabel("将\(provider.displayName)凭据保存到钥匙串")
         Button("测试连接") { test() }
           .disabled(!isReady || hasPending || isTesting || !allowsTesting)
@@ -373,7 +378,7 @@ private struct ProviderCredentialEditor: View {
       }.controlSize(.regular).frame(minHeight: 30)
       if hasPending {
         Text("保存后可测试连接；切换服务会保留未保存输入。")
-          .font(.caption).foregroundStyle(.orange)
+          .font(.caption).foregroundStyle(NikoTheme.accent)
       }
       if let error = credentialError {
         Label(error, systemImage: "exclamationmark.circle")
@@ -389,7 +394,7 @@ private struct ProviderCredentialEditor: View {
             testResult,
             systemImage: testSucceeded ? "checkmark.circle.fill" : "exclamationmark.circle"
           )
-          .font(.callout).foregroundStyle(testSucceeded ? Color.green : .red).textSelection(
+          .font(.callout).foregroundStyle(testSucceeded ? NikoTheme.accent : .red).textSelection(
             .enabled)
         }
       }

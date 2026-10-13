@@ -46,11 +46,11 @@ struct HistoryView: View {
                     ProgressView("正在载入截图…").frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if records.isEmpty {
                     if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        ContentUnavailableView("尚无截图历史", systemImage: "photo.on.rectangle.angled",
-                                               description: Text("完成截图后，可以在这里查找、编辑或重新识别文字。"))
+                        NikoEmptyState(title: "尚无截图", symbol: "photo.on.rectangle.angled",
+                                       detail: "下一张截图会出现在这里，可编辑、贴图或识别文字。")
                     } else {
-                        ContentUnavailableView("没有找到截图", systemImage: "magnifyingglass",
-                                               description: Text("试试其他关键词。已识别的文字也可以搜索。"))
+                        NikoEmptyState(title: "没有找到截图", symbol: "magnifyingglass",
+                                       detail: "试试其他关键词，也可以搜索截图中的文字。")
                     }
                 } else {
                     List(selection: $selectedID) {
@@ -61,6 +61,7 @@ struct HistoryView: View {
                                        onEdit: { onEdit(record) }, onDelete: { Task { await remove(record) } })
                                 .tag(record.id)
                                 .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+                                .listRowBackground(selectedID == record.id ? NikoTheme.selection : .clear)
                         }
                         if hasMore {
                             HStack(spacing: 10) {
@@ -76,6 +77,7 @@ struct HistoryView: View {
                         }
                     }
                     .listStyle(.inset)
+                    .scrollContentBackground(.hidden)
                     .accessibilityLabel("截图历史，可使用方向键选择")
                 }
                 Divider()
@@ -90,6 +92,7 @@ struct HistoryView: View {
                     Text("双击编辑 · 拖出文件")
                 }.font(.system(size: 11)).foregroundStyle(.secondary)
                     .padding(.horizontal, 16).padding(.vertical, 8)
+                    .background(NikoTheme.raisedSurface.opacity(0.45))
             }
             .navigationTitle("截图历史")
             .searchable(text: $query, placement: .toolbar, prompt: "搜索截图或识别文字")
@@ -122,6 +125,7 @@ struct HistoryView: View {
         .onReceive(NotificationCenter.default.publisher(for: .captureHistoryChanged)) { _ in Task { await reload() } }
         .font(.system(size: 13))
         .background(NikoTheme.canvas)
+        .tint(NikoTheme.accent)
         .frame(minWidth: 760, minHeight: 500)
     }
 
@@ -212,7 +216,10 @@ private struct HistoryRow: View {
             .frame(width: 112, height: 72)
             .background(NikoTheme.surface, in: RoundedRectangle(cornerRadius: 5))
             .clipShape(RoundedRectangle(cornerRadius: 5))
-            .overlay { RoundedRectangle(cornerRadius: 5).strokeBorder(NikoTheme.separator.opacity(0.4), lineWidth: 0.5) }
+            .overlay {
+                RoundedRectangle(cornerRadius: 5)
+                    .strokeBorder(selected ? NikoTheme.accent.opacity(0.65) : NikoTheme.separator.opacity(0.4), lineWidth: selected ? 1 : 0.5)
+            }
             .help("拖入 Finder 或其他应用")
             .accessibilityLabel("截图缩略图，可拖出文件")
             VStack(alignment: .leading, spacing: 5) {
@@ -236,7 +243,7 @@ private struct HistoryRow: View {
                 .help("截图操作").accessibilityLabel("截图操作：识别文字、贴图、编辑或删除")
         }
         .contentShape(Rectangle())
-        .background(Color.primary.opacity(hovering && !selected ? 0.025 : 0), in: RoundedRectangle(cornerRadius: 4))
+        .background(NikoTheme.selection.opacity(hovering && !selected ? 0.5 : 0), in: RoundedRectangle(cornerRadius: 4))
         .onHover { hovering = $0 }
         .simultaneousGesture(TapGesture().onEnded { onSelect() })
         .simultaneousGesture(TapGesture(count: 2).onEnded { onSelect(); onEdit() })

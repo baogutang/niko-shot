@@ -13,7 +13,7 @@ enum ToolbarAction: String, CaseIterable, Sendable {
         case .save: "保存"
         case .pin: "贴图"
         case .ocr: "识别文字"
-        case .scroll: "滚动长截图"
+        case .scroll: "长截图"
         case .undo: "撤销"
         case .redo: "重做"
         case .selection: "调整选区"
@@ -28,7 +28,7 @@ enum ToolbarAction: String, CaseIterable, Sendable {
         case .save: "square.and.arrow.down"
         case .pin: "pin"
         case .ocr: "text.viewfinder"
-        case .scroll: "scroll"
+        case .scroll: "rectangle.expand.vertical"
         case .undo: "arrow.uturn.backward"
         case .redo: "arrow.uturn.forward"
         case .selection: "crop"
@@ -62,6 +62,8 @@ final class ToolbarController {
     private let onColor: (NSColor) -> Void
     private let onWidth: (CGFloat) -> Void
     private let confirmationTitle: String?
+    private var scrollEnabled = true
+    private var scrollExplanation = "沿当前选区捕获滚动内容。"
 
     /// Number of panels retained by the controller, for session teardown assertions.
     var windowCount: Int { panel == nil ? 0 : 1 }
@@ -126,6 +128,7 @@ final class ToolbarController {
         guard let panel, let content else { return }
         let size = content.configure(maximumWidth: max(44, available.width))
         content.setSelectedTool(selectedTool)
+        content.setScrollAvailability(enabled: scrollEnabled, explanation: scrollExplanation)
         let frame = Self.preferredFrame(near: selectionGlobal, screenFrame: available, size: size)
         let isNewlyShown = !panel.isVisible
         panel.setFrame(frame, display: true)
@@ -172,6 +175,12 @@ final class ToolbarController {
     func setUndoAvailability(canUndo: Bool, canRedo: Bool) {
         content?.setActionEnabled(.undo, enabled: canUndo)
         content?.setActionEnabled(.redo, enabled: canRedo)
+    }
+
+    /// Keeps the visible long-capture action discoverable and explains any unavailable viewport.
+    func setScrollAvailability(enabled: Bool, explanation: String) {
+        scrollEnabled = enabled; scrollExplanation = explanation
+        content?.setScrollAvailability(enabled: enabled, explanation: explanation)
     }
 
     /// Computes a deterministic placement, preferring below, above, then either side.
@@ -247,8 +256,9 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
         material = .hudWindow
         blendingMode = .behindWindow
         state = .active
+        appearance = NSAppearance(named: .darkAqua)
         wantsLayer = true
-        layer?.cornerRadius = 14
+        layer?.cornerRadius = 18
         layer?.masksToBounds = true
         layer?.borderWidth = 0.5
         column.orientation = .vertical
@@ -288,7 +298,9 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
             for action in group {
                 let title = action == .copy ? (confirmationTitle ?? action.title) : action.title
                 let button = HUDIconButton(symbol: action == .copy && confirmationTitle != nil ? "checkmark.circle" : action.symbol,
-                                           title: title, tint: action == .copy ? .controlAccentColor : nil, prominent: action == .copy)
+                                           title: title, tint: action == .copy || action == .scroll ? HUDPalette.accent : nil,
+                                           prominent: action == .copy || action == .scroll,
+                                           visibleTitle: action == .scroll ? "长截图" : nil)
                 button.toolTip = action.keyHint.map { "\(title) · \($0)" } ?? title
                 button.onPress = { onAction(action) }
                 actionButtons[action] = button
@@ -325,6 +337,7 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
         lastWidth = maximumWidth
         for row in column.arrangedSubviews { column.removeArrangedSubview(row); row.removeFromSuperview() }
         let limit = max(44, min(maximumWidth, 704) - 20)
+        for button in actionButtons.values { button.constrainWidth(to: limit) }
         var largest: CGFloat = 44
         var rowCount = 0
         for groups in [toolGroups + styleGroups, commandGroups] {
@@ -337,6 +350,7 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
                 row.alignment = .centerY
                 row.spacing = 6
                 row.setHuggingPriority(.required, for: .horizontal)
+                row.widthAnchor.constraint(equalToConstant: rowWidth).isActive = true
                 column.addArrangedSubview(row)
                 largest = max(largest, rowWidth)
                 rowCount += 1
@@ -348,14 +362,14 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
                 var piece: [NSView] = []
                 var pieceWidth: CGFloat = 0
                 for view in group {
-                    let width: CGFloat = 44
+                    let width = (view as? HUDIconButton)?.layoutWidth ?? 44
                     if pieceWidth + width > limit && !piece.isEmpty { pieces.append(piece); piece = []; pieceWidth = 0 }
                     piece.append(view)
                     pieceWidth += width
                 }
                 if !piece.isEmpty { pieces.append(piece) }
                 for piece in pieces {
-                    let width = CGFloat(piece.count) * 44
+                    let width = piece.reduce(CGFloat.zero) { $0 + (($1 as? HUDIconButton)?.layoutWidth ?? 44) }
                     let separatorWidth: CGFloat = rowViews.isEmpty ? 0 : 13
                     if rowWidth + separatorWidth + width > limit && !rowViews.isEmpty { finishRow() }
                     if !rowViews.isEmpty {
@@ -366,6 +380,7 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
                     groupView.orientation = .horizontal
                     groupView.alignment = .centerY
                     groupView.spacing = 0
+                    groupView.widthAnchor.constraint(equalToConstant: width).isActive = true
                     rowViews.append(groupView)
                     rowWidth += width
                 }
@@ -383,6 +398,15 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
 
     func setActionEnabled(_ action: ToolbarAction, enabled: Bool) { actionButtons[action]?.isEnabled = enabled }
 
+    /// Updates native help even while the long-capture action is disabled.
+    func setScrollAvailability(enabled: Bool, explanation: String) {
+        guard let button = actionButtons[.scroll] else { return }
+        button.isEnabled = enabled
+        button.toolTip = "长截图 · \(explanation)"
+        button.setAccessibilityHelp(explanation)
+        button.setAccessibilityValue(enabled ? "" : explanation)
+    }
+
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         updateAppearance()
@@ -390,8 +414,10 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
 
     private func updateAppearance() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.65).cgColor
-            layer?.backgroundColor = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency ? NSColor.windowBackgroundColor.cgColor : NSColor.clear.cgColor
+            let contrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+            layer?.borderWidth = contrast ? 1 : 0.5
+            layer?.borderColor = NSColor.white.withAlphaComponent(contrast ? 0.5 : 0.16).cgColor
+            layer?.backgroundColor = HUDPalette.surface.withAlphaComponent(NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency ? 1 : 0.72).cgColor
         }
     }
 
@@ -493,6 +519,12 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
 }
 
 @MainActor
+private enum HUDPalette {
+    static let accent = NSColor(calibratedRed: 0.91, green: 0.73, blue: 0.46, alpha: 1)
+    static let surface = NSColor(calibratedWhite: 0.09, alpha: 1)
+}
+
+@MainActor
 private final class HUDIconButton: NSButton {
     var onPress: (() -> Void)?
     private var tracking: NSTrackingArea?
@@ -502,17 +534,22 @@ private final class HUDIconButton: NSButton {
     private var symbolTint: NSColor?
     private let prominent: Bool
     private let isColorSwatch: Bool
+    private let visibleTitle: String?
+    private var widthConstraint: NSLayoutConstraint?
+    var layoutWidth: CGFloat { widthConstraint?.constant ?? 44 }
 
-    init(symbol: String, title: String, tint: NSColor? = nil, prominent: Bool = false) {
+    init(symbol: String, title: String, tint: NSColor? = nil, prominent: Bool = false, visibleTitle: String? = nil) {
         symbolTint = tint
         self.prominent = prominent
+        self.visibleTitle = visibleTitle
         isColorSwatch = symbol == "circle.fill" && tint != nil
         super.init(frame: CGRect(x: 0, y: 0, width: 44, height: 44))
         isBordered = false
         bezelStyle = .regularSquare
         setButtonType(.momentaryPushIn)
-        self.title = ""
-        imagePosition = .imageOnly
+        self.title = visibleTitle ?? ""
+        font = .systemFont(ofSize: 13, weight: .medium)
+        imagePosition = visibleTitle == nil ? .imageOnly : .imageLeading
         if !isColorSwatch {
             image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?.withSymbolConfiguration(.init(pointSize: 17, weight: .medium))
         }
@@ -525,11 +562,22 @@ private final class HUDIconButton: NSButton {
         layer?.cornerRadius = 8
         focusRingType = .exterior
         translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([widthAnchor.constraint(equalToConstant: 44), heightAnchor.constraint(equalToConstant: 44)])
+        let width = widthAnchor.constraint(equalToConstant: visibleTitle == nil ? 44 : 104)
+        widthConstraint = width
+        NSLayoutConstraint.activate([width, heightAnchor.constraint(equalToConstant: 44)])
         refreshAppearance()
     }
 
     required init?(coder: NSCoder) { nil }
+
+    /// Preserves a 44-point hit target and the visible label when narrow screens require extra rows.
+    func constrainWidth(to maximumWidth: CGFloat) {
+        guard visibleTitle != nil else { return }
+        let width = min(104, max(44, maximumWidth))
+        widthConstraint?.constant = width
+        imagePosition = width >= 84 ? .imageLeading : .imageAbove
+        font = .systemFont(ofSize: width >= 84 ? 13 : 11, weight: .medium)
+    }
 
     @objc private func pressed() { onPress?() }
 
@@ -592,18 +640,18 @@ private final class HUDIconButton: NSButton {
     override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); refreshAppearance() }
 
     private func refreshAppearance(invalidate: Bool = true) {
-        contentTintColor = selected && symbolTint == nil ? .controlAccentColor : symbolTint ?? .labelColor
+        contentTintColor = selected && symbolTint == nil ? HUDPalette.accent : symbolTint ?? .labelColor
         effectiveAppearance.performAsCurrentDrawingAppearance {
             let background: NSColor
             if !isEnabled { background = .clear }
             else if mousePressed || cell?.isHighlighted == true { background = .labelColor.withAlphaComponent(0.14) }
-            else if selected { background = .controlAccentColor.withAlphaComponent(0.18) }
-            else if prominent { background = .controlAccentColor.withAlphaComponent(hovered ? 0.18 : 0.1) }
+            else if selected { background = HUDPalette.accent.withAlphaComponent(0.2) }
+            else if prominent { background = HUDPalette.accent.withAlphaComponent(hovered ? 0.21 : 0.13) }
             else { background = hovered ? .labelColor.withAlphaComponent(0.08) : .clear }
             layer?.backgroundColor = background.cgColor
             let focused = window?.firstResponder === self
             layer?.borderWidth = focused ? 2 : selected ? 0.5 : 0
-            layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(focused ? 0.9 : 0.35).cgColor
+            layer?.borderColor = HUDPalette.accent.withAlphaComponent(focused ? 0.9 : 0.4).cgColor
             layer?.opacity = isEnabled ? 1 : 0.35
         }
         if invalidate { needsDisplay = true }

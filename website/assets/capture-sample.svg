@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800" viewBox="0 0 1280 800" role="img" aria-labelledby="title desc">
+  <title id="title">截图与标注原创练习图</title>
+  <desc id="desc">练习图包含中英日示例文字与默认区域截图快捷键。它是一张原创排版稿，并非真实应用截图。</desc>
+  <rect width="1280" height="800" fill="#e4e0d7"/>
+  <rect x="72" y="58" width="1136" height="684" rx="24" fill="#faf8f2"/>
+  <g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Hiragino Sans,sans-serif">
+    <text x="130" y="128" fill="#746d60" font-size="18" font-weight="500" letter-spacing="2">niko-shot / 截图练习</text>
+    <text x="126" y="248" fill="#22211e" font-size="80" font-weight="700" letter-spacing="-3">把想法留在眼前，</text>
+    <text x="126" y="348" fill="#22211e" font-size="80" font-weight="700" letter-spacing="-3">让重点一眼看见。</text>
+    <rect x="134" y="382" width="472" height="10" rx="5" fill="#efb148"/>
+    <text x="132" y="445" fill="#756d60" font-size="25">框选一块画面，画个箭头，把这张图片带走。</text>
+    <text x="132" y="574" fill="#282722" font-size="27" font-weight="600">Less effort. More clarity.</text>
+    <text x="132" y="618" fill="#756d60" font-size="24">A small note for the way you work.</text>
+    <text x="736" y="574" fill="#282722" font-size="27" font-weight="600">毎日を、少しシンプルに。</text>
+    <text x="736" y="618" fill="#756d60" font-size="24">从小小一张截图开始。</text>
+    <text x="132" y="701" fill="#8b8170" font-size="16">原创示例 · 中文 / English / 日本語</text>
+    <text x="954" y="701" fill="#8b8170" font-size="16">Shift + ⌘ + A</text>
+  </g>
+  <path d="M132 512H1148" fill="none" stroke="#ddd6c8" stroke-width="1"/>
+</svg>

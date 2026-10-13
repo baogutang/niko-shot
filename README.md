@@ -1,63 +1,49 @@
-<p align="center">
-  <a href="https://baogutang.github.io/niko-shot/">
-    <img src="website/assets/readme-hero.svg" alt="niko-shot · 截取、标注、识别与翻译，原生 macOS 菜单栏工具" width="960">
-  </a>
-</p>
-
-<h1 align="center">niko-shot</h1>
+<h1 align="center">
+  <img src="website/assets/niko-mark.svg" width="64" height="64" alt="niko-shot N 字取景框标识" valign="middle">&nbsp; niko-shot
+</h1>
 
 <p align="center">
-  截取、标注、识别、翻译。<br>
-  从一张截图到文字、译文与视频，在菜单栏完成。
+  <b>截下一瞬，接住全部。</b><br>
+  原生 Mac 截图、标注、长截图、OCR、翻译与录屏工具。
 </p>
 
 <p align="center">
   <a href="https://github.com/baogutang/niko-shot/actions/workflows/build.yml"><img src="https://github.com/baogutang/niko-shot/actions/workflows/build.yml/badge.svg" alt="GitHub Actions 构建状态"></a>
-  <img src="https://img.shields.io/badge/macOS-14%2B-171717?logo=apple&logoColor=white" alt="macOS 14 或更新版本">
-  <img src="https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white" alt="原生 Swift 6">
-  <a href="docs/ACCEPTANCE.md"><img src="https://img.shields.io/badge/本机回归-169%20通过-4C7D58" alt="169 项本机回归通过"></a>
-  <a href="https://github.com/baogutang/niko-shot/releases/tag/nightly"><img src="https://img.shields.io/badge/Nightly-开发候选-8B6D38" alt="Nightly 开发候选"></a>
+  <img src="https://img.shields.io/badge/macOS-14%2B-22221F?style=flat-square&logo=apple&logoColor=white" alt="macOS 14 或更新版本">
+  <img src="https://img.shields.io/badge/Swift-6-22221F?style=flat-square&logo=swift&logoColor=white" alt="原生 Swift 6">
+  <a href="https://github.com/baogutang/niko-shot/releases/tag/nightly"><img src="https://img.shields.io/badge/Nightly-开发候选-E8A333?style=flat-square" alt="Nightly 开发候选"></a>
 </p>
 
 <p align="center">
-  <strong><a href="https://github.com/baogutang/niko-shot/releases/tag/nightly">下载 macOS 版</a></strong>
+  <strong><a href="https://github.com/baogutang/niko-shot/releases/tag/nightly">下载 Mac 版</a></strong>
   &nbsp;·&nbsp;
-  <strong><a href="https://baogutang.github.io/niko-shot/">访问官网</a></strong>
+  <strong><a href="https://baogutang.github.io/niko-shot/">官网与交互体验</a></strong>
   &nbsp;·&nbsp;
-  <a href="https://github.com/baogutang/niko-shot/releases/tag/nightly">发布说明</a>
+  <a href="#开发与构建">从源码构建</a>
   &nbsp;·&nbsp;
-  <a href="docs/TRANSLATION.md">翻译服务申请指南</a>
+  <a href="https://baogutang.github.io/niko-shot/guide.html">翻译服务申请</a>
 </p>
 
-<p align="center"><sub>macOS Sonoma 14+ · Apple Silicon 与 Intel · AppKit / SwiftUI · 运行时零第三方依赖</sub></p>
+<p align="center">
+  <a href="https://baogutang.github.io/niko-shot/"><img src="website/assets/app-ocr.png" width="1120" alt="niko-shot 当前原生 OCR 与翻译工作区：文字区块编辑、原文和译文并排核对"></a>
+</p>
+<p align="center"><sub>当前源码的原生离屏预览，使用公开合成数据。窗口未激活，部分控件呈非活动外观；预览不替代真实交互验收。</sub></p>
 
-> **当前为开发候选。** 本机 169 项回归测试通过；Nightly 使用 ad hoc 签名，尚未完成 Developer ID 分发与公证。真实界面走查、服务账号和外设验收仍有待完成项，冷启动与使用后内存预算未达标，整体 DoD 尚未通过。具体范围见[验收记录](docs/ACCEPTANCE.md)。
+> **当前源码版本 0.1.1，为开发候选。** 本机 176 项回归测试通过；下载指向最近成功的 GitHub 候选，并非所有新提交都已打包。Nightly 使用 ad hoc 签名，尚未完成 Developer ID 分发与公证；冷启动及使用后内存预算未达标，真实账号、外设与部分实机交互仍有待验收，整体 DoD 尚未通过。完整依据见[验收记录](docs/ACCEPTANCE.md)。
 
-## 在菜单栏，把这些事做完
+本次更新统一 NIKO 标志与浅深色界面，重做官网和 README；截图底部直接继续长截图，并修复重新选区提示的取消卡住问题。
 
-- **截取要用的画面** — 框选区域、捕获窗口或全屏，支持延时与重复上次区域。窗口可高亮选择，也能循环选择层叠窗口。
-- **标注后直接分享** — 箭头、文字、便签、马赛克等 12 种工具，支持撤销与重做。复制到剪贴板，保存 PNG / JPEG / HEIF / TIFF，或把图片拖到目标应用。
-- **把截图变成文字** — 使用系统 Vision 识别中、英、日混排，逐段勾选、编辑与复制；整理段落、换行和标点，也能从历史重新识别。
-- **选自己的翻译服务** — 百度、Google、有道、DeepL 与自定义 REST 独立配置。原文与译文并排核对，服务错误保留在当前结果中。
-- **录下一段操作，导出 GIF** — 捕获区域、窗口或屏幕，暂停后继续；系统音频、可选麦克风和摄像头画中画，MP4 与原生 GIF 导出。
-- **把滚动内容接成一张长图** — 自动或手动滚动，排除固定头尾；匹配不可靠时暂停并允许重试、调整重叠或改为手动，再进入同一个标注编辑器。
-- **让参考图留在手边** — 贴图置顶、调整透明度，管理贴图库；截图历史支持中文 OCR 搜索、编辑、删除与拖出。
-- **接入自己的工作流** — 全局快捷键、Shortcuts、URL Scheme 和 CLI；登录启动使用主应用，常驻只保留一个应用进程。
+## 一张截图，动作接着走
 
-## 原生界面预览
+- **截取画面**：区域、窗口、全屏，延时截图或重复上次选区。高亮选择窗口，也能循环选择同一点的层叠窗口。
+- **标注重点**：箭头、文字、便签、马赛克等 12 种工具，随时撤销与重做。复制、保存 PNG / JPEG / HEIF / TIFF，或把图片拖到目标应用。
+- **继续长截图**：截图底部点击 **「长截图」**，沿用当前屏幕选区。自动或手动滚动，拼好后回到标注，再复制或保存；历史与导入图片会引导重新框选屏幕。
+- **提取文字，再接上翻译**：Vision 识别中、英、日混排，逐段勾选、编辑和复制。百度、Google、有道、DeepL 与自定义 REST 独立配置，原文译文并排核对。
+- **录下过程**：区域、窗口或屏幕录制，暂停后继续。系统音频、可选麦克风与摄像头画中画，导出 MP4 或 GIF。
+- **把常用内容留在手边**：贴图置顶、调透明度，历史支持 OCR 搜索、重新编辑和拖出。全局快捷键、Shortcuts、URL 与 CLI 接入同一个常驻进程。
 
-<table>
-  <tr>
-    <td width="50%"><img src="website/assets/app-ocr.png" alt="OCR 工作区：文字区块编辑与原文译文并排核对" width="560"></td>
-    <td width="50%"><img src="website/assets/app-settings.png" alt="原生设置：分类侧栏与翻译服务配置" width="560"></td>
-  </tr>
-  <tr>
-    <td align="center"><strong>识别、编辑，与译文一起核对</strong></td>
-    <td align="center"><strong>服务、凭据和偏好，分区设置</strong></td>
-  </tr>
-</table>
-
-以上为当前原生界面的**离屏渲染预览**，使用公开合成数据。紧凑的系统设置、可收起的文字区块侧栏与并排文稿区共享系统字体、颜色和原生控件。预览用于展示排版；实际窗口检查和仍待完成的交互验收见[界面改版记录](docs/UI-REDESIGN.md)。
+<p align="center"><img src="website/assets/app-annotation.png" width="704" alt="niko-shot 当前原生标注工具栏，展示全部工具、颜色、线宽与输出操作"></p>
+<p align="center"><sub>原生工具栏离屏预览。官网可直接练习框选、画箭头、导出或复制图片；网页不会读取屏幕或发起 OCR、翻译请求。</sub></p>
 
 ## 下载与安装
 
@@ -68,7 +54,7 @@
 3. 打开应用，在菜单栏进入首次向导：欢迎 → 屏幕录制授权 → 试截一张。默认按 **⇧⌘A** 开始区域截图。
 4. 需要翻译时，再按下文配置自己的服务；录屏麦克风、摄像头与自动滚动权限按需开启。
 
-GitHub Actions 在 main 通过构建与测试后更新 **Nightly 导航页**，其中的 DMG、ZIP、SHA256SUMS 与 release-info.json 链接指向同一个独立、不可变的候选发布。文件不会在下载期间被滚动覆盖，可核对哈希与完整源码提交；[Actions](https://github.com/baogutang/niko-shot/actions/workflows/build.yml)保留自动构建记录。
+GitHub Actions 在 main 通过构建与测试后更新 **Nightly 导航页**，下载始终指向最近成功的候选。其中的 DMG、ZIP、SHA256SUMS 与 release-info.json 链接指向同一个独立、不可变的候选发布。文件不会在下载期间被滚动覆盖，可核对哈希与完整源码提交；[Actions](https://github.com/baogutang/niko-shot/actions/workflows/build.yml)保留自动构建记录。下载不会自动重装或替换本机已有应用。
 
 当前候选未完成 Developer ID 签名与 Apple 公证，macOS 可能阻止首次打开。请先核对发布来源与文件哈希，再按 [Apple 的安全打开说明](https://support.apple.com/zh-cn/102445)决定是否允许打开此次应用。ad hoc 签名完整性与测试通过不代表 Apple 已公证。
 
@@ -110,6 +96,9 @@ API 密钥保存在系统 Keychain；设置不会回显已保存的明文，复�
 
 <a id="快捷键"></a>
 
+<details>
+<summary>完整快捷键表与截图、标注、录屏操作</summary>
+
 ## 键盘优先，也保留直接操作
 
 以下是默认全局快捷键，均可在设置中录制修改；冲突会行内提示并提供候选组合。
@@ -130,8 +119,7 @@ API 密钥保存在系统 Keychain；设置不会回显已保存的明文，复�
 
 原生窗口使用标准「文件」与「窗口」菜单：Command+W 关闭当前窗口，Command+M 最小化。历史列表支持单击选择、上下键切换和双击编辑；OCR 区块使用 AppKit 原生文字编辑器，支持选文、粘贴、撤销和重做。
 
-<details>
-<summary>更多截图、标注、录屏与长截图操作</summary>
+**更多截图、标注、录屏与长截图操作**
 
 - 截图先冻结每块屏幕，再在冻结帧上选区。窗口悬停高亮，Space 循环同一点的层叠窗口；Shift 锁比例，Option 从中心缩放，方向键按目标屏像素微调。U 切换尺寸单位，P 打开预设或输入宽高，Option+C 复制色值。
 - Tab 进入标注。矩形、椭圆、直线、箭头、画笔、马赛克、模糊、文字、便签、高亮、放大镜、序号均由可序列化命令驱动，可撤销、重做和重新选择裁剪区域。历史大图自动适应窗口宽度，保存保留原始像素尺寸。
@@ -141,6 +129,7 @@ API 密钥保存在系统 Keychain；设置不会回显已保存的明文，复�
 - OCR 的原文和译文并排显示，选择当前服务与语言对后翻译。五家服务平级，失败保留该家的错误，不重试或切换到其他服务。可关闭 OCR 完成后的自动翻译。
 - 录屏支持区域、窗口和屏幕，指定延时后有三秒倒计时；HUD 提供暂停、继续、停止、取消和可选摄像头画中画。系统声音默认开启，麦克风按需；默认 HEVC，也可选择 H.264。GIF 使用 AVAssetReader 与 ImageIO，支持宽度、抽帧、预估体积和全局 256 色调色板。
 - 长截图选区后确认模式，默认自动滚动。拖动或输入固定头尾忽略区；捕获及处理完成、画面稳定后才继续滚动。低相关度或重复纹理会暂停，可确认重叠像素、重试或切换手动。手动模式等待用户滚动，不会因停留而误判到底。长图进入同一个标注编辑器，再复制或保存。
+
 
 </details>
 
@@ -187,6 +176,9 @@ xcodegen generate
 xcodebuild -scheme niko-shot -configuration Debug build
 ```
 
+<details>
+<summary>完整验证、Release 与正式签名分发</summary>
+
 可重复执行完整干净构建与测试：
 
 ```sh
@@ -204,9 +196,11 @@ Developer ID 分发需要有效的 Application 证书与已存入 Keychain 的�
 
 工程由 [project.yml](project.yml) 管理；唯一功能规格为 [PROMPT.md](PROMPT.md)，B0–B9 全部保持 P0 范围。实现说明与真实验收分别记录，构建成功不等于产品验收完成。
 
+</details>
+
 ## 架构与验收
 
-当前实现使用 Swift 6 严格并发、AppKit / SwiftUI 与系统框架。运行时没有 WebView、ffmpeg、登录 Helper 或第三方二进制。最新本机回归 **169 项、0 failures**；真实设备、账号、分发与性能结果保持独立。
+当前实现使用 Swift 6 严格并发、AppKit / SwiftUI 与系统框架。运行时没有 WebView、ffmpeg、登录 Helper 或第三方二进制。最新本机回归 **176 项、0 failures**；真实设备、账号、分发与性能结果保持独立。
 
 <details>
 <summary>原生架构与数据流（Mermaid）</summary>
@@ -263,7 +257,7 @@ AppKit 与原生配置停留在 MainActor；像素渲染、识别、拼接、编
 
 `scripts/measure-idle.py` 用外部采样器记录真实进程的 MenuReady 时间、RSS 和 CPU，不向应用加入轮询。默认运行两小时，原始 JSON、终止统计与 display-link 时间戳存于 `build/evidence`。可另外使用 `xcrun xctrace` 的 Time Profiler、Allocations 和 App Launch 模板记录原始 Instruments trace。
 
-改版前 B9 候选完成干净构建与 149 项测试。界面改版、发布前安全修复与 OCR 漏行恢复后的本机回归为 169 项、0 failures；Swift 6 完整并发检查与编译警告作为错误的门禁通过。新增官方接入导航、免密 REST、编码占位符认证、OPTIONS 的真实本机 HTTP 验证，以及五类服务错误回显与编码变体的密钥脱敏回归。测试覆盖原生图片／音视频编码、Vision 混排、模板签名、跨进程自动化、窗口及任务生命周期；实际账号和外设验收范围保持独立。
+改版前 B9 候选完成干净构建与 149 项测试。界面改版、发布前安全修复与 OCR 漏行恢复后的本机回归为 176 项、0 failures；Swift 6 完整并发检查与编译警告作为错误的门禁通过。新增官方接入导航、免密 REST、编码占位符认证、OPTIONS 的真实本机 HTTP 验证，以及五类服务错误回显与编码变体的密钥脱敏回归。测试覆盖原生图片／音视频编码、Vision 混排、模板签名、跨进程自动化、窗口及任务生命周期；实际账号和外设验收范围保持独立。
 
 改版前 B9 最终候选已复制至 `~/Applications/niko-shot.app`，主二进制哈希保持一致。原生登录启动开关实际完成启用及注销，最终恢复关闭；没有执行注销登录或重启系统。正常启动安装副本并重启 Shortcuts 后，系统发现全部五个正式动作，最近 OCR 动作在应用运行时和退出后均实际返回公开测试文字；前四个动作的完整捕获仍需对应权限和实机验收。
 
@@ -288,7 +282,7 @@ AppKit 与原生配置停留在 MainActor；像素渲染、识别、拼接、编
 |---|---|
 | 产品与下载 | [官网](https://baogutang.github.io/niko-shot/) · [Nightly](https://github.com/baogutang/niko-shot/releases/tag/nightly) |
 | 服务申请、密钥与模板 | [翻译配置指南](docs/TRANSLATION.md) |
-| 原生界面与预览依据 | [界面改版记录](docs/UI-REDESIGN.md) |
+| 原生界面与预览依据 | [界面改版记录](docs/UI-REDESIGN.md) · [原创品牌横幅](website/assets/readme-hero.svg) |
 | 已验证结果与待验收项 | [验收记录](docs/ACCEPTANCE.md) |
 | 功能规格与交付范围 | [PROMPT.md](PROMPT.md) |
 | 自动构建 | [GitHub Actions](https://github.com/baogutang/niko-shot/actions/workflows/build.yml) |

@@ -44,6 +44,7 @@ struct OCRView: View {
             }
         }
         .background(NikoTheme.canvas)
+        .tint(NikoTheme.accent)
         .frame(minWidth: 920, minHeight: 560)
     }
 
@@ -59,7 +60,7 @@ struct OCRView: View {
                     let selected = !allSelected
                     for index in model.blocks.indices { model.blocks[index].selected = selected }
                 }
-                .buttonStyle(.borderless).font(.system(size: 12))
+                .buttonStyle(.borderless).font(.system(size: 12)).foregroundStyle(NikoTheme.accent)
                 .disabled(model.blocks.isEmpty || model.isRecognizing)
             }.padding(.horizontal, 14).frame(height: 42)
             Divider()
@@ -73,7 +74,8 @@ struct OCRView: View {
             if model.blocks.isEmpty {
                 VStack(spacing: 12) {
                     if model.isRecognizing { ProgressView().controlSize(.small) }
-                    Image(systemName: "text.viewfinder").font(.system(size: 28, weight: .light)).foregroundStyle(.tertiary)
+                    Image(systemName: "text.viewfinder").font(.system(size: 24, weight: .light))
+                        .foregroundStyle(NikoTheme.accent.opacity(0.6))
                     Text(model.isRecognizing ? "正在识别文字…" : "没有识别出文字")
                         .font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
                     if !model.isRecognizing {
@@ -102,9 +104,6 @@ struct OCRView: View {
                 }.toggleStyle(.checkbox).font(.system(size: 12)).padding(.top, 10)
             } label: { Text("文字整理").font(.system(size: 12, weight: .medium)) }
                 .padding(14)
-            Text("勾选区块用于复制与翻译。")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-                .padding(.horizontal, 14).padding(.bottom, 12)
         }.background(NikoTheme.canvas)
     }
 }
@@ -134,12 +133,15 @@ private struct OCRBlockEditor: View {
                 .padding(.horizontal, -4).frame(height: editorHeight)
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
-        .background(block.selected ? NikoTheme.surface.opacity(0.6) : .clear)
+        .background(block.selected ? NikoTheme.selection.opacity(0.5) : .clear)
+        .overlay(alignment: .leading) {
+            if block.selected { Rectangle().fill(NikoTheme.accent).frame(width: 2) }
+        }
     }
 
     private var editorHeight: CGFloat {
         let estimatedLines = block.text.split(separator: "\n", omittingEmptySubsequences: false)
             .reduce(0) { $0 + max(1, Int(ceil(Double($1.count) / 28))) }
-        return min(180, max(58, CGFloat(estimatedLines) * 20 + 8))
+        return min(180, max(44, CGFloat(estimatedLines) * 20 + 8))
     }
 }

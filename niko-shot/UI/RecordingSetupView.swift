@@ -44,7 +44,7 @@ struct RecordingSetupView: View {
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 16) {
                     VStack(alignment: .leading, spacing: 10) {
                         sectionTitle("录制范围")
                         HStack(spacing: 8) {
@@ -54,7 +54,7 @@ struct RecordingSetupView: View {
                                         Image(systemName: item.symbol).font(.system(size: 20, weight: .regular))
                                         Text(item.title).font(.system(size: 13, weight: .medium))
                                     }
-                                    .frame(maxWidth: .infinity).frame(height: 66)
+                                    .frame(maxWidth: .infinity).frame(height: 60)
                                 }
                                 .buttonStyle(RecordingScopeButtonStyle(selected: mode == item))
                                 .accessibilityLabel("录制\(item.title)")
@@ -72,20 +72,24 @@ struct RecordingSetupView: View {
                 }
                 .padding(20)
             }
+            .background(NikoTheme.surface)
             Divider()
             HStack(spacing: 12) {
                 Button("取消", action: onCancel).keyboardShortcut(.cancelAction)
                     .accessibilityLabel("取消录屏设置")
                 Spacer()
-                Label("倒计时 3 秒", systemImage: "timer").font(.system(size: 12)).foregroundStyle(.secondary)
+                Label("3 秒倒计时", systemImage: "timer").font(.system(size: 12)).foregroundStyle(NikoTheme.accent)
                     .accessibilityLabel("录制开始前倒计时 3 秒")
                 Button(startTitle) { onStart(mode) }
                     .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                    .foregroundStyle(NikoTheme.onAccent)
                     .accessibilityLabel(startTitle)
             }.padding(.horizontal, 20).padding(.vertical, 12)
+                .background(NikoTheme.raisedSurface.opacity(0.35))
         }
         .font(.system(size: 13)).controlSize(.regular)
         .background(NikoTheme.canvas)
+        .tint(NikoTheme.accent)
         .frame(minWidth: 470, idealWidth: 500, minHeight: 500, idealHeight: 560)
     }
 
@@ -150,9 +154,9 @@ struct RecordingSetupView: View {
     }
 
     private var sourceDescription: String {
-        let audio = settings.systemAudio || settings.microphone ? "已选声音会写入视频音轨。" : "本次录制不包含声音。"
-        let camera = settings.recordingCamera ? "画中画会出现在悬浮窗和导出视频中。" : ""
-        return audio + camera + "开始时按需请求麦克风和摄像头权限。"
+        let audio = settings.systemAudio || settings.microphone ? "声音将写入视频。" : "本次无声音。"
+        let camera = settings.recordingCamera ? "画中画将写入视频。" : ""
+        return audio + camera + "权限在开始时按需请求。"
     }
 
     private var scopeDescription: String {
@@ -180,21 +184,21 @@ private struct RecordingScopeButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .foregroundStyle(selected ? Color.accentColor : Color.primary)
-            .background(selected ? Color.accentColor.opacity(0.09) : NikoTheme.surface.opacity(hovering || configuration.isPressed ? 1 : 0.6),
-                        in: RoundedRectangle(cornerRadius: 8))
+            .foregroundStyle(selected ? NikoTheme.accent : Color.primary)
+            .background(selected ? NikoTheme.selection : NikoTheme.raisedSurface.opacity(hovering || configuration.isPressed ? 1 : 0.5),
+                        in: RoundedRectangle(cornerRadius: NikoTheme.cornerRadius))
             .overlay {
-                RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(selected || focused ? Color.accentColor : NikoTheme.separator.opacity(0.65),
+                RoundedRectangle(cornerRadius: NikoTheme.cornerRadius)
+                    .strokeBorder(selected || focused ? NikoTheme.accent : NikoTheme.separator.opacity(0.65),
                                   lineWidth: focused ? 2 : selected ? 1 : 0.5)
             }
             .overlay(alignment: .topTrailing) {
                 if selected {
                     Image(systemName: "checkmark.circle.fill").font(.system(size: 11))
-                        .foregroundStyle(Color.accentColor).padding(7).accessibilityHidden(true)
+                        .foregroundStyle(NikoTheme.accent).padding(7).accessibilityHidden(true)
                 }
             }
-            .contentShape(RoundedRectangle(cornerRadius: 8))
+            .contentShape(RoundedRectangle(cornerRadius: NikoTheme.cornerRadius))
             .onHover { hovering = $0 }
     }
 }
