@@ -117,17 +117,19 @@ public struct ProviderSetupGuide: Sendable {
             summary: "本应用使用 Cloud Translation Basic v2，通过项目的 API Key 请求文本翻译。",
             credentialLabels: ["API Key"],
             steps: [
-                Step(id: 1, title: "申请服务",
-                     detail: "登录 Google Cloud，创建或选择有管理权限的项目，关联可用的结算账户，并在同一项目启用 Cloud Translation API。官方要求启用计费。", link: setup),
-                Step(id: 2, title: "填入凭据",
-                     detail: "在该项目创建 API Key，将 API 限制设为 Cloud Translation API，应用限制需允许本机 REST 请求。将完整 API Key 填入本应用 Google 服务设置。", link: console),
+                Step(id: 1, title: "启用翻译 API",
+                     detail: "登录 Google Cloud，在顶部选择或创建项目并关联结算账户。打开下方启用入口，在该项目启用 Cloud Translation API（translate.googleapis.com），确认它出现在已启用的 API 和服务中。", link: enable),
+                Step(id: 2, title: "创建并填写 API Key",
+                     detail: "保持顶部项目与第 1 步一致，在凭据页选择“创建凭据 → API 密钥”。创建标准 API Key，将 API 限制设为 Cloud Translation API，应用限制需允许本机 REST 请求；将完整密钥填入本应用 Google 服务设置。", link: console),
                 Step(id: 3, title: "测试连接",
                      detail: "保存后点击测试连接，实际请求 Hello, world! → 简体中文。成功时显示译文，失败时在当前服务显示原始错误码或 HTTP 状态。", link: docs)
             ],
             links: [product, console, docs, setup, enable, keys, authentication],
             notes: [
                 "Basic v2 支持 API Key；Advanced v3 不支持这种认证方式。本应用此处只需要 API Key。",
+                "如果创建凭据或 API 限制列表里找不到 Cloud Translation API，先返回第 1 步确认已启用，再刷新凭据页，并核对两页顶部的项目 ID 一致。凭据页用于管理密钥，启用服务需进入 API 库或上述启用入口。",
                 "密钥所属项目必须同时启用 Translation API 与计费；费用和使用额度以 Google Cloud 账户为准。",
+                "标准 API Key 无需绑定服务账号；创建时不勾选“Authenticate API calls through a service account”。若无法启用 API，需要项目所有者或具有 Service Usage Admin 权限的管理员开通。",
                 "网站 Referer、Android 和 iOS 的应用限制不适用于本应用的 macOS REST 请求。使用 IP 限制时填写公网出口 IP，网络变化后需重新核对。"
             ])
     }

@@ -38,11 +38,13 @@
   <h2 id="title-google">开通 Google Cloud Translation</h2>
   <p class="guide-summary">本应用使用 Cloud Translation Basic v2，通过项目的 API Key 请求文本翻译。</p>
   <p class="credential-kind">所需凭据 · API Key</p>
-  <div class="guide-steps"><div class="guide-step"><h3>1. 申请服务</h3><p>登录 Google Cloud，创建或选择有管理权限的项目，关联可用的结算账户，并在同一项目启用 Cloud Translation API。官方要求启用计费。</p><a href="https://docs.cloud.google.com/translate/docs/setup">开通指南 · 项目、计费与 API <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div>
-<div class="guide-step"><h3>2. 填入凭据</h3><p>在该项目创建 API Key，将 API 限制设为 Cloud Translation API，应用限制需允许本机 REST 请求。将完整 API Key 填入本应用 Google 服务设置。</p><a href="https://console.cloud.google.com/apis/credentials">凭据控制台 · Google Cloud <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div>
+  <div class="guide-steps"><div class="guide-step"><h3>1. 启用翻译 API</h3><p>登录 Google Cloud，在顶部选择或创建项目并关联结算账户。打开下方启用入口，在该项目启用 Cloud Translation API（translate.googleapis.com），确认它出现在已启用的 API 和服务中。</p><a href="https://console.cloud.google.com/apis/enableflow?apiid=translate.googleapis.com">启用服务 · Cloud Translation API <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div>
+<div class="guide-step"><h3>2. 创建并填写 API Key</h3><p>保持顶部项目与第 1 步一致，在凭据页选择“创建凭据 → API 密钥”。创建标准 API Key，将 API 限制设为 Cloud Translation API，应用限制需允许本机 REST 请求；将完整密钥填入本应用 Google 服务设置。</p><a href="https://console.cloud.google.com/apis/credentials">凭据控制台 · Google Cloud <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div>
 <div class="guide-step"><h3>3. 测试连接</h3><p>保存后点击测试连接，实际请求 Hello, world! → 简体中文。成功时显示译文，失败时在当前服务显示原始错误码或 HTTP 状态。</p><a href="https://docs.cloud.google.com/translate/docs/reference/rest/v2/translate">参考文档 · Basic v2 translate <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div></div>
   <div class="guide-note" aria-label="接入注意事项"><p>Basic v2 支持 API Key；Advanced v3 不支持这种认证方式。本应用此处只需要 API Key。</p>
+<p>如果创建凭据或 API 限制列表里找不到 Cloud Translation API，先返回第 1 步确认已启用，再刷新凭据页，并核对两页顶部的项目 ID 一致。凭据页用于管理密钥，启用服务需进入 API 库或上述启用入口。</p>
 <p>密钥所属项目必须同时启用 Translation API 与计费；费用和使用额度以 Google Cloud 账户为准。</p>
+<p>标准 API Key 无需绑定服务账号；创建时不勾选“Authenticate API calls through a service account”。若无法启用 API，需要项目所有者或具有 Service Usage Admin 权限的管理员开通。</p>
 <p>网站 Referer、Android 和 iOS 的应用限制不适用于本应用的 macOS REST 请求。使用 IP 限制时填写公网出口 IP，网络变化后需重新核对。</p></div>
   <h3 class="guide-subheading">官方入口</h3><div class="guide-step official-links"><a href="https://cloud.google.com/translate">产品介绍 · Google Cloud Translation <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
 <a href="https://console.cloud.google.com/apis/credentials">凭据控制台 · Google Cloud <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a>
@@ -107,5 +109,5 @@
       <p class="guide-footer-note">本页只提供说明与导航，不读取或提交密钥。真实账号连通性仍需你在应用内验证；认证、服务状态、套餐和额度以官方账户当前信息为准。更多模板示例见 <a href="https://github.com/baogutang/niko-shot/blob/main/docs/TRANSLATION.md">翻译配置文档</a>。</p>
     </div></div>
   </main>
-  <footer class="site-footer shell"><div><a class="wordmark" href="./"><img src="assets/niko-mark.svg" width="28" height="28" alt=""><span>niko-shot</span></a><p>截下一瞬，接住全部。</p></div><div class="footer-links"><a href="https://github.com/baogutang/niko-shot">GitHub</a><a href="guide.html">接入指南</a><a href="./#privacy">隐私与数据</a><a href="https://github.com/baogutang/niko-shot/issues">反馈问题</a></div><small>© 2026 niko-shot</small></footer>
+  <footer class="site-footer shell"><div><a class="wordmark" href="./"><img src="assets/niko-mark.svg" width="28" height="28" alt=""><span>niko-shot</span></a><p>截下一瞬，接住全部。</p></div><div class="footer-links"><a href="https://github.com/baogutang/niko-shot">GitHub</a><a href="guide.html">接入指南</a><a href="https://github.com/baogutang/niko-shot/issues">反馈问题</a></div><small>© 2026 niko-shot</small></footer>
 </body></html>

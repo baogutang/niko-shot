@@ -26,11 +26,13 @@
 ### Google Cloud Translation Basic v2
 
 1. 按[官方开通指南](https://docs.cloud.google.com/translate/docs/setup)，登录 Google Cloud，创建或选择有管理权限的项目，并为项目关联可用的结算账户。官方要求使用 Cloud Translation 时启用计费。
-2. 在同一项目[启用 Cloud Translation API](https://console.cloud.google.com/apis/enableflow?apiid=translate.googleapis.com)。
-3. 到[项目凭据控制台](https://console.cloud.google.com/apis/credentials)创建 **API Key**。按照[API Key 管理文档](https://docs.cloud.google.com/docs/authentication/api-keys)把 API 限制设为 Cloud Translation API。
+2. 在同一项目[启用 Cloud Translation API](https://console.cloud.google.com/apis/enableflow?apiid=translate.googleapis.com)（服务 ID：`translate.googleapis.com`），确认它出现在「API 和服务 → 已启用的 API 和服务」中。此入口会直接打开翻译 API 的启用流程。
+3. 到[项目凭据控制台](https://console.cloud.google.com/apis/credentials)，确认顶部项目与上一步一致，选择「创建凭据 → API 密钥」，创建 **标准 API Key**。按照[API Key 管理文档](https://docs.cloud.google.com/docs/authentication/api-keys)把 API 限制设为 Cloud Translation API；无需勾选「Authenticate API calls through a service account」或绑定服务账号。
 4. 将 API Key 填入本应用 Google 服务设置，保存后测试连接。应用限制需允许本机的原生 REST 请求；网站 Referer、Android 和 iOS 应用限制不适用于当前请求。使用 IP 限制时填写公网出口 IP，切换网络后重新核对。
 
 产品说明见[Cloud Translation](https://cloud.google.com/translate)，接口见[Basic v2 translate 参考文档](https://docs.cloud.google.com/translate/docs/reference/rest/v2/translate)。[官方认证说明](https://docs.cloud.google.com/translate/docs/authentication)明确：Basic v2 支持 API Key，Advanced v3 不支持。此处无需上传服务账号 JSON。
+
+**凭据页里找不到 Cloud Translation API：** 先回到上面的启用入口，核对当前项目并启用服务，再刷新凭据页。启用服务与创建密钥两页顶部的**项目 ID 必须相同**；凭据页负责管理密钥，服务开通在 API 库中完成。如果账号无法启用 API，[官方说明](https://docs.cloud.google.com/translate/docs/setup)要求具有 `serviceusage.services.enable` 权限，可由项目所有者或 Service Usage Admin 管理员开通。
 
 ### 有道智云文本翻译
 
