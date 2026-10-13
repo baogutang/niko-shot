@@ -87,7 +87,7 @@ final class RecordingCoordinator {
     }
 
     private func presentSetup(token: UUID, initialMode: RecordingSelectionMode = .region) {
-        let window = UtilityWindow(contentRect: CGRect(x: 0, y: 0, width: 500, height: 620), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let window = UtilityWindow(contentRect: CGRect(x: 0, y: 0, width: 500, height: 560), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "开始录屏 · \(requestedFormat.uppercased())"; window.isReleasedWhenClosed = false
         window.onClose = { [weak self] in
             guard let self, self.generation == token else { return }
@@ -276,7 +276,7 @@ final class RecordingCoordinator {
         let token = generation
         gifWindow?.close(); gifProgress.running = false; gifProgress.fraction = 0
         isBusy = true
-        let window = UtilityWindow(contentRect: CGRect(x: 0, y: 0, width: 500, height: 470), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let window = UtilityWindow(contentRect: CGRect(x: 0, y: 0, width: 500, height: 400), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "导出 GIF"; window.isReleasedWhenClosed = false
         window.onClose = { [weak self] in
             guard let self, self.generation == token else { return }

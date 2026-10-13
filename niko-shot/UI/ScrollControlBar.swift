@@ -72,7 +72,7 @@ final class ScrollControlBarController {
         selectionGlobal = selection
         let screen = selection.flatMap { rect in NSScreen.screens.first { $0.frame.intersects(rect) } } ?? NSScreen.main
         let visible = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1200, height: 800)
-        let size = CGSize(width: min(480, visible.width - 16), height: desiredHeight)
+        let size = CGSize(width: min(440, visible.width - 16), height: desiredHeight)
         let window = ScrollHUDPanel(contentRect: placement(size: size, visible: visible, selection: selection),
                                     styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.level = .floating
@@ -90,8 +90,9 @@ final class ScrollControlBarController {
         effect.blendingMode = .behindWindow
         effect.state = .active
         effect.wantsLayer = true
-        effect.layer?.cornerRadius = NikoTheme.cornerRadius
+        effect.layer?.cornerRadius = 12
         effect.layer?.masksToBounds = true
+        effect.layer?.borderWidth = 0.5
         let hosting = NSHostingView(rootView: ScrollControlBar(state: state,
             onFinish: { [weak self] in self?.onFinish() }, onCancel: { [weak self] in self?.onCancel() },
             onRetry: { [weak self] in self?.onRetry() }, onManualOverlap: { [weak self] in self?.onManualOverlap($0) },
@@ -127,7 +128,7 @@ final class ScrollControlBarController {
         old?.close()
     }
 
-    private var desiredHeight: CGFloat { state.isMatching ? 264 : state.isPaused ? 210 : 144 }
+    private var desiredHeight: CGFloat { state.isMatching ? 220 : state.isPaused ? 172 : 112 }
 
     private func resizeForState() {
         guard let panel else { return }
@@ -175,6 +176,7 @@ private struct ScrollControlBar: View {
     let onManualMode: () -> Void
     let onLayoutChanged: () -> Void
     @State private var overlapText: String
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     init(state: ScrollControlState, onFinish: @escaping () -> Void, onCancel: @escaping () -> Void,
          onRetry: @escaping () -> Void, onManualOverlap: @escaping (Int) -> Void,
@@ -187,69 +189,78 @@ private struct ScrollControlBar: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 10) {
-                        Text("\(max(0, state.height).formatted()) px").font(.system(size: 17, weight: .semibold)).monospacedDigit()
-                        Text("\(max(0, state.frames)) 屏").font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text(max(0, state.height).formatted()).font(.system(size: 17, weight: .semibold)).monospacedDigit()
+                        Text("px").font(.system(size: 11)).foregroundStyle(.secondary)
                     }
-                    Text(state.status).font(.caption).foregroundStyle(.secondary).lineLimit(2).help(state.status)
+                    HStack(spacing: 7) {
+                        Label(state.mode.title, systemImage: state.mode == .automatic ? "arrow.down" : "hand.draw")
+                        Text("·").accessibilityHidden(true)
+                        Text("\(max(0, state.frames)) 屏").monospacedDigit()
+                    }.font(.system(size: 11)).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityElement(children: .combine)
-                    .accessibilityLabel("长截图总高度 \(state.height) 像素，已捕获 \(state.frames) 屏。\(state.status)")
-                ScrollHUDButton(title: "结束并编辑长图", symbol: "checkmark", tint: .accentColor, action: onFinish)
+                    .accessibilityLabel("\(state.mode.title)，长截图总高度 \(state.height) 像素，已捕获 \(state.frames) 屏")
+                ScrollHUDButton(title: "结束并编辑长图", symbol: "checkmark", tint: .accentColor,
+                                showsTitle: true, visibleTitle: "结束", prominent: true, action: onFinish)
                     .keyboardShortcut(.return, modifiers: .command)
                 ScrollHUDButton(title: "取消长截图", symbol: "xmark", action: onCancel)
                     .keyboardShortcut(.escape, modifiers: [])
-            }
-            HStack {
-                Label(state.mode.title, systemImage: state.mode == .automatic ? "arrow.down" : "hand.draw")
-                    .font(.caption).foregroundStyle(.secondary)
+            }.frame(minHeight: 44)
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(state.status).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2).help(state.status)
+                    if state.mode == .manual {
+                        Text("自行滚动，画面稳定后自动捕获。")
+                            .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                            .accessibilityLabel("手动模式：请自行滚动，画面稳定后自动捕获，完成请点结束")
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
                 Spacer()
                 if state.mode == .automatic {
                     ScrollHUDButton(title: "改为手动", symbol: "hand.draw", showsTitle: true, action: onManualMode)
                         .keyboardShortcut("m", modifiers: [.command, .shift])
                 }
-            }
-            if state.mode == .manual {
-                Text("滚动后自动捕获，完成请点结束。")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel("手动模式：请自行滚动，画面稳定后自动捕获，完成请点结束")
-            }
+            }.frame(minHeight: 44)
             if state.isMatching {
                 Divider()
-                HStack {
-                    Label("确认接缝", systemImage: "rectangle.on.rectangle").font(.callout.weight(.medium))
-                    Spacer()
-                    Text(correlationLabel).font(.caption).foregroundStyle(.secondary).monospacedDigit()
-                }
-                HStack(spacing: 8) {
-                    Text("重叠").font(.callout)
-                    TextField("重叠像素", text: $overlapText).textFieldStyle(.roundedBorder)
-                        .multilineTextAlignment(.trailing).font(.system(.body, design: .monospaced))
-                        .frame(width: 64).accessibilityLabel("手动重叠像素，允许零到 \(maximumOverlap)")
-                        .onSubmit(commitOverlap)
-                    Text("px").font(.caption).foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-                    ScrollHUDButton(title: "按此重叠拼接", symbol: "rectangle.stack", showsTitle: true,
-                                    enabled: validOverlap != nil, action: commitOverlap)
-                    ScrollHUDButton(title: "重试当前帧", symbol: "arrow.clockwise", action: onRetry)
-                        .keyboardShortcut("r", modifiers: .command)
-                }
-                Text("允许 0–\(maximumOverlap) px；输入后按回车确认，⌘R 重试。")
-                    .font(.caption2).foregroundStyle(validOverlap == nil ? Color.red : Color.secondary)
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack {
+                        Label("确认接缝", systemImage: "rectangle.on.rectangle").font(.system(size: 12, weight: .semibold))
+                        Spacer()
+                        Text(correlationLabel).font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+                    }
+                    HStack(spacing: 6) {
+                        Text("重叠").font(.system(size: 12))
+                        TextField("重叠像素", text: $overlapText).textFieldStyle(.roundedBorder)
+                            .multilineTextAlignment(.trailing).font(.system(size: 12)).monospacedDigit()
+                            .frame(width: 68, height: 44).accessibilityLabel("手动重叠像素，允许零到 \(maximumOverlap)")
+                            .onSubmit(commitOverlap)
+                        Text("px").font(.system(size: 11)).foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
+                        ScrollHUDButton(title: "按此重叠拼接", symbol: "rectangle.stack", showsTitle: true,
+                                        visibleTitle: "拼接", prominent: true, enabled: validOverlap != nil, action: commitOverlap)
+                        ScrollHUDButton(title: "重试当前帧", symbol: "arrow.clockwise", action: onRetry)
+                            .keyboardShortcut("r", modifiers: .command)
+                    }
+                    Text("0–\(maximumOverlap) px · 回车确认 · ⌘R 重试")
+                        .font(.system(size: 11)).foregroundStyle(validOverlap == nil ? Color.red : Color.secondary)
+                }.padding(.top, 3)
             } else if state.isPaused {
                 Divider()
                 HStack {
-                    Label("捕获已暂停", systemImage: "pause.circle").font(.callout).foregroundStyle(.secondary)
+                    Label("捕获已暂停", systemImage: "pause.circle").font(.system(size: 12)).foregroundStyle(.secondary)
                     Spacer()
                     ScrollHUDButton(title: "继续重试", symbol: "arrow.clockwise", showsTitle: true, action: onRetry)
                         .keyboardShortcut("r", modifiers: .command)
                 }
             }
         }
-        .padding(12)
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background { if reduceTransparency { NikoTheme.canvas } }
         .onChange(of: state.isMatching) { _, _ in onLayoutChanged() }
         .onChange(of: state.isPaused) { _, _ in onLayoutChanged() }
         .onChange(of: state.mode) { _, _ in onLayoutChanged() }
@@ -278,25 +289,23 @@ private struct ScrollHUDButton: View {
     let symbol: String
     var tint: Color = .primary
     var showsTitle = false
+    var visibleTitle: String?
+    var prominent = false
     var enabled = true
     let action: () -> Void
-    @State private var hovered = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: symbol).font(.system(size: 16, weight: .medium))
-                if showsTitle { Text(title).font(.callout) }
+                if showsTitle { Text(visibleTitle ?? title).font(.system(size: 12, weight: .medium)) }
             }
             .foregroundStyle(tint).padding(.horizontal, showsTitle ? 10 : 0)
             .frame(minWidth: 44, minHeight: 44)
-            .background(hovered ? Color.primary.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: NikoTheme.cornerRadius))
-            .contentShape(RoundedRectangle(cornerRadius: NikoTheme.cornerRadius))
+            .contentShape(RoundedRectangle(cornerRadius: 6))
         }
-        .buttonStyle(.plain).disabled(!enabled).opacity(enabled ? 1 : 0.45).focusable()
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.13), value: hovered)
-        .onHover { hovered = $0 }.help(title).accessibilityLabel(title)
+        .buttonStyle(NikoActionButtonStyle(prominent: prominent)).disabled(!enabled).focusable()
+        .help(title).accessibilityLabel(title)
     }
 }
 
@@ -309,4 +318,9 @@ private final class ScrollHUDPanel: NSPanel {
 @MainActor
 private final class ScrollHUDMaterial: NSVisualEffectView {
     override var mouseDownCanMoveWindow: Bool { true }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        effectiveAppearance.performAsCurrentDrawingAppearance { layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.65).cgColor }
+    }
 }

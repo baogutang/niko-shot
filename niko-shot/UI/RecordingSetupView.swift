@@ -25,7 +25,7 @@ enum RecordingSelectionMode: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// Compact native preflight panels; the coordinator owns selection, authorization and countdown.
+/// Native preflight controls; the coordinator owns selection, authorization and countdown.
 @MainActor
 struct RecordingSetupView: View {
     @Bindable private var settings: AppSettings
@@ -43,95 +43,116 @@ struct RecordingSetupView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            NikoPageHeader(title: "开始录屏", subtitle: "选定范围，倒计时 3 秒后开始录制。", symbol: "record.circle")
-                .padding(24)
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    NikoPanel {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("录制范围").font(.headline).accessibilityAddTraits(.isHeader)
-                            Picker("范围", selection: $mode) {
-                                ForEach(RecordingSelectionMode.allCases) { item in
-                                    Label(item.title, systemImage: item.symbol).tag(item)
+                VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        sectionTitle("录制范围")
+                        HStack(spacing: 8) {
+                            ForEach(RecordingSelectionMode.allCases) { item in
+                                Button { mode = item } label: {
+                                    VStack(spacing: 7) {
+                                        Image(systemName: item.symbol).font(.system(size: 20, weight: .regular))
+                                        Text(item.title).font(.system(size: 13, weight: .medium))
+                                    }
+                                    .frame(maxWidth: .infinity).frame(height: 66)
                                 }
-                            }.pickerStyle(.segmented).accessibilityLabel("录制范围")
-                            Text(scopeDescription).font(.caption).foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
+                                .buttonStyle(RecordingScopeButtonStyle(selected: mode == item))
+                                .accessibilityLabel("录制\(item.title)")
+                                .accessibilityValue(mode == item ? "已选择" : "未选择")
+                                .accessibilityAddTraits(mode == item ? .isSelected : [])
+                            }
                         }
+                        Text(scopeDescription).font(.system(size: 12)).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    videoPanel
-                    sourcesPanel
+                    Divider()
+                    videoControls
+                    Divider()
+                    sourceControls
                 }
-                .padding(.horizontal, 24).padding(.bottom, 24)
+                .padding(20)
             }
             Divider()
             HStack(spacing: 12) {
                 Button("取消", action: onCancel).keyboardShortcut(.cancelAction)
                     .accessibilityLabel("取消录屏设置")
                 Spacer()
-                Label("3 秒", systemImage: "timer").font(.caption).foregroundStyle(.secondary)
+                Label("倒计时 3 秒", systemImage: "timer").font(.system(size: 12)).foregroundStyle(.secondary)
                     .accessibilityLabel("录制开始前倒计时 3 秒")
                 Button(startTitle) { onStart(mode) }
-                    .buttonStyle(.borderedProminent).controlSize(.large).keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                     .accessibilityLabel(startTitle)
-            }.padding(.horizontal, 24).padding(.vertical, 16)
+            }.padding(.horizontal, 20).padding(.vertical, 12)
         }
+        .font(.system(size: 13)).controlSize(.regular)
         .background(NikoTheme.canvas)
-        .frame(minWidth: 470, idealWidth: 500, minHeight: 570, idealHeight: 620)
+        .frame(minWidth: 470, idealWidth: 500, minHeight: 500, idealHeight: 560)
     }
 
-    private var videoPanel: some View {
-        NikoPanel {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("视频").font(.headline).accessibilityAddTraits(.isHeader)
-                HStack(alignment: .top, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("帧率").font(.caption).foregroundStyle(.secondary)
-                        Picker("帧率", selection: $settings.recordingFPS) {
-                            ForEach([15, 24, 30, 60], id: \.self) { Text("\($0) fps").tag($0) }
-                        }.labelsHidden().accessibilityLabel("录屏帧率")
-                    }.frame(width: 110)
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("编码").font(.caption).foregroundStyle(.secondary)
-                        Picker("编码", selection: $settings.recordingCodec) {
-                            Text("HEVC · 更小体积").tag("hevc")
-                            Text("H.264 · 广泛兼容").tag("h264")
-                        }.labelsHidden().accessibilityLabel("视频编码")
-                    }.frame(maxWidth: .infinity, alignment: .leading)
+    private var videoControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("视频")
+            formRow("帧率") {
+                Picker("帧率", selection: $settings.recordingFPS) {
+                    ForEach([15, 24, 30, 60], id: \.self) { Text("\($0) fps").tag($0) }
+                }.labelsHidden().frame(width: 120).accessibilityLabel("录屏帧率")
+            }
+            formRow("编码") {
+                Picker("编码", selection: $settings.recordingCodec) {
+                    Text("HEVC · 更小体积").tag("hevc")
+                    Text("H.264 · 广泛兼容").tag("h264")
+                }.labelsHidden().frame(width: 224).accessibilityLabel("视频编码")
+            }
+            formRow("质量") {
+                HStack(spacing: 12) {
+                    Slider(value: $settings.recordingQuality, in: 0...1)
+                        .accessibilityLabel("录屏质量")
+                    Text(settings.recordingQuality, format: .percent.precision(.fractionLength(0)))
+                        .monospacedDigit().foregroundStyle(.secondary).frame(width: 40, alignment: .trailing)
                 }
-                LabeledContent("质量") {
-                    HStack(spacing: 8) {
-                        Slider(value: $settings.recordingQuality, in: 0...1)
-                            .frame(width: 160).accessibilityLabel("录屏质量")
-                        Text(settings.recordingQuality, format: .percent.precision(.fractionLength(0)))
-                            .font(.callout).monospacedDigit().foregroundStyle(.secondary).frame(width: 42, alignment: .trailing)
-                    }
-                }.frame(minHeight: 28)
+            }
+            formRow("光标") {
                 Toggle("显示光标", isOn: $settings.showsCursor)
-                    .toggleStyle(.switch).controlSize(.small).frame(minHeight: 28)
+                    .toggleStyle(.checkbox)
                     .accessibilityLabel("录制鼠标光标")
             }
         }
     }
 
-    private var sourcesPanel: some View {
-        NikoPanel {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("声音与摄像头").font(.headline).accessibilityAddTraits(.isHeader)
-                HStack(spacing: 16) {
-                    Toggle("系统声音", isOn: $settings.systemAudio)
-                        .accessibilityLabel("录制系统声音")
-                    Divider().frame(height: 20)
-                    Toggle("麦克风", isOn: $settings.microphone)
-                        .accessibilityLabel("录制麦克风声音")
-                }.toggleStyle(.switch).controlSize(.small).frame(minHeight: 28)
-                Toggle("摄像头画中画", isOn: $settings.recordingCamera)
-                    .toggleStyle(.switch).controlSize(.small).frame(minHeight: 28)
-                    .accessibilityLabel("在视频中加入摄像头画中画")
-                Text("麦克风和摄像头在开始录制时按需授权。摄像头画面会同时出现在悬浮窗和导出视频中。")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+    private var sourceControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("声音与摄像头")
+            formRow("声音") {
+                HStack(spacing: 24) {
+                    Toggle("系统声音", isOn: $settings.systemAudio).accessibilityLabel("录制系统声音")
+                    Toggle("麦克风", isOn: $settings.microphone).accessibilityLabel("录制麦克风声音")
+                }.toggleStyle(.checkbox)
             }
+            formRow("摄像头") {
+                Toggle("摄像头画中画", isOn: $settings.recordingCamera)
+                    .toggleStyle(.checkbox)
+                    .accessibilityLabel("在视频中加入摄像头画中画")
+            }
+            Text(sourceDescription)
+                .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title).font(.system(size: 13, weight: .semibold)).accessibilityAddTraits(.isHeader)
+    }
+
+    private func formRow<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(title).foregroundStyle(.secondary).frame(width: 64, alignment: .trailing)
+            content().frame(maxWidth: .infinity, alignment: .leading)
+        }.frame(minHeight: 24)
+    }
+
+    private var sourceDescription: String {
+        let audio = settings.systemAudio || settings.microphone ? "已选声音会写入视频音轨。" : "本次录制不包含声音。"
+        let camera = settings.recordingCamera ? "画中画会出现在悬浮窗和导出视频中。" : ""
+        return audio + camera + "开始时按需请求麦克风和摄像头权限。"
     }
 
     private var scopeDescription: String {
@@ -148,5 +169,32 @@ struct RecordingSetupView: View {
         case .window: "选择窗口并开始"
         case .fullscreen: "开始全屏录制"
         }
+    }
+}
+
+@MainActor
+private struct RecordingScopeButtonStyle: ButtonStyle {
+    let selected: Bool
+    @State private var hovering = false
+    @Environment(\.isFocused) private var focused
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(selected ? Color.accentColor : Color.primary)
+            .background(selected ? Color.accentColor.opacity(0.09) : NikoTheme.surface.opacity(hovering || configuration.isPressed ? 1 : 0.6),
+                        in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(selected || focused ? Color.accentColor : NikoTheme.separator.opacity(0.65),
+                                  lineWidth: focused ? 2 : selected ? 1 : 0.5)
+            }
+            .overlay(alignment: .topTrailing) {
+                if selected {
+                    Image(systemName: "checkmark.circle.fill").font(.system(size: 11))
+                        .foregroundStyle(Color.accentColor).padding(7).accessibilityHidden(true)
+                }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+            .onHover { hovering = $0 }
     }
 }

@@ -90,14 +90,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !PermissionWizardController.isCompleted || ProcessInfo.processInfo.environment["NIKO_REPLAY_ONBOARDING"] == "1" { showWizard() }
     }
 
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard !isTerminating else { return false }
+        if !flag { showSettings() }
+        return true
+    }
+
     @objc func showSettings() {
         installApplicationMenu()
         if settingsWindow == nil {
-            let window = UtilityWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 700), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
+            let window = UtilityWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 650), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
             window.title = "niko-shot 设置"
             window.toolbarStyle = .unified
             window.titlebarAppearsTransparent = true
             window.isReleasedWhenClosed = false
+            window.contentMinSize = CGSize(width: 820, height: 580)
+            window.titlebarSeparatorStyle = .line
+            window.setFrameAutosaveName("NikoSettingsWorkspace")
             if let hotkeys {
                 window.contentView = NSHostingView(rootView: SettingsView(hotkeys: hotkeys,
                     onShowWizard: { [weak self] in self?.showWizard() }))
@@ -268,6 +277,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let window = UtilityWindow(contentRect: CGRect(x: 0, y: 0, width: 900, height: 640), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
         window.title = title; window.isReleasedWhenClosed = false
         window.toolbarStyle = .unified; window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .line
+        window.contentMinSize = CGSize(width: 760, height: 500)
         window.center(); return window
     }
     private func openHistoryImage(_ record: HistoryRecord, pin: Bool) {
@@ -317,7 +328,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installApplicationMenu()
         if ocrWindow == nil {
             let window = makeUtilityWindow(title: "识别与翻译")
-            window.setContentSize(CGSize(width: 1240, height: 760)); window.center()
+            window.contentMinSize = CGSize(width: 920, height: 560)
+            window.setContentSize(CGSize(width: 1120, height: 680))
+            window.setFrameAutosaveName("NikoTextWorkspace")
+            window.center()
             window.onClose = { [weak self] in self?.ocrWindow = nil }; ocrWindow = window
         }
         ocrWindow?.contentView = NSHostingView(rootView: OCRView(model: model))

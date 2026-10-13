@@ -66,73 +66,94 @@ struct MenuContent: View {
     let hotkeys: HotkeyCenter?
     let action: (String) -> Void
     let settings: () -> Void
-    private let utilities: [CaptureAction] = [.record, .scroll, .ocr, .pins]
+    private let utilities: [CaptureAction] = [.window, .fullscreen, .record, .scroll, .ocr, .pins]
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 10) {
-                NikoSymbolBadge(symbol: "camera.viewfinder", size: 34)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("niko-shot").font(.system(size: 16, weight: .semibold))
-                    Text("屏幕工具箱").font(.caption).foregroundStyle(.secondary)
-                }
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "camera.viewfinder")
+                    .font(.system(size: 17, weight: .medium)).foregroundStyle(.tint)
+                    .accessibilityHidden(true)
+                Text("niko-shot").font(.system(size: 15, weight: .semibold))
                 Spacer()
-                Button(action: settings) { Image(systemName: "gearshape").font(.system(size: 15)) }
-                    .buttonStyle(.borderless).help("设置 · ⌘,").accessibilityLabel("打开设置")
-            }
+            }.frame(height: 24)
             Button { action(CaptureAction.region.rawValue) } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "crop").font(.system(size: 23, weight: .medium)).foregroundStyle(.tint)
+                HStack(spacing: 10) {
+                    Image(systemName: "crop").font(.system(size: 20, weight: .medium)).foregroundStyle(.tint)
+                        .frame(width: 26).accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("区域截图").font(.system(size: 15, weight: .semibold))
-                        Text("拖动选择，随后复制或标注").font(.caption).foregroundStyle(.secondary)
+                        Text("区域截图").font(.system(size: 14, weight: .semibold))
+                        Text("拖动框选，复制或标注").font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
                     NikoShortcutHint(text: shortcut(.region))
                 }
-                .padding(14).frame(maxWidth: .infinity, minHeight: 70, alignment: .leading)
-            }.buttonStyle(NikoActionButtonStyle(prominent: true)).accessibilityLabel("区域截图")
-            HStack(spacing: 8) {
-                launcher(.window)
-                launcher(.fullscreen)
+                .padding(.horizontal, 12).frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
             }
-            Divider()
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+            .buttonStyle(NikoActionButtonStyle(prominent: true)).accessibilityLabel("区域截图")
+            .help("区域截图 · \(shortcut(.region))")
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)], spacing: 6) {
                 ForEach(utilities) { launcher($0) }
             }
             Button { action(CaptureAction.repeatRegion.rawValue) } label: {
-                HStack {
-                    Label("重复上次区域", systemImage: "arrow.counterclockwise").font(.callout)
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.counterclockwise").font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.secondary).frame(width: 24).accessibilityHidden(true)
+                    Text("重复上次区域").font(.system(size: 12))
                     Spacer()
                     NikoShortcutHint(text: shortcut(.repeatRegion))
-                }.padding(.horizontal, 10).frame(height: 36)
-            }.buttonStyle(NikoActionButtonStyle()).accessibilityLabel("重复上次区域截图")
+                }.padding(.horizontal, 10).frame(height: 44)
+            }
+            .buttonStyle(NikoActionButtonStyle()).accessibilityLabel("重复上次区域截图")
+            .help("重复上次区域 · \(shortcut(.repeatRegion))")
             Divider()
             HStack {
-                Text("最近截图").font(.callout.weight(.semibold))
+                Text("最近截图").font(.system(size: 12, weight: .semibold))
+                    .accessibilityAddTraits(.isHeader)
                 Spacer()
-                Button("查看全部", systemImage: "chevron.right") { action("history") }
-                    .font(.caption).buttonStyle(.borderless).accessibilityLabel("截图历史")
+                Button { action("history") } label: {
+                    HStack(spacing: 4) {
+                        Text("查看全部").font(.system(size: 11))
+                        Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold))
+                    }.padding(.horizontal, 8).frame(height: 44)
+                }.buttonStyle(NikoActionButtonStyle()).accessibilityLabel("截图历史")
             }
             if model.recents.isEmpty {
-                Label("截图后可在这里快速取用，也能直接拖出文件。", systemImage: "photo.on.rectangle")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    .padding(.vertical, 6)
+                HStack(spacing: 10) {
+                    Image(systemName: "photo.on.rectangle").font(.system(size: 18, weight: .regular))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("第一张截图，从框选开始").font(.system(size: 12))
+                        Text("最近截图会出现在这里，可直接拖出文件。")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                }
+                .foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 62, alignment: .leading)
             } else {
                 ScrollView(.horizontal) {
-                    HStack(spacing: 8) {
+                    HStack(spacing: 6) {
                         ForEach(model.recents.prefix(3)) { record in
                             MenuRecentCapture(record: record)
                         }
                     }
                 }.scrollIndicators(.hidden)
             }
-            HStack(spacing: 12) {
-                Text("Esc 取消 · Enter 复制 · Tab 标注").font(.caption2).foregroundStyle(.secondary)
+            Divider()
+            HStack {
+                Button(action: settings) {
+                    Label("设置", systemImage: "gearshape")
+                        .font(.system(size: 12)).padding(.horizontal, 8).frame(height: 44)
+                }.buttonStyle(NikoActionButtonStyle()).accessibilityLabel("打开设置")
+                    .help("设置 · ⌘,").keyboardShortcut(",", modifiers: .command)
                 Spacer()
-                Button("退出") { NSApp.terminate(nil) }.font(.caption).buttonStyle(.borderless)
+                Button { NSApp.terminate(nil) } label: {
+                    HStack(spacing: 8) {
+                        Text("退出").font(.system(size: 12))
+                        Text("⌘Q").font(.system(size: 11)).foregroundStyle(.secondary).accessibilityHidden(true)
+                    }.padding(.horizontal, 8).frame(height: 44)
+                }.buttonStyle(NikoActionButtonStyle())
                     .accessibilityLabel("退出 niko-shot").keyboardShortcut("q", modifiers: .command)
             }
-        }.padding(18).frame(width: 392)
+        }.padding(.horizontal, 14).padding(.vertical, 8).frame(width: 364)
+            .background(NikoTheme.canvas)
     }
 
     private func shortcut(_ entry: CaptureAction) -> String {
@@ -142,14 +163,16 @@ struct MenuContent: View {
     private func launcher(_ entry: CaptureAction) -> some View {
         Button { action(entry.rawValue) } label: {
             HStack(spacing: 10) {
-                Image(systemName: entry.symbol).font(.system(size: 17)).foregroundStyle(.secondary).frame(width: 23)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(entry == .ocr ? "识别与翻译" : entry.title).font(.callout.weight(.medium))
-                    Text(shortcut(entry)).font(.system(size: 10, weight: .medium, design: .rounded)).foregroundStyle(.secondary)
+                Image(systemName: entry.symbol).font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(.secondary).frame(width: 22).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(entry == .ocr ? "识别与翻译" : entry.title).font(.system(size: 12, weight: .medium))
+                    Text(shortcut(entry)).font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
                 }
                 Spacer(minLength: 0)
-            }.padding(.horizontal, 12).frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
-        }.buttonStyle(NikoActionButtonStyle()).accessibilityLabel(entry.title)
+            }.padding(.horizontal, 10).frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+        }.buttonStyle(NikoActionButtonStyle()).accessibilityLabel(entry.title).help("\(entry.title) · \(shortcut(entry))")
     }
 }
 
@@ -157,6 +180,8 @@ struct MenuContent: View {
 private struct MenuRecentCapture: View {
     let record: HistoryRecord
     @State private var thumbnail: NSImage?
+    @State private var hovered = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -168,12 +193,17 @@ private struct MenuRecentCapture: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .frame(width: 110, height: 68).background(NikoTheme.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 7))
-            .overlay { RoundedRectangle(cornerRadius: 7).strokeBorder(NikoTheme.separator.opacity(0.35), lineWidth: 0.5) }
+            .frame(width: 108, height: 66).background(NikoTheme.surface)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(hovered ? Color.accentColor.opacity(0.65) : NikoTheme.separator.opacity(0.4), lineWidth: hovered ? 1 : 0.5)
+            }
             .accessibilityLabel("最近截图，可拖出文件")
             Text("\(record.width) × \(record.height)").font(.caption2).foregroundStyle(.secondary).monospacedDigit()
         }
+        .onHover { hovered = $0 }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.13), value: hovered)
         .help("\(URL(fileURLWithPath: record.path).lastPathComponent) · 拖入 Finder 或其他应用")
         .task(id: record.id) { thumbnail = NSImage(data: record.thumbnail) }
     }

@@ -21,87 +21,68 @@ struct TranslationPane: View {
     }
 
     var body: some View {
-        @Bindable var model = model
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 12) {
-                NikoSymbolBadge(symbol: "character.bubble", size: 34)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("翻译").font(.system(size: 17, weight: .semibold)).accessibilityAddTraits(.isHeader)
-                    Text("原文与译文并排，方便核对。").font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button("申请与接入指南", systemImage: "questionmark.circle") { showsSetupGuide = true }
-                    .buttonStyle(.borderless).font(.callout).help("查看当前服务的官方申请步骤和链接")
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "globe").foregroundStyle(.secondary).accessibilityHidden(true)
+                TranslationServicePicker(settings: settings).labelsHidden().frame(maxWidth: 210)
+                Button(action: openTranslationSettings) { Image(systemName: "slider.horizontal.3").frame(width: 26, height: 26) }
+                    .buttonStyle(.borderless).help("配置翻译服务").accessibilityLabel("配置当前翻译服务")
+                Spacer(minLength: 10)
+                Toggle("自动翻译", isOn: $settings.automaticTranslation)
+                    .toggleStyle(.switch).controlSize(.small).font(.system(size: 12)).fixedSize()
+                    .accessibilityLabel("文字识别完成后自动翻译")
+                Button { showsSetupGuide = true } label: { Image(systemName: "questionmark.circle").frame(width: 26, height: 26) }
+                    .buttonStyle(.borderless).help("当前服务的申请步骤与官方入口")
+                    .accessibilityLabel("打开申请与接入指南")
             }
-            NikoPanel {
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack(spacing: 12) {
-                        TranslationServicePicker(settings: settings)
-                        Button("配置服务", systemImage: "slider.horizontal.3", action: openTranslationSettings)
-                            .help("在设置中管理翻译凭据和自定义服务")
-                    }
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("原文语言").font(.caption).foregroundStyle(.secondary)
-                            Picker("原文语言", selection: $model.source) {
-                                Text("自动检测").tag(Optional<Language>.none)
-                                ForEach(Language.allCases, id: \.self) { language in
-                                    Text(language.displayName).tag(Optional(language))
-                                        .disabled(!supports(language, asSource: true))
-                                        .help(supports(language, asSource: true) ? language.displayName : "当前服务不支持此原文语言")
-                                }
-                            }.labelsHidden().accessibilityLabel("原文语言")
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                        Image(systemName: "arrow.right").foregroundStyle(.tertiary).padding(.top, 18).accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("译文语言").font(.caption).foregroundStyle(.secondary)
-                            Picker("译文语言", selection: $model.target) {
-                                ForEach(Language.allCases, id: \.self) { language in
-                                    Text(language.displayName).tag(language)
-                                        .disabled(!supports(language, asSource: false))
-                                        .help(supports(language, asSource: false) ? language.displayName : "当前服务不支持此译文语言")
-                                }
-                            }.labelsHidden().accessibilityLabel("译文语言")
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    HStack(spacing: 12) {
-                        Toggle("OCR 完成后自动翻译", isOn: $settings.automaticTranslation)
-                            .toggleStyle(.checkbox).font(.callout)
-                            .accessibilityLabel("文字识别完成后自动翻译")
-                        Spacer()
-                        if model.isTranslating {
-                            ProgressView().controlSize(.small)
-                            Button("取消") { model.cancel() }.accessibilityLabel("取消当前翻译")
-                        } else {
-                            Button("翻译", systemImage: "character.bubble") { model.translate(text: text, settings: settings) }
-                                .buttonStyle(.borderedProminent)
-                                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isRecognizing || model.unsupportedReason(settings: settings) != nil)
-                                .accessibilityLabel("使用当前服务翻译所选文字")
-                        }
-                    }
-                }
-            }
-            if let reason = model.unsupportedReason(settings: settings) {
-                Label(reason, systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
-            }
-            if let error = model.errorMessage {
-                HStack(alignment: .top, spacing: 12) {
-                    Label(error, systemImage: "exclamationmark.circle")
-                        .font(.callout).foregroundStyle(.red).textSelection(.enabled)
-                        .accessibilityLabel("翻译错误：\(error)")
-                    Spacer(minLength: 0)
-                    Button("查看配置", action: openTranslationSettings).buttonStyle(.borderless)
-                }
-            } else if let message = model.statusMessage {
-                Text(message).font(.caption).foregroundStyle(.secondary)
-            }
-            HStack(alignment: .top, spacing: 14) {
-                textPanel(title: "原文", content: text, placeholder: "勾选左侧文字区块，\n在这里核对原文。", symbol: "text.alignleft", isResult: false)
+            .padding(.horizontal, 16).frame(height: 48).background(NikoTheme.canvas)
+            Divider()
+            HSplitView {
+                textPanel(title: "原文", content: text,
+                    placeholder: isRecognizing ? "正在读取图中文字…" : "选择需要的文字区块。", isResult: false)
+                    .frame(minWidth: 235)
                 textPanel(title: "译文", content: model.translatedText,
-                          placeholder: model.isTranslating ? "正在翻译…" : "选择服务和目标语言，\n点击「翻译」开始。", symbol: "globe", isResult: true)
-            }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    placeholder: model.isTranslating ? "正在翻译…" : "选择目标语言，然后开始翻译。", isResult: true)
+                    .frame(minWidth: 235)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Divider()
+            VStack(alignment: .leading, spacing: 8) {
+                if let reason = model.unsupportedReason(settings: settings) {
+                    Label(reason, systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
+                }
+                if let error = model.errorMessage {
+                    HStack(alignment: .top, spacing: 12) {
+                        Label(error, systemImage: "exclamationmark.circle")
+                            .font(.system(size: 12)).foregroundStyle(.red).textSelection(.enabled)
+                            .accessibilityLabel("翻译错误：\(error)")
+                        Spacer(minLength: 0)
+                        Button("查看配置", action: openTranslationSettings).buttonStyle(.borderless).font(.system(size: 12))
+                    }
+                } else if let message = model.statusMessage {
+                    Text(message).font(.caption).foregroundStyle(.secondary)
+                }
+                HStack(spacing: 8) {
+                    if model.isTranslating {
+                        ProgressView().controlSize(.small)
+                        Text("正在翻译…").font(.system(size: 11)).foregroundStyle(.secondary)
+                    } else if let detected = model.detectedSource {
+                        Text("检测为\(detected.displayName)").font(.system(size: 11)).foregroundStyle(.secondary)
+                    } else {
+                        Text("\(text.count) 字").font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+                    }
+                    Spacer()
+                    if model.isTranslating {
+                        Button("取消翻译") { model.cancel() }.accessibilityLabel("取消当前翻译")
+                    } else {
+                        Button("翻译", systemImage: "character.bubble") { model.translate(text: text, settings: settings) }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isRecognizing || model.unsupportedReason(settings: settings) != nil)
+                            .accessibilityLabel("使用当前服务翻译所选文字")
+                    }
+                }.frame(minHeight: 28)
+            }.padding(.horizontal, 16).padding(.vertical, 10).background(NikoTheme.canvas)
         }
-        .padding(20)
         .sheet(isPresented: $showsSetupGuide) { ProviderSetupGuideView(provider: settings.translationProvider) }
         .onAppear { automaticTranslateIfReady() }
         .onChange(of: isRecognizing) { old, new in
@@ -141,44 +122,68 @@ struct TranslationPane: View {
 
     private func openTranslationSettings() { (NSApp.delegate as? AppDelegate)?.showTranslationSettings() }
 
-    private func textPanel(title: String, content: String, placeholder: String, symbol: String, isResult: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Label(title, systemImage: symbol).font(.callout.weight(.semibold))
+    private var sourcePicker: some View {
+        @Bindable var translation = model
+        return Picker("原文语言", selection: $translation.source) {
+            Text("自动检测").tag(Optional<Language>.none)
+            ForEach(Language.allCases, id: \.self) { language in
+                Text(language.displayName).tag(Optional(language))
+                    .disabled(!supports(language, asSource: true))
+                    .help(supports(language, asSource: true) ? language.displayName : "当前服务不支持此原文语言")
+            }
+        }.labelsHidden().accessibilityLabel("原文语言")
+    }
+
+    private var targetPicker: some View {
+        @Bindable var translation = model
+        return Picker("译文语言", selection: $translation.target) {
+            ForEach(Language.allCases, id: \.self) { language in
+                Text(language.displayName).tag(language)
+                    .disabled(!supports(language, asSource: false))
+                    .help(supports(language, asSource: false) ? language.displayName : "当前服务不支持此译文语言")
+            }
+        }.labelsHidden().accessibilityLabel("译文语言")
+    }
+
+    private func textPanel(title: String, content: String, placeholder: String, isResult: Bool) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+                    .accessibilityAddTraits(.isHeader)
+                if isResult { targetPicker.frame(maxWidth: 160) }
+                else { sourcePicker.frame(maxWidth: 160) }
                 Spacer(minLength: 0)
                 if isResult {
-                    Button("复制", systemImage: "doc.on.doc") {
+                    Button {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(content, forType: .string)
-                    }.buttonStyle(.borderless).font(.caption).disabled(content.isEmpty).accessibilityLabel("复制译文")
-                } else {
-                    Text("\(content.count) 字").font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                    } label: { Image(systemName: "doc.on.doc").frame(width: 24, height: 24) }
+                    .buttonStyle(.borderless).disabled(content.isEmpty)
+                    .help("复制译文").accessibilityLabel("复制译文")
                 }
-            }.padding(14)
+            }.padding(.horizontal, 16).frame(height: 42)
             Divider()
             ScrollView {
                 if content.isEmpty {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Image(systemName: symbol).font(.system(size: 26, weight: .light)).foregroundStyle(.tertiary)
-                        Text(placeholder).font(.callout).foregroundStyle(.secondary).lineSpacing(4)
-                    }.frame(maxWidth: .infinity, alignment: .leading).padding(20)
+                    VStack(spacing: 12) {
+                        if model.isTranslating && isResult { ProgressView().controlSize(.small) }
+                        Image(systemName: isResult ? "character.bubble" : "text.alignleft")
+                            .font(.system(size: 26, weight: .light)).foregroundStyle(.tertiary)
+                        Text(placeholder).font(.system(size: 13)).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }.frame(maxWidth: .infinity, minHeight: 240).padding(24)
                 } else {
-                    Text(content).font(.system(size: 14)).lineSpacing(5).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .topLeading).padding(16)
+                    Text(content).font(.system(size: 14)).lineSpacing(6).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .topLeading).padding(20)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .accessibilityLabel(isResult ? "翻译结果" : "原文预览")
-            if isResult, let detected = model.detectedSource {
-                Divider()
-                Text("检测语言：\(detected.displayName)").font(.caption).foregroundStyle(.secondary).padding(12)
-            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(NikoTheme.surface, in: RoundedRectangle(cornerRadius: 10))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(NikoTheme.separator.opacity(0.35), lineWidth: 0.5) }
+        .background(Color(nsColor: .textBackgroundColor))
     }
+
 }
 
 /// Shared provider picker listing the five peer types and each configured custom instance.

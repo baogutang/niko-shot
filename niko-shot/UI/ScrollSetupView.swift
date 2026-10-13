@@ -30,74 +30,79 @@ struct ScrollSetupView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            NikoPageHeader(title: "滚动长截图", subtitle: "选定滚动方式，排除页面的固定栏。", symbol: "arrow.down.document")
-                .padding(24)
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    NikoPanel {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("滚动方式").font(.headline).accessibilityAddTraits(.isHeader)
+                VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 12) {
+                            Text("滚动方式").fontWeight(.semibold).accessibilityAddTraits(.isHeader)
                             Picker("滚动方式", selection: $mode) {
                                 ForEach(ScrollCaptureMode.allCases) { item in Text(item.title).tag(item) }
-                            }.pickerStyle(.segmented).accessibilityLabel("长截图滚动方式")
-                            Text(mode == .automatic
-                                 ? "工具会自动向下滚动，请保持窗口位置并等待捕获完成。"
-                                 : "请自行向下滚动，画面稳定后会自动捕获；完成时请点结束。")
-                                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                            if mode == .automatic && !automaticAllowed {
-                                Divider()
-                                Label("尚未授予辅助功能权限。开始后将转为手动滚动。", systemImage: "info.circle")
-                                    .font(.callout).foregroundStyle(.secondary)
+                            }.pickerStyle(.segmented).labelsHidden().frame(width: 210).accessibilityLabel("长截图滚动方式")
+                            Spacer()
+                        }
+                        Text(mode == .automatic
+                             ? "自动向下滚动并拼接。请保持窗口位置，等待捕获完成。"
+                             : "自行向下滚动，画面稳定后自动捕获；完成时点“结束”。")
+                            .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        if mode == .automatic && !automaticAllowed {
+                            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                                Label("未授予辅助功能权限，将使用手动滚动。", systemImage: "info.circle")
+                                    .font(.system(size: 12)).foregroundStyle(.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
-                                Button("打开辅助功能设置", action: onOpenAccessibility)
-                                    .accessibilityLabel("打开系统设置的辅助功能权限页面")
+                                Spacer(minLength: 0)
+                                Button("打开权限设置", action: onOpenAccessibility)
+                                    .controlSize(.small).accessibilityLabel("打开系统设置的辅助功能权限页面")
                             }
                         }
                     }
-                    NikoPanel {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("忽略固定栏").font(.headline).accessibilityAddTraits(.isHeader)
-                            HStack {
-                                Picker("编辑忽略区", selection: $edge) {
-                                    ForEach(IgnoredEdge.allCases) { Text($0.title).tag($0) }
-                                }.pickerStyle(.segmented).frame(width: 210).accessibilityLabel("选择要编辑的固定栏")
-                                Spacer()
-                                Button("重置") { ignoredTop = 0; ignoredBottom = 0 }
-                                    .disabled(ignoredTop == 0 && ignoredBottom == 0)
-                                    .accessibilityLabel("清除顶部和底部忽略区")
-                            }
-                            Text("选择顶部或底部，然后在预览中拖动分界线。高亮区域会从每一帧中裁去。")
-                                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                            preview.frame(height: 244)
-                            HStack(spacing: 16) {
-                                exclusionField("忽略顶部", value: topBinding, maximum: maximumIgnored - ignoredBottom)
-                                exclusionField("忽略底部", value: bottomBinding, maximum: maximumIgnored - ignoredTop)
-                            }
-                            HStack {
-                                Text("原图 \(image.width) × \(image.height) px").foregroundStyle(.secondary)
-                                Spacer()
-                                Label("有效高度 \(usableHeight) px", systemImage: usableHeight >= 240 ? "checkmark.circle" : "exclamationmark.circle")
-                                    .foregroundStyle(usableHeight >= 240 ? Color.secondary : Color.red)
-                            }.font(.caption).monospacedDigit()
-                            if image.height < 240 {
-                                Text("滚动区域高度至少需要 240 px，请取消后重新框选。")
-                                    .font(.callout).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
-                            }
+                    Divider()
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("忽略固定栏").fontWeight(.semibold).accessibilityAddTraits(.isHeader)
+                            Spacer()
+                            Button("重置") { ignoredTop = 0; ignoredBottom = 0 }
+                                .controlSize(.small).disabled(ignoredTop == 0 && ignoredBottom == 0)
+                                .accessibilityLabel("清除顶部和底部忽略区")
+                        }
+                        HStack(spacing: 12) {
+                            Text("编辑").foregroundStyle(.secondary)
+                            Picker("编辑忽略区", selection: $edge) {
+                                ForEach(IgnoredEdge.allCases) { Text($0.title).tag($0) }
+                            }.pickerStyle(.segmented).labelsHidden().frame(width: 250).accessibilityLabel("选择要编辑的固定栏")
+                            Spacer()
+                        }
+                        Text("拖动预览中的分界线，或输入像素数。高亮固定栏会从每一帧裁去。")
+                            .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        preview.frame(height: 258)
+                        HStack(spacing: 20) {
+                            exclusionField("忽略顶部", value: topBinding, maximum: maximumIgnored - ignoredBottom)
+                            exclusionField("忽略底部", value: bottomBinding, maximum: maximumIgnored - ignoredTop)
+                        }
+                        HStack {
+                            Text("\(image.width) × \(image.height) px").foregroundStyle(.secondary)
+                            Spacer()
+                            Label("有效高度 \(usableHeight) px", systemImage: usableHeight >= 240 ? "checkmark.circle" : "exclamationmark.circle")
+                                .foregroundStyle(usableHeight >= 240 ? Color.secondary : Color.red)
+                        }.font(.system(size: 12)).monospacedDigit()
+                        if image.height < 240 {
+                            Text("滚动区域高度至少需要 240 px，请取消后重新框选。")
+                                .foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
                         }
                     }
-                }.padding(.horizontal, 24).padding(.bottom, 24)
+                }.padding(20)
             }
             Divider()
             HStack(spacing: 12) {
                 Button("取消", action: onCancel).keyboardShortcut(.cancelAction).accessibilityLabel("取消长截图设置")
                 Spacer()
                 Button("开始长截图") { onStart(mode, ignoredTop, ignoredBottom) }
-                    .buttonStyle(.borderedProminent).controlSize(.large).keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                     .disabled(usableHeight < 240).accessibilityLabel("使用所选滚动方式和忽略区域开始长截图")
-            }.padding(.horizontal, 24).padding(.vertical, 16)
+            }.padding(.horizontal, 20).padding(.vertical, 12)
         }
+        .font(.system(size: 13)).controlSize(.regular)
         .background(NikoTheme.canvas)
-        .frame(minWidth: 560, idealWidth: 640, minHeight: 620, idealHeight: 740)
+        .frame(minWidth: 560, idealWidth: 620, minHeight: 560, idealHeight: 640)
     }
 
     private var maximumIgnored: Int { max(0, image.height - 240) }
@@ -111,11 +116,11 @@ struct ScrollSetupView: View {
 
     private func exclusionField(_ title: String, value: Binding<Int>, maximum: Int) -> some View {
         HStack(spacing: 6) {
-            Text(title).font(.callout)
+            Text(title)
             TextField(title, value: value, format: .number.grouping(.never))
                 .textFieldStyle(.roundedBorder).multilineTextAlignment(.trailing).monospacedDigit()
                 .frame(width: 60).accessibilityLabel("\(title)，原图像素")
-            Text("px").font(.caption).foregroundStyle(.secondary)
+            Text("px").font(.system(size: 12)).foregroundStyle(.secondary)
             Stepper(title, value: value, in: 0...max(0, maximum)).labelsHidden()
                 .accessibilityLabel("调整\(title)像素数")
         }.frame(maxWidth: .infinity, alignment: .leading)
@@ -139,8 +144,8 @@ struct ScrollSetupView: View {
                 boundary(width: width, active: edge == .bottom).offset(y: height - bottom)
             }
             .frame(width: width, height: height).background(NikoTheme.canvas)
-            .clipShape(RoundedRectangle(cornerRadius: NikoTheme.cornerRadius))
-            .overlay(RoundedRectangle(cornerRadius: NikoTheme.cornerRadius).strokeBorder(NikoTheme.separator.opacity(0.45)))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(NikoTheme.separator.opacity(0.45), lineWidth: 0.5))
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0).onChanged { event in
                 guard height > 0 else { return }

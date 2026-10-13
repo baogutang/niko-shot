@@ -18,6 +18,7 @@ struct HistoryView: View {
     @State private var requestID = UUID()
     @State private var errorMessage: String?
     @State private var deleting: Set<UUID> = []
+    @State private var selectedID: UUID?
 
     /// Connects history actions without embedding OCR, pin or editor implementations.
     init(store: HistoryStore, onOCR: @escaping (HistoryRecord) -> Void,
@@ -31,23 +32,14 @@ struct HistoryView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                HStack(spacing: 12) {
-                    NikoSymbolBadge(symbol: "photo.on.rectangle.angled", size: 34)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("截图历史").font(.system(size: 17, weight: .semibold)).accessibilityAddTraits(.isHeader)
-                        Text("搜索、编辑，或把截图拖到其他应用。").font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                }.padding(20)
-                Divider()
                 if let errorMessage {
                     HStack(spacing: 10) {
                         Label(errorMessage, systemImage: "exclamationmark.circle")
-                            .font(.callout).foregroundStyle(.red).textSelection(.enabled)
+                            .foregroundStyle(.red).textSelection(.enabled)
                         Spacer()
                         Button("重试") { Task { await reload() } }
                             .accessibilityLabel("重新载入截图历史")
-                    }.padding(14)
+                    }.padding(.horizontal, 20).padding(.vertical, 12)
                     Divider()
                 }
                 if loading && records.isEmpty {
@@ -61,35 +53,60 @@ struct HistoryView: View {
                                                description: Text("试试其他关键词。已识别的文字也可以搜索。"))
                     }
                 } else {
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            ForEach(records) { record in
-                                HistoryRow(record: record, deleting: deleting.contains(record.id),
-                                           onOCR: { onOCR(record) }, onPin: { onPin(record) },
-                                           onEdit: { onEdit(record) }, onDelete: { Task { await remove(record) } })
-                                Divider().padding(.leading, 180)
+                    List(selection: $selectedID) {
+                        ForEach(records) { record in
+                            HistoryRow(record: record, selected: selectedID == record.id, deleting: deleting.contains(record.id),
+                                       onOCR: { onOCR(record) }, onPin: { onPin(record) },
+                                       onEdit: { onEdit(record) }, onDelete: { Task { await remove(record) } })
+                                .tag(record.id)
+                                .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+                        }
+                        if hasMore {
+                            HStack(spacing: 10) {
+                                Spacer()
+                                if loadingMore { ProgressView().controlSize(.small) }
+                                Button("载入更多") { Task { await loadNextPage() } }
+                                    .disabled(loadingMore)
+                                    .accessibilityLabel("载入下一页截图历史")
+                                Spacer()
                             }
-                            if hasMore {
-                                VStack(spacing: 8) {
-                                    if loadingMore { ProgressView().controlSize(.small) }
-                                    Button("载入更多") { Task { await loadNextPage() } }
-                                        .disabled(loadingMore)
-                                        .accessibilityLabel("载入下一页截图历史")
-                                }
-                                .padding(18)
-                                .frame(maxWidth: .infinity)
-                                .task(id: records.last?.id) { await loadNextPage() }
-                            }
-                        }.padding(.horizontal, 20).padding(.vertical, 8)
+                            .padding(.vertical, 12).listRowSeparator(.hidden)
+                            .task(id: records.last?.id) { await loadNextPage() }
+                        }
                     }
+                    .listStyle(.inset)
+                    .accessibilityLabel("截图历史，可使用方向键选择")
                 }
+                Divider()
+                HStack(spacing: 12) {
+                    Text("已载入 \(records.count) 张").monospacedDigit()
+                        .accessibilityLabel("已载入 \(records.count) 张截图")
+                    if let selectedRecord {
+                        Text(URL(fileURLWithPath: selectedRecord.path).lastPathComponent)
+                            .lineLimit(1).truncationMode(.middle)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else { Spacer() }
+                    Text("双击编辑 · 拖出文件")
+                }.font(.system(size: 11)).foregroundStyle(.secondary)
+                    .padding(.horizontal, 16).padding(.vertical, 8)
             }
             .navigationTitle("截图历史")
             .searchable(text: $query, placement: .toolbar, prompt: "搜索截图或识别文字")
             .toolbar {
-                ToolbarItem(placement: .automatic) {
-                    Text("\(records.count) 张").font(.callout).foregroundStyle(.secondary).monospacedDigit()
-                        .accessibilityLabel("已载入 \(records.count) 张截图")
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button("编辑标注", systemImage: "pencil.tip") {
+                        if let selectedRecord { onEdit(selectedRecord) }
+                    }.disabled(selectedRecord == nil).help("编辑选中的截图")
+                    Button("识别文字", systemImage: "text.viewfinder") {
+                        if let selectedRecord { onOCR(selectedRecord) }
+                    }.disabled(selectedRecord == nil).help("识别选中截图的文字")
+                    Button("贴图", systemImage: "pin") {
+                        if let selectedRecord { onPin(selectedRecord) }
+                    }.disabled(selectedRecord == nil).help("将选中的截图贴到桌面")
+                    Button(role: .destructive) {
+                        if let selectedRecord { Task { await remove(selectedRecord) } }
+                    } label: { Label("删除", systemImage: "trash") }
+                        .disabled(selectedRecord == nil || selectionIsDeleting).help("删除选中的截图历史")
                 }
                 ToolbarItem(placement: .automatic) {
                     Button("刷新", systemImage: "arrow.clockwise") { Task { await reload() } }
@@ -97,11 +114,18 @@ struct HistoryView: View {
                 }
             }
             .task(id: query) { await reload() }
+            .onChange(of: loading) { _, loading in
+                if !loading, selectedRecord == nil { selectedID = nil }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .captureHistoryChanged)) { _ in Task { await reload() } }
+        .font(.system(size: 13))
         .background(NikoTheme.canvas)
         .frame(minWidth: 760, minHeight: 500)
     }
+
+    private var selectedRecord: HistoryRecord? { records.first { $0.id == selectedID } }
+    private var selectionIsDeleting: Bool { selectedID.map { deleting.contains($0) } ?? false }
 
     private func reload() async {
         let currentID = UUID()
@@ -162,6 +186,7 @@ struct HistoryView: View {
 @MainActor
 private struct HistoryRow: View {
     let record: HistoryRecord
+    let selected: Bool
     let deleting: Bool
     let onOCR: () -> Void
     let onPin: () -> Void
@@ -173,7 +198,7 @@ private struct HistoryRow: View {
     private var fileURL: URL { URL(fileURLWithPath: record.path) }
 
     var body: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 12) {
             Group {
                 if let thumbnail {
                     FileDragPreview(url: fileURL, image: thumbnail)
@@ -182,60 +207,56 @@ private struct HistoryRow: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .frame(width: 156, height: 100)
-            .background(NikoTheme.surface, in: RoundedRectangle(cornerRadius: 8))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(NikoTheme.separator.opacity(0.35), lineWidth: 0.5) }
+            .frame(width: 112, height: 72)
+            .background(NikoTheme.surface, in: RoundedRectangle(cornerRadius: 5))
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .overlay { RoundedRectangle(cornerRadius: 5).strokeBorder(NikoTheme.separator.opacity(0.4), lineWidth: 0.5) }
             .help("拖入 Finder 或其他应用")
             .accessibilityLabel("截图缩略图，可拖出文件")
-            VStack(alignment: .leading, spacing: 7) {
-                Text(captureName).font(.system(size: 14, weight: .semibold))
-                Text(record.createdAt, format: .dateTime.year().month().day().hour().minute())
-                    .font(.callout).foregroundStyle(.secondary).monospacedDigit()
-                Text("\(record.width) × \(record.height) 像素")
-                    .font(.caption).foregroundStyle(.tertiary).monospacedDigit()
+            VStack(alignment: .leading, spacing: 5) {
+                Text(captureName).font(.system(size: 13, weight: .medium))
+                HStack(spacing: 12) {
+                    Text(record.createdAt, format: .dateTime.year().month().day().hour().minute())
+                    Text("\(record.width) × \(record.height) px")
+                }.font(.system(size: 12)).foregroundStyle(.secondary).monospacedDigit()
                 if !record.ocrText.isEmpty {
-                    Text(record.ocrText).font(.callout).foregroundStyle(.secondary)
-                        .lineLimit(2).textSelection(.enabled)
+                    Text(record.ocrText).font(.system(size: 12)).foregroundStyle(.secondary)
+                        .lineLimit(1).textSelection(.enabled)
                 }
             }.frame(maxWidth: .infinity, alignment: .leading).help(fileURL.lastPathComponent)
-            HStack(spacing: 6) {
-                rowButton("重新识别文字", symbol: "text.viewfinder", action: onOCR)
-                rowButton("贴图", symbol: "pin", action: onPin)
-                rowButton("编辑标注", symbol: "pencil.tip", action: onEdit)
-                Button(role: .destructive, action: onDelete) { Image(systemName: "trash").frame(width: 32, height: 36) }
-                    .buttonStyle(NikoActionButtonStyle()).help("删除截图历史").accessibilityLabel("删除截图历史")
-                    .disabled(deleting)
+            if deleting {
+                ProgressView().controlSize(.small).accessibilityLabel("正在删除截图")
             }
+            Menu {
+                rowActions
+            } label: { Image(systemName: "ellipsis").frame(width: 28, height: 28) }
+                .menuIndicator(.hidden).menuStyle(.borderlessButton).fixedSize()
+                .help("截图操作").accessibilityLabel("截图操作：识别文字、贴图、编辑或删除")
         }
-        .padding(.vertical, 12)
         .contentShape(Rectangle())
-        .background(Color.primary.opacity(hovering ? 0.025 : 0), in: RoundedRectangle(cornerRadius: 10))
+        .background(Color.primary.opacity(hovering && !selected ? 0.025 : 0), in: RoundedRectangle(cornerRadius: 4))
         .onHover { hovering = $0 }
         .onTapGesture(count: 2, perform: onEdit)
-        .contextMenu {
-            Button("重新识别文字", systemImage: "text.viewfinder", action: onOCR)
-            Button("贴图", systemImage: "pin", action: onPin)
-            Button("编辑标注", systemImage: "pencil.tip", action: onEdit)
-            Button("在 Finder 中显示", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([fileURL]) }
-            Divider()
-            Button("删除", systemImage: "trash", role: .destructive, action: onDelete).disabled(deleting)
-        }
+        .contextMenu { rowActions }
         .task(id: record.id) { thumbnail = NSImage(data: record.thumbnail) }
+    }
+
+    @ViewBuilder private var rowActions: some View {
+        Button("重新识别文字", systemImage: "text.viewfinder", action: onOCR)
+        Button("贴图", systemImage: "pin", action: onPin)
+        Button("编辑标注", systemImage: "pencil.tip", action: onEdit)
+        Button("在 Finder 中显示", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([fileURL]) }
+        Divider()
+        Button("删除", systemImage: "trash", role: .destructive, action: onDelete).disabled(deleting)
     }
 
     private var captureName: String {
         switch record.captureKind {
-        case "window": "窗口"
-        case "fullscreen": "全屏"
+        case "window": "窗口截图"
+        case "fullscreen": "全屏截图"
         case "scroll": "长截图"
         case "ocr": "文字识别"
-        default: "区域"
+        default: "区域截图"
         }
-    }
-
-    private func rowButton(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: symbol).frame(width: 32, height: 36) }
-            .buttonStyle(NikoActionButtonStyle()).help(title).accessibilityLabel(title)
     }
 }

@@ -101,7 +101,7 @@ final class ScrollCoordinator {
     func showSetup(image: CGImage, context: CaptureContext) {
         guard session == nil, selection.state == .idle else { return }
         setupWindow?.close(); isBusy = true
-        let window = UtilityWindow(contentRect: CGRect(x: 0, y: 0, width: 640, height: 740),
+        let window = UtilityWindow(contentRect: CGRect(x: 0, y: 0, width: 620, height: 660),
                                    styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "滚动长截图"; window.isReleasedWhenClosed = false
         window.onClose = { [weak self] in

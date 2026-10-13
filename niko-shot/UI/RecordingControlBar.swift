@@ -41,7 +41,7 @@ final class RecordingControlBarController {
     func show() {
         if let panel { panel.orderFrontRegardless(); return }
         let frame = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1200, height: 800)
-        let size = CGSize(width: min(392, frame.width - 16), height: session.errorMessage == nil ? 68 : 102)
+        let size = CGSize(width: min(352, frame.width - 16), height: session.errorMessage == nil ? 64 : 100)
         let window = RecordingHUDPanel(contentRect: CGRect(x: frame.midX - size.width / 2, y: frame.minY + 24, width: size.width, height: size.height),
                                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.level = .floating
@@ -60,8 +60,9 @@ final class RecordingControlBarController {
         effect.blendingMode = .behindWindow
         effect.state = .active
         effect.wantsLayer = true
-        effect.layer?.cornerRadius = NikoTheme.cornerRadius
+        effect.layer?.cornerRadius = 12
         effect.layer?.masksToBounds = true
+        effect.layer?.borderWidth = 0.5
         let hosting = NSHostingView(rootView: RecordingControlBar(session: session, format: format,
                                                                  onStop: { [weak self] in self?.onStop() },
                                                                  onCancel: { [weak self] in self?.onCancel() },
@@ -101,7 +102,7 @@ final class RecordingControlBarController {
     private func resizeForError(_ error: String?) {
         guard let panel else { return }
         var frame = panel.frame
-        frame.size.height = error == nil ? 68 : 102
+        frame.size.height = error == nil ? 64 : 100
         if let screen = panel.screen { frame.origin.y = min(max(screen.visibleFrame.minY + 8, frame.minY), screen.visibleFrame.maxY - frame.height - 8) }
         panel.setFrame(frame, display: true)
     }
@@ -116,25 +117,26 @@ private struct RecordingControlBar: View {
     let onCancel: () -> Void
     let onCamera: (Bool) -> Void
     let onErrorChanged: (String?) -> Void
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     private var interactive: Bool { session.state == .recording || session.state == .paused }
 
     var body: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 6) {
+        VStack(spacing: 8) {
+            HStack(spacing: 4) {
                 HStack(spacing: 8) {
-                    Circle().fill(session.state == .paused ? Color.orange : Color.red).frame(width: 7, height: 7)
+                    Circle().fill(session.state == .paused ? Color.orange : interactive ? Color.red : Color.secondary).frame(width: 7, height: 7)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(durationLabel).font(.system(size: 17, weight: .semibold)).monospacedDigit()
+                        Text(durationLabel).font(.system(size: 16, weight: .semibold)).monospacedDigit()
                             .accessibilityLabel("录制时长 \(durationLabel)")
-                        Text("\(format) · \(stateTitle)").font(.caption2).foregroundStyle(.secondary)
+                        Text("\(format) · \(stateTitle)").font(.system(size: 11)).foregroundStyle(.secondary)
                             .accessibilityLabel("录制格式 \(format)，\(stateTitle)")
                     }
-                }.frame(width: 115, alignment: .leading)
-                Divider().frame(height: 26).padding(.horizontal, 3)
+                }.frame(width: 102, alignment: .leading)
+                Divider().frame(height: 24).padding(.horizontal, 4)
                 RecordingHUDButton(title: session.state == .paused ? "继续录制" : "暂停录制",
-                                   symbol: session.state == .paused ? "play.fill" : "pause.fill", enabled: interactive) {
+                                   symbol: session.state == .paused ? "play.fill" : "pause.fill", selected: session.state == .paused, enabled: interactive) {
                     if session.state == .paused { session.resume() } else { session.pause() }
                 }.keyboardShortcut(.space, modifiers: [])
                 RecordingHUDButton(title: "停止录制并保存", symbol: "stop.fill", tint: .red, enabled: interactive, action: onStop)
@@ -147,12 +149,13 @@ private struct RecordingControlBar: View {
                     .keyboardShortcut(.escape, modifiers: [])
             }
             if let error = session.errorMessage {
-                Label(error, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.red)
+                Label(error, systemImage: "exclamationmark.circle").font(.system(size: 11)).foregroundStyle(.red)
                     .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading).help(error)
                     .accessibilityLabel("录屏错误：\(error)")
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, 10)
+        .padding(.horizontal, 10).padding(.vertical, 10)
+        .background { if reduceTransparency { NikoTheme.canvas } }
         .onChange(of: session.errorMessage) { _, error in onErrorChanged(error) }
     }
 
@@ -182,21 +185,16 @@ private struct RecordingHUDButton: View {
     var selected = false
     var enabled = true
     let action: () -> Void
-    @State private var hovered = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     var body: some View {
         Button(action: action) {
-            Image(systemName: symbol).font(.system(size: 17, weight: .medium))
-                .foregroundStyle(tint).frame(width: 44, height: 44)
-                .background(selected ? Color.accentColor.opacity(0.2) : hovered ? Color.primary.opacity(0.08) : Color.clear,
-                            in: RoundedRectangle(cornerRadius: NikoTheme.cornerRadius))
-                .contentShape(RoundedRectangle(cornerRadius: NikoTheme.cornerRadius))
+            Image(systemName: symbol).font(.system(size: 16, weight: .medium))
+                .foregroundStyle(selected ? Color.accentColor : tint).frame(width: 44, height: 44)
+                .contentShape(RoundedRectangle(cornerRadius: 6))
         }
-        .buttonStyle(.plain).disabled(!enabled).opacity(enabled ? 1 : 0.45)
+        .buttonStyle(NikoActionButtonStyle(prominent: selected)).disabled(!enabled)
         .focusable()
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.13), value: hovered)
-        .onHover { hovered = $0 }.help(title).accessibilityLabel(title)
+        .help(title).accessibilityLabel(title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -209,4 +207,9 @@ private final class RecordingHUDPanel: NSPanel {
 @MainActor
 private final class RecordingHUDMaterial: NSVisualEffectView {
     override var mouseDownCanMoveWindow: Bool { true }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        effectiveAppearance.performAsCurrentDrawingAppearance { layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.65).cgColor }
+    }
 }

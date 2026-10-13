@@ -153,6 +153,7 @@ final class ToolbarController {
     /// Immediately removes the panel, tracking areas and controls from the capture session.
     func close() {
         let oldPanel = panel
+        content?.closeAuxiliaryControls()
         panel = nil
         content = nil
         selectedTool = nil
@@ -213,39 +214,53 @@ private final class HUDPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-/// Native material surface with separate annotation, appearance and output rows.
+/// Two compact native tool rows; appearance controls use transient system popovers.
 @MainActor
-final class HUDContentView: NSVisualEffectView {
+final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
     private let column = NSStackView()
     private var toolGroups: [[NSView]] = []
     private var styleGroups: [[NSView]] = []
     private var commandGroups: [[NSView]] = []
     private var toolButtons: [(AnnotationTool, HUDIconButton)] = []
     private var actionButtons: [ToolbarAction: HUDIconButton] = [:]
-    private var colorButtons: [HUDIconButton] = []
+    private var colorButton: HUDIconButton?
+    private var colorPopover: NSPopover?
+    private var widthButton: HUDIconButton?
+    private var widthPopover: NSPopover?
+    private var selectedColor = 0
+    private var strokeWidth: CGFloat = 3
+    private let onColorChange: (NSColor) -> Void
+    private let onWidthChange: (CGFloat) -> Void
+    private let displayNotifications = NSWorkspace.shared.notificationCenter
+    private let colors: [(String, NSColor)] = [
+        ("红色", .systemRed), ("橙色", .systemOrange), ("黄色", .systemYellow),
+        ("绿色", .systemGreen), ("蓝色", .systemBlue), ("白色", .white), ("黑色", .black)
+    ]
     private var lastWidth: CGFloat = 0
     private var configuredSize = CGSize.zero
 
     init(onTool: @escaping (AnnotationTool) -> Void, onAction: @escaping (ToolbarAction) -> Void,
          onColor: @escaping (NSColor) -> Void, onWidth: @escaping (CGFloat) -> Void, confirmationTitle: String? = nil) {
+        onColorChange = onColor
+        onWidthChange = onWidth
         super.init(frame: .zero)
         material = .hudWindow
         blendingMode = .behindWindow
         state = .active
         wantsLayer = true
-        layer?.cornerRadius = 24
+        layer?.cornerRadius = 14
         layer?.masksToBounds = true
         layer?.borderWidth = 0.5
         column.orientation = .vertical
         column.alignment = .centerX
-        column.spacing = 4
+        column.spacing = 2
         column.translatesAutoresizingMaskIntoConstraints = false
         addSubview(column)
         NSLayoutConstraint.activate([
-            column.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            column.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            column.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            column.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
+            column.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            column.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            column.topAnchor.constraint(equalTo: topAnchor, constant: 7),
+            column.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -7)
         ])
         if confirmationTitle == nil {
         let tools = Array(AnnotationTool.allCases)
@@ -259,22 +274,13 @@ final class HUDContentView: NSVisualEffectView {
             }
             toolGroups.append(group)
         }
-        let colors: [(String, NSColor)] = [
-            ("红色", .systemRed), ("橙色", .systemOrange), ("黄色", .systemYellow),
-            ("绿色", .systemGreen), ("蓝色", .systemBlue), ("白色", .white), ("黑色", .black)
-        ]
-        for (index, value) in colors.enumerated() {
-            let button = HUDIconButton(symbol: "circle.fill", title: "标注颜色：\(value.0)", tint: value.1)
-            button.setSelected(index == 0)
-            button.onPress = { [weak self, weak button] in
-                guard let self, let button else { return }
-                for other in self.colorButtons { other.setSelected(other === button) }
-                onColor(value.1)
-            }
-            colorButtons.append(button)
-        }
-        styleGroups.append(colorButtons)
-        styleGroups.append([StrokeWidthControl(onChange: onWidth)])
+        let color = HUDIconButton(symbol: "circle.fill", title: "标注颜色：红色", tint: .systemRed)
+        color.onPress = { [weak self] in self?.showColorPopover() }
+        colorButton = color
+        let width = HUDIconButton(symbol: "lineweight", title: "标注线宽：3 pt")
+        width.onPress = { [weak self] in self?.showWidthPopover() }
+        widthButton = width
+        styleGroups = [[color, width]]
         }
         let groups: [[ToolbarAction]] = confirmationTitle == nil ? [[.undo, .redo], [.selection], [.copy, .save, .pin, .ocr, .scroll], [.close]] : [[.copy], [.close]]
         for group in groups {
@@ -282,7 +288,7 @@ final class HUDContentView: NSVisualEffectView {
             for action in group {
                 let title = action == .copy ? (confirmationTitle ?? action.title) : action.title
                 let button = HUDIconButton(symbol: action == .copy && confirmationTitle != nil ? "checkmark.circle" : action.symbol,
-                                           title: title, tint: action == .copy ? .controlAccentColor : nil)
+                                           title: title, tint: action == .copy ? .controlAccentColor : nil, prominent: action == .copy)
                 button.toolTip = action.keyHint.map { "\(title) · \($0)" } ?? title
                 button.onPress = { onAction(action) }
                 actionButtons[action] = button
@@ -290,19 +296,38 @@ final class HUDContentView: NSVisualEffectView {
             }
             commandGroups.append(views)
         }
+        displayNotifications.addObserver(self, selector: #selector(displayOptionsChanged),
+                                         name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
         updateAppearance()
     }
 
     required init?(coder: NSCoder) { nil }
 
+    deinit { displayNotifications.removeObserver(self) }
+
+    /// Closes transient native controls before the capture session releases its HUD.
+    func closeAuxiliaryControls() {
+        colorPopover?.close()
+        colorPopover?.contentViewController = nil
+        colorPopover?.delegate = nil
+        colorPopover = nil
+        widthPopover?.close()
+        widthPopover?.contentViewController = nil
+        widthPopover?.delegate = nil
+        widthPopover = nil
+        displayNotifications.removeObserver(self)
+    }
+
     func configure(maximumWidth: CGFloat) -> CGSize {
         guard abs(lastWidth - maximumWidth) > 0.5 else { return configuredSize }
+        colorPopover?.close()
+        widthPopover?.close()
         lastWidth = maximumWidth
         for row in column.arrangedSubviews { column.removeArrangedSubview(row); row.removeFromSuperview() }
-        let limit = max(44, maximumWidth - 24)
+        let limit = max(44, min(maximumWidth, 704) - 20)
         var largest: CGFloat = 44
         var rowCount = 0
-        for groups in [toolGroups, styleGroups, commandGroups] {
+        for groups in [toolGroups + styleGroups, commandGroups] {
             var rowViews: [NSView] = []
             var rowWidth: CGFloat = 0
             func finishRow() {
@@ -323,14 +348,14 @@ final class HUDContentView: NSVisualEffectView {
                 var piece: [NSView] = []
                 var pieceWidth: CGFloat = 0
                 for view in group {
-                    let width = view is StrokeWidthControl ? CGFloat(124) : 44
+                    let width: CGFloat = 44
                     if pieceWidth + width > limit && !piece.isEmpty { pieces.append(piece); piece = []; pieceWidth = 0 }
                     piece.append(view)
                     pieceWidth += width
                 }
                 if !piece.isEmpty { pieces.append(piece) }
                 for piece in pieces {
-                    let width = piece.reduce(CGFloat.zero) { $0 + ($1 is StrokeWidthControl ? 124 : 44) }
+                    let width = CGFloat(piece.count) * 44
                     let separatorWidth: CGFloat = rowViews.isEmpty ? 0 : 13
                     if rowWidth + separatorWidth + width > limit && !rowViews.isEmpty { finishRow() }
                     if !rowViews.isEmpty {
@@ -347,7 +372,7 @@ final class HUDContentView: NSVisualEffectView {
             }
             finishRow()
         }
-        configuredSize = CGSize(width: min(maximumWidth, largest + 24), height: CGFloat(rowCount) * 44 + CGFloat(max(0, rowCount - 1)) * 4 + 16)
+        configuredSize = CGSize(width: min(maximumWidth, largest + 20), height: CGFloat(rowCount) * 44 + CGFloat(max(0, rowCount - 1)) * 2 + 14)
         return configuredSize
     }
 
@@ -364,7 +389,98 @@ final class HUDContentView: NSVisualEffectView {
     }
 
     private func updateAppearance() {
-        effectiveAppearance.performAsCurrentDrawingAppearance { layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.6).cgColor }
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.65).cgColor
+            layer?.backgroundColor = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency ? NSColor.windowBackgroundColor.cgColor : NSColor.clear.cgColor
+        }
+    }
+
+    @objc private func displayOptionsChanged() { updateAppearance() }
+
+    private func showColorPopover() {
+        guard let colorButton else { return }
+        if let colorPopover, colorPopover.isShown { colorPopover.close(); return }
+        widthPopover?.close()
+        let content = NSView(frame: CGRect(x: 0, y: 0, width: 216, height: 142))
+        let heading = NSTextField(labelWithString: "标注颜色")
+        heading.font = .systemFont(ofSize: 12, weight: .semibold)
+        heading.frame = CGRect(x: 14, y: 112, width: 188, height: 17)
+        content.addSubview(heading)
+        for (index, value) in colors.enumerated() {
+            let button = HUDIconButton(symbol: "circle.fill", title: "标注颜色：\(value.0)", tint: value.1)
+            button.setSelected(index == selectedColor)
+            button.onPress = { [weak self] in self?.chooseColor(index) }
+            button.translatesAutoresizingMaskIntoConstraints = true
+            button.frame = CGRect(x: 12 + CGFloat(index % 4) * 48, y: index < 4 ? 60 : 12, width: 44, height: 44)
+            content.addSubview(button)
+        }
+        let popover = makePopover(content: content)
+        colorPopover = popover
+        colorButton.setSelected(true)
+        popover.show(relativeTo: colorButton.bounds, of: colorButton, preferredEdge: .minY)
+    }
+
+    private func chooseColor(_ index: Int) {
+        guard colors.indices.contains(index) else { return }
+        selectedColor = index
+        let value = colors[selectedColor]
+        colorButton?.setTint(value.1)
+        colorButton?.toolTip = "标注颜色：\(value.0)"
+        colorButton?.setAccessibilityLabel("标注颜色：\(value.0)")
+        onColorChange(value.1)
+        colorPopover?.close()
+    }
+
+    private func showWidthPopover() {
+        guard let widthButton else { return }
+        colorPopover?.close()
+        if let widthPopover, widthPopover.isShown { widthPopover.close(); return }
+        let content = NSView(frame: CGRect(x: 0, y: 0, width: 216, height: 86))
+        let heading = NSTextField(labelWithString: "线宽")
+        heading.font = .systemFont(ofSize: 12, weight: .semibold)
+        heading.frame = CGRect(x: 14, y: 57, width: 188, height: 17)
+        let control = StrokeWidthControl(value: strokeWidth) { [weak self] value in
+            guard let self else { return }
+            self.strokeWidth = value
+            self.widthButton?.toolTip = "标注线宽：\(Int(value)) pt"
+            self.widthButton?.setAccessibilityLabel("标注线宽：\(Int(value)) pt")
+            self.onWidthChange(value)
+        }
+        control.translatesAutoresizingMaskIntoConstraints = true
+        control.frame = CGRect(x: 10, y: 9, width: 196, height: 44)
+        content.addSubview(heading)
+        content.addSubview(control)
+        let popover = makePopover(content: content)
+        widthPopover = popover
+        widthButton.setSelected(true)
+        popover.show(relativeTo: widthButton.bounds, of: widthButton, preferredEdge: .minY)
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        guard let closing = notification.object as? NSPopover else { return }
+        if closing === colorPopover {
+            colorButton?.setSelected(false)
+            colorPopover?.contentViewController = nil
+            colorPopover?.delegate = nil
+            colorPopover = nil
+        } else if closing === widthPopover {
+            widthButton?.setSelected(false)
+            widthPopover?.contentViewController = nil
+            widthPopover?.delegate = nil
+            widthPopover = nil
+        }
+    }
+
+    private func makePopover(content: NSView) -> NSPopover {
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        popover.delegate = self
+        let controller = NSViewController()
+        controller.view = content
+        popover.contentViewController = controller
+        popover.contentSize = content.frame.size
+        return popover
     }
 
     private static func separator() -> NSView {
@@ -382,23 +498,32 @@ private final class HUDIconButton: NSButton {
     private var tracking: NSTrackingArea?
     private var hovered = false
     private var selected = false
-    private let symbolTint: NSColor?
+    private var mousePressed = false
+    private var symbolTint: NSColor?
+    private let prominent: Bool
+    private let isColorSwatch: Bool
 
-    init(symbol: String, title: String, tint: NSColor? = nil) {
+    init(symbol: String, title: String, tint: NSColor? = nil, prominent: Bool = false) {
         symbolTint = tint
+        self.prominent = prominent
+        isColorSwatch = symbol == "circle.fill" && tint != nil
         super.init(frame: CGRect(x: 0, y: 0, width: 44, height: 44))
         isBordered = false
         bezelStyle = .regularSquare
         setButtonType(.momentaryPushIn)
+        self.title = ""
         imagePosition = .imageOnly
-        image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?.withSymbolConfiguration(.init(pointSize: 18, weight: .medium))
+        if !isColorSwatch {
+            image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?.withSymbolConfiguration(.init(pointSize: 17, weight: .medium))
+        }
         imageScaling = .scaleNone
         toolTip = title
         setAccessibilityLabel(title)
         target = self
         action = #selector(pressed)
         wantsLayer = true
-        layer?.cornerRadius = 10
+        layer?.cornerRadius = 8
+        focusRingType = .exterior
         translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([widthAnchor.constraint(equalToConstant: 44), heightAnchor.constraint(equalToConstant: 44)])
         refreshAppearance()
@@ -407,6 +532,45 @@ private final class HUDIconButton: NSButton {
     required init?(coder: NSCoder) { nil }
 
     @objc private func pressed() { onPress?() }
+
+    override var acceptsFirstResponder: Bool { isEnabled }
+
+    override var isEnabled: Bool { didSet { refreshAppearance() } }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        refreshAppearance()
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let accepted = super.resignFirstResponder()
+        refreshAppearance()
+        return accepted
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        mousePressed = true
+        refreshAppearance()
+        super.mouseDown(with: event)
+        mousePressed = false
+        refreshAppearance()
+    }
+
+    func setTint(_ color: NSColor) { symbolTint = color; refreshAppearance() }
+
+    override func draw(_ dirtyRect: NSRect) {
+        refreshAppearance(invalidate: false)
+        super.draw(dirtyRect)
+        guard isColorSwatch, let symbolTint else { return }
+        let circle = NSBezierPath(ovalIn: CGRect(x: bounds.midX - 9, y: bounds.midY - 9, width: 18, height: 18))
+        symbolTint.setFill()
+        circle.fill()
+        NSColor.secondaryLabelColor.withAlphaComponent(0.6).setStroke()
+        circle.lineWidth = 0.75
+        circle.stroke()
+    }
 
     func setSelected(_ value: Bool) {
         selected = value
@@ -427,11 +591,22 @@ private final class HUDIconButton: NSButton {
 
     override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); refreshAppearance() }
 
-    private func refreshAppearance() {
-        contentTintColor = symbolTint ?? .labelColor
+    private func refreshAppearance(invalidate: Bool = true) {
+        contentTintColor = selected && symbolTint == nil ? .controlAccentColor : symbolTint ?? .labelColor
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = (selected ? NSColor.controlAccentColor.withAlphaComponent(0.24) : hovered ? NSColor.labelColor.withAlphaComponent(0.09) : NSColor.clear).cgColor
+            let background: NSColor
+            if !isEnabled { background = .clear }
+            else if mousePressed || cell?.isHighlighted == true { background = .labelColor.withAlphaComponent(0.14) }
+            else if selected { background = .controlAccentColor.withAlphaComponent(0.18) }
+            else if prominent { background = .controlAccentColor.withAlphaComponent(hovered ? 0.18 : 0.1) }
+            else { background = hovered ? .labelColor.withAlphaComponent(0.08) : .clear }
+            layer?.backgroundColor = background.cgColor
+            let focused = window?.firstResponder === self
+            layer?.borderWidth = focused ? 2 : selected ? 0.5 : 0
+            layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(focused ? 0.9 : 0.35).cgColor
+            layer?.opacity = isEnabled ? 1 : 0.35
         }
+        if invalidate { needsDisplay = true }
     }
 
     private func animateHover() {
@@ -459,20 +634,24 @@ private final class HUDIconButton: NSButton {
 
 @MainActor
 private final class StrokeWidthControl: NSView {
-    private let slider = NSSlider(value: 3, minValue: 1, maxValue: 16, target: nil, action: nil)
+    private let slider: NSSlider
     private let label = NSTextField(labelWithString: "3 pt")
     private let onChange: (CGFloat) -> Void
 
-    init(onChange: @escaping (CGFloat) -> Void) {
+    init(value: CGFloat = 3, onChange: @escaping (CGFloat) -> Void) {
         self.onChange = onChange
-        super.init(frame: CGRect(x: 0, y: 0, width: 124, height: 44))
+        slider = NSSlider(value: Double(value), minValue: 1, maxValue: 16, target: nil, action: nil)
+        super.init(frame: CGRect(x: 0, y: 0, width: 196, height: 44))
         slider.target = self
         slider.action = #selector(changed)
         slider.isContinuous = true
+        slider.numberOfTickMarks = 16
+        slider.allowsTickMarkValuesOnly = true
         slider.setAccessibilityLabel("标注线宽")
         slider.toolTip = "标注线宽，1–16 pt"
         label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
         label.textColor = .secondaryLabelColor
+        label.stringValue = "\(Int(value)) pt"
         let stack = NSStackView(views: [slider, label])
         stack.orientation = .horizontal
         stack.alignment = .centerY
@@ -481,11 +660,11 @@ private final class StrokeWidthControl: NSView {
         addSubview(stack)
         translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: 124), heightAnchor.constraint(equalToConstant: 44),
+            widthAnchor.constraint(equalToConstant: 196), heightAnchor.constraint(equalToConstant: 44),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
             stack.centerYAnchor.constraint(equalTo: centerYAnchor),
-            slider.widthAnchor.constraint(equalToConstant: 78), slider.heightAnchor.constraint(equalToConstant: 44),
+            slider.widthAnchor.constraint(equalToConstant: 148), slider.heightAnchor.constraint(equalToConstant: 44),
             label.widthAnchor.constraint(equalToConstant: 32)
         ])
     }

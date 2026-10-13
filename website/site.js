@@ -17,10 +17,10 @@
     themeButton.querySelector("use").setAttribute("href", `assets/icons.svg#${isDark() ? "sun" : "moon"}`);
   };
   const previewImages = {
-    ocr: { alt: "当前原生 OCR 窗口，左侧编辑文字，右侧并排核对原文和译文", width: 2480, height: 1520 },
-    settings: { alt: "当前原生翻译设置，五类服务及独立的凭据配置区", width: 1920, height: 1400 },
-    recording: { alt: "当前原生录屏配置，包含区域、画质、声音与摄像头选项", width: 1000, height: 1240 },
-    scroll: { alt: "当前原生长截图配置，包含自动手动模式及固定头尾忽略区", width: 1280, height: 1480 }
+    ocr: { alt: "当前原生 OCR 窗口，左侧编辑文字，右侧并排核对原文和译文", width: 2240, height: 1360 },
+    settings: { alt: "当前原生翻译设置，五类服务及独立的凭据配置区", width: 1800, height: 1300 },
+    recording: { alt: "当前原生录屏配置，包含区域、画质、声音与摄像头选项", width: 1000, height: 1120 },
+    scroll: { alt: "当前原生长截图配置，包含自动手动模式及固定头尾忽略区", width: 1240, height: 1320 }
   };
   let preview = "ocr";
   const nativeImage = document.querySelector("#native-image");

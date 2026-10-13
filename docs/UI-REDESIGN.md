@@ -1,34 +1,35 @@
 # 原生界面改版与翻译接入引导
 
-本轮依据用户 2026-10-13 的界面重做要求，延续 PROMPT.md 的全部 P0 范围。使用 SwiftUI、AppKit、SF Symbols、系统颜色和原生材质，运行时依赖不变。
+2026-10-13，根据用户要求，实际查看本机 iShot Pro 2.5.8 的截图和 OCR 偏好设置，再修订 niko-shot 的原生界面。参考其紧凑的分类导航、控件密度和系统交互；没有使用 iShot 的图像或资源。实现继续使用 SwiftUI、AppKit、SF Symbols、系统颜色和材质，不增加运行时依赖，PROMPT.md 的全部 P0 功能保留。
 
-| 页面 | 操作与呈现 |
+| 页面 | 本次呈现与交互 |
 |---|---|
-| 菜单栏 | 区域截图为主要入口；窗口／全屏及四种工具分组；重复区域、最近三张缩略图、设置与退出保留 |
-| 设置 | 九分类侧栏；页头、分组面板和统一间距；热键录制、冲突、权限与登录启动反馈保留 |
-| 翻译配置 | 五张并排选择卡；当前服务与配置对象独立；凭据填写、保存、复制、移除及行内连接测试；切换配置和设置分类保留未保存输入，关闭设置清除敏感草稿 |
-| OCR | 左侧逐段勾选、编辑和复制；右侧原文／译文并排；语言选择、自动翻译、取消、错误及译文复制；直接打开指南或服务配置 |
-| 历史与贴图库 | 清晰的页面说明、预览和操作；原有搜索分页、中文 OCR 检索、文件承诺拖拽与贴图管理保留 |
-| 标注 HUD | 工具、颜色／线宽、输出操作分为三行，保持全部 12 种工具与 44pt 命中区 |
-| 录屏、GIF、长截图 | 分组配置；可滚动内容；主要操作及 GIF 进度固定在底部；原有质量、声音、摄像头、固定栏排除和恢复操作保留 |
-| 首次向导与图标 | 三步进度、符号徽标、快捷键面板；10 种尺寸的静态 macOS AppIcon |
+| 菜单栏 | 紧凑的区域截图入口、六项功能、重复区域、最近三张缩略图、历史、设置和退出 |
+| 设置 | 九分类系统侧栏、彩色符号、小标题与原生表单；清除独立分隔线造成的空白行；保留热键录制、冲突、预设、权限和登录启动状态 |
+| 翻译配置 | 五类分段配置入口；当前服务与正在编辑的服务独立；输入框不重复显示标签；保留凭据保存、复制、移除、连接测试和敏感草稿清理 |
+| OCR | 可收起的文字区块侧栏；连续原文／译文文稿区；每段选择、编辑、复制与置信度；语言、自动翻译、取消、错误和指南入口 |
+| 历史 | 原生列表选择、工具栏操作和轻量元数据；搜索分页、中文 OCR 检索与文件承诺拖出保留 |
+| 贴图库 | 选中、悬停和键盘反馈；异步读取实际尺寸与日期，读取图片头而非完整解码；持久化和拖出保留 |
+| 标注 HUD | 常规宽度下两排工具；12 种工具、全部输出、七色和 1–16 pt 线宽；控件保持 44 pt 命中区，外观使用系统弹出框 |
+| 录屏、GIF、长截图 | 对齐的原生表单与固定底部操作；减少占屏的状态条；音源、摄像头、质量、固定栏排除、接缝确认和恢复操作保留 |
+| 窗口 | 更紧凑的默认尺寸；设置和 OCR 记住窗口位置；从 Finder 再次打开菜单栏应用时显示设置 |
 
-官方接入资料核验日期 **2026-10-13**。应用内的「申请与接入指南」提供申请服务、填入凭据、测试连接三个阶段，附产品、控制台和参考文档链接；核验日期在指南页头可见。详细步骤和全部来源见 [TRANSLATION.md](TRANSLATION.md)。
+官方接入资料核验日期 **2026-10-13**。应用内指南按「申请服务 → 填入凭据 → 测试连接」提供官方入口、控制台与参考文档，日期可见。完整步骤和来源见 [TRANSLATION.md](TRANSLATION.md)。百度 APP ID／密钥、Google Basic v2 项目与计费、有道文本翻译应用、DeepL 当前 Developer／Growth／Enterprise API 路径，以及彩云和 LibreTranslate 模板均保留。
 
-- 百度：通用文本翻译 API，APP ID 与密钥。
-- Google：Cloud Translation Basic v2，项目启用 API 和计费，使用 API Key。
-- 有道：创建并绑定文本翻译 API 应用，应用 ID 与密钥。
-- DeepL：按现行 Developer／Growth／Enterprise API 申请路径；已有 Free／Pro 密钥继续按官方端点规则使用，翻译器订阅与 API 产品分开说明。
-- 自定义 REST：彩云 API Token、LibreTranslate 官方托管密钥及自托管申请方式。未启用认证的自托管实例删除 `$KEY` 引用后可免密测试；JSON Unicode 转义和 Form 编码中的密钥占位符仍要求凭据。
+## 实际窗口检查
 
-本机 `clean build test` 与后续最终回归 **157 项通过、0 failures**，编译警告为零。原始日志：`build/evidence/UI-redesign-xcodebuild.log`、`UI-redesign-final-xcodebuild.log`。新增真实 loopback HTTP 测试覆盖免密 REST 请求和缓存、编码认证占位符在无凭据时阻止请求、OPTIONS 方法；导航测试检查官方 HTTPS、凭据范围和链接角色。测试不会请求外部翻译服务或保存真实凭据。
+此前安装目录已更新，仍运行的旧进程却早于上一轮改版提交。本次通过正常退出、原子替换和 Finder 打开，确认新版进程运行于 `/Users/n1ko/Applications/niko-shot.app`；同时保留旧应用备份和用户原有数据。
 
-交付源码提交为 `ec9fee08a7784f2b6add5cf9de78f3729ce2e8be`（`feat(ui): redesign native workflows and provider onboarding`）。从该提交重新建立干净 Git 检出，仅依次执行 `xcodegen generate` 和 `xcodebuild -scheme niko-shot -configuration Debug build test`，两个步骤均返回 0，157 项测试通过。首轮 Xcode 测试报告写入超时；随后使用显式 `-resultBundlePath` 补验，同样 157 项通过、0 失败、0 跳过，并通过 `xcresulttool get test-results summary` 验证报告可读。补验时 Xcode 对 Debug 可执行文件的 App Intents 元数据提取报告无框架依赖警告，Swift 编译没有警告；实际交付的 Release 构建正常生成 `Metadata.appintents`。证据为 `build/evidence/UI-redesign-clean-clone.json`、`UI-redesign-clean-clone-report.log`、`UI-redesign-clean-clone-report.xcresult` 和 `UI-redesign-clean-clone-summary.json`。后续提交仅补充文档，不改变该交付源码与安装产物。
+本机已实际打开新版设置、切换翻译配置、打开和用 Esc 关闭 DeepL 指南、打开和取消录屏设置。切换到 DeepL 配置时，当前翻译服务仍为百度。真实窗口检查发现表单空行和输入框标签重复，已修正后重新进入构建门禁。截图和录屏不会因为设置页的开关状态而判为通过。
 
-当前产品源码生成了浅／深色的原生离屏预览，保存在 `build/evidence/UI-redesign/previews`，包括菜单、设置、五类翻译配置、OCR、历史、录屏、GIF、长截图、指南和标注 HUD。预览仅使用公开合成文字、图像与隔离的设置／数据库；窗口未激活，部分系统控件显示非活动外观，文件拖拽缩略图没有可靠显示。这些预览用于排版检查，不能替代真实窗口、键盘焦点、VoiceOver 或拖拽验收。
+新构建的屏幕录制调用返回权限错误，系统列表却显示 niko-shot 已开启。刷新该授权时，macOS 要求用户本机输入登录密码；没有读取、输入或保存密码。需要完成身份验证后再核对最终构建的实际截图、标注弹出框焦点和录屏交互。已有屏幕录制授权不扩展为辅助功能、麦克风或摄像头授权。
 
-纯 Release 构建包含 arm64／x86_64，7,232 KiB（7.41MB）；开发 ZIP 为 3,389,663 字节（3.39MB）。ad hoc 签名完整性校验通过，未作 Developer ID 公证。主二进制 SHA256：`75e0edd777da7d5bda27101d42f186ba693fe775a023c92a5c4921b54f4095dc`；ZIP SHA256：`2bb22f59ecf7d5381deb24f541a39443e33d650d1bf22c9e8306e16c54944c5c`。
+## 验证与预览
 
-已以原子替换更新 `/Users/n1ko/Applications/niko-shot.app`，安装副本与 Release 主二进制哈希一致。改版前应用完整保存在 `build/distribution/niko-shot-before-ui-redesign.app`；用户数据和偏好继续由原路径加载。既有进程仍运行旧代码，退出并重新打开后新版才生效。可移交 ZIP：`build/distribution/niko-shot-ui-redesign.zip`；构建及安装证据为 `build/evidence/UI-redesign-artifacts.json`。
+首轮完整严格干净构建测试 **169 项通过、0 失败、0 跳过**，Swift 6 完整并发和编译警告作为错误；独立 universal Release 也通过。首轮证据为 `build/evidence/precision-ui-tests.xcresult`、`precision-ui-tests-summary.json` 和 `precision-ui-release.log`。表单细节修正后的最终门禁再次通过 **169 项、0 失败、0 跳过、0 编译警告**，结果为 `precision-ui-verified-tests.xcresult` 与 `precision-ui-verified-tests-summary.json`。最终 universal Release 包含 arm64／x86_64、App Intents 元数据，应用文件总计 7,890,754 字节；严格签名完整性校验通过，仍为未公证的 ad hoc 开发签名。证据为 `precision-ui-verified-release.log` 与 `precision-ui-verified-release-verification.json`。
 
-Computer Use 当前报告 Mac 锁定；真实窗口走查和旧版退出／新版启动待手动解锁，此前开启的 VoiceOver 也仍待恢复。五家真实账号连通、外设、Developer ID 分发，以及 B9 冷启动和使用后 RSS 预算继续按 [ACCEPTANCE.md](ACCEPTANCE.md) 记录，整体 DoD 尚未通过。
+官网与 README 使用当前产品源码的浅／深色**离屏渲染预览**，只含公开合成文字、图像及隔离设置／数据库。窗口未激活，部分控件显示非活动外观；这类预览用于排版检查，不替代真实应用、键盘焦点、VoiceOver 或拖拽验收。本机 iShot 参考截图与真实验收资料仅保存在忽略的 `build/evidence` 中。
+
+上一轮 `ec9fee08a7784f2b6add5cf9de78f3729ce2e8be` 的 157 项回归和离屏检查属于历史证据，不能替代本轮。后续 OCR 精度修复使全量测试达到 169 项；公开候选以 [GitHub 发布](https://github.com/baogutang/niko-shot/releases/tag/nightly)中的不可变源码提交和 `release-info.json` 为准。
+
+Developer ID、公证、真实翻译账号、双 DPI／120 Hz、外设和 VoiceOver 仍需完成相应验收；B9 冷启动和使用后 RSS 预算仍未达标。所有项目继续保留 P0 范围，整体 DoD 尚未通过，具体证据见 [ACCEPTANCE.md](ACCEPTANCE.md)。
