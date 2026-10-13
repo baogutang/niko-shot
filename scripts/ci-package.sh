@@ -115,13 +115,13 @@ if [[ "$notarized" == true ]]; then
 elif [[ "$signing" == developer-id ]]; then
   signing_description='Developer ID signed; NOT notarized. Gatekeeper may block the first open.'
 else
-  signing_description='Ad hoc development signature; NO Developer ID or Apple notarization. Gatekeeper may block the first open.'
+  signing_description='Signature: ad hoc. Apple notarization: not configured. Gatekeeper may require first-open approval.'
 fi
 printf '%s\n\n%s\n%s\n%s\n' \
   "niko-shot - macOS 14+, $platform_description ($architecture)" \
   "$signing_description" \
   'Drag niko-shot.app into Applications. Check the release source and SHA256 before opening.' \
-  'If macOS blocks this candidate, follow Apple support: https://support.apple.com/102445' \
+  'For first-open instructions, see Apple support: https://support.apple.com/102445' \
   > "$package_stage/dmg/READ-ME.txt"
 ln -s /Applications "$package_stage/dmg/Applications"
 

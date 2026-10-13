@@ -117,22 +117,22 @@
 
   const releaseStatus = document.querySelector("#release-status");
   if (releaseStatus) {
-    const navigationURL = "https://github.com/baogutang/niko-shot/releases/tag/nightly";
+    const navigationURL = "https://github.com/baogutang/niko-shot/releases/latest";
     const architectureNames = { arm64: "M 芯片", x86_64: "Intel" };
     const architectureInputs = [...document.querySelectorAll('input[name="download-architecture"]')];
     const selectedChip = document.querySelector("#selected-chip");
     let selectedArchitecture = "arm64";
-    let candidateDestinations = null;
+    let releaseDestinations = null;
     const updateDownloadSelection = () => {
       const label = architectureNames[selectedArchitecture];
       if (selectedChip) selectedChip.textContent = `已选：${label} · ${selectedArchitecture}。可在苹果菜单「关于本机」查看芯片或处理器。`;
       for (const kind of ["dmg", "zip"]) {
         const anchor = document.querySelector(`[data-download="${kind}"]`);
         if (!anchor) continue;
-        anchor.href = candidateDestinations?.[selectedArchitecture][kind] || navigationURL;
-        anchor.setAttribute("aria-label", candidateDestinations
+        anchor.href = releaseDestinations?.[selectedArchitecture][kind] || navigationURL;
+        anchor.setAttribute("aria-label", releaseDestinations
           ? `下载 ${label} 版 ${kind.toUpperCase()} 安装包`
-          : `前往 GitHub 候选页查看 ${label} 版 ${kind.toUpperCase()} 安装包`);
+          : `前往 GitHub Release 查看 ${label} 版 ${kind.toUpperCase()} 安装包`);
         const text = anchor.querySelector("[data-download-label]");
         if (text) text.textContent = `${label} · ${kind.toUpperCase()}`;
       }
@@ -150,24 +150,18 @@
       if (element) element.hidden = false;
     }
     updateDownloadSelection();
-    releaseStatus.textContent = "正在核对同一候选的两种芯片安装包…";
+    releaseStatus.textContent = "正在获取最新版本…";
     const releaseController = new AbortController();
     const timeout = setTimeout(() => releaseController.abort(), 8000);
-    fetch("https://api.github.com/repos/baogutang/niko-shot/releases/tags/nightly", {
+    fetch("https://api.github.com/repos/baogutang/niko-shot/releases/latest", {
       headers: { Accept: "application/vnd.github+json" }, signal: releaseController.signal
     }).then(response => {
       if (!response.ok) throw new Error("release_unavailable");
       return response.json();
-    }).then(async navigation => {
-      const marker = typeof navigation.body === "string" ? navigation.body.match(/<!-- niko-shot-candidate: (candidate-\d+-\d+-[0-9a-f]{12}) -->/) : null;
-      if (!marker) throw new Error("candidate_unavailable");
-      const tag = marker[1];
-      const response = await fetch(`https://api.github.com/repos/baogutang/niko-shot/releases/tags/${tag}`, {
-        headers: { Accept: "application/vnd.github+json" }, signal: releaseController.signal
-      });
-      if (!response.ok) throw new Error("candidate_unavailable");
-      const release = await response.json();
-      if (release.tag_name !== tag || release.draft) throw new Error("candidate_unavailable");
+    }).then(release => {
+      const tag = release.tag_name;
+      if (typeof tag !== "string" || !/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(tag)
+        || release.draft !== false || release.prerelease !== false) throw new Error("release_unavailable");
       const assets = Array.isArray(release.assets) ? release.assets : [];
       const filenames = [
         "niko-shot-arm64.dmg", "niko-shot-arm64.zip", "niko-shot-x86_64.dmg", "niko-shot-x86_64.zip",
@@ -186,8 +180,8 @@
           || url.search || url.hash) throw new Error("assets_unavailable");
         destinations[name] = url.href;
       }
-      // No download is enabled until both architectures and all provenance files belong to this candidate.
-      candidateDestinations = Object.freeze(Object.fromEntries(Object.keys(architectureNames).map(architecture => [
+      // Enable downloads only when both architectures and every provenance file belong to one published release.
+      releaseDestinations = Object.freeze(Object.fromEntries(Object.keys(architectureNames).map(architecture => [
         architecture, Object.freeze({
           dmg: destinations[`niko-shot-${architecture}.dmg`], zip: destinations[`niko-shot-${architecture}.zip`]
         })
@@ -197,9 +191,9 @@
       updateDownloadSelection();
       const published = release.published_at ? new Date(release.published_at) : null;
       const date = published && !Number.isNaN(published.getTime()) ? published.toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" }) : "";
-      releaseStatus.textContent = `两种芯片安装包均已就绪${date ? ` · ${date}` : ""}，来自同一 GitHub 候选。`;
+      releaseStatus.textContent = `niko-shot ${tag.slice(1)}${date ? ` · ${date}` : ""} · M 芯片与 Intel 均可下载。`;
     }).catch(() => {
-      releaseStatus.textContent = "暂时无法核对两种芯片的完整候选。安装包按钮会带你前往 GitHub 产物页。";
+      releaseStatus.textContent = "前往 GitHub Release 下载最新版本，M 芯片与 Intel 分别提供安装包。";
     }).finally(() => clearTimeout(timeout));
     window.addEventListener("pagehide", () => { clearTimeout(timeout); releaseController.abort(); }, { once: true });
   }

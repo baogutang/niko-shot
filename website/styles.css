@@ -222,7 +222,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .release-links a { display: inline-flex; align-items: center; gap: 4px; min-height: 34px; }
 .release-links a:hover { color: var(--accent-text); }
 .release-links svg { width: 13px; height: 13px; }
-.candidate-note { border-top: 1px solid var(--line); padding-top: 20px; font-size: 12px; line-height: 1.9; }
+.install-note { border-top: 1px solid var(--line); padding-top: 20px; font-size: 12px; line-height: 1.9; }
 .download-panel > .text-link { margin-top: 8px; }
 .faq-section { padding-top: 16px; }
 .faq-section h2 { font-size: 29px; margin-bottom: 24px; }

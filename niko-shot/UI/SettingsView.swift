@@ -117,7 +117,7 @@ public struct SettingsView: View {
 
   private var currentSection: SettingsSection { section ?? .general }
   private var version: String {
-    Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "开发版"
+    Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
   }
 
   @ViewBuilder private var content: some View {

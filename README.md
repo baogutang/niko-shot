@@ -11,13 +11,13 @@
   <a href="https://github.com/baogutang/niko-shot/actions/workflows/build.yml"><img src="https://github.com/baogutang/niko-shot/actions/workflows/build.yml/badge.svg" alt="GitHub Actions 构建状态"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-22221F?style=flat-square&logo=apple&logoColor=white" alt="macOS 14 或更新版本">
   <img src="https://img.shields.io/badge/Swift-6-22221F?style=flat-square&logo=swift&logoColor=white" alt="原生 Swift 6">
-  <a href="https://github.com/baogutang/niko-shot/releases/tag/nightly"><img src="https://img.shields.io/badge/Nightly-开发候选-E8A333?style=flat-square" alt="Nightly 开发候选"></a>
+  <a href="https://github.com/baogutang/niko-shot/releases/latest"><img src="https://img.shields.io/github/v/release/baogutang/niko-shot?style=flat-square&color=22221F" alt="最新版本"></a>
 </p>
 
 <p align="center">
-  <strong><a href="https://github.com/baogutang/niko-shot/releases/tag/nightly">下载 Mac 版</a></strong>
+  <strong><a href="https://github.com/baogutang/niko-shot/releases/latest">下载 Mac 版</a></strong>
   &nbsp;·&nbsp;
-  <strong><a href="https://baogutang.github.io/niko-shot/">官网与交互体验</a></strong>
+  <strong><a href="https://baogutang.github.io/niko-shot/">访问官网</a></strong>
   &nbsp;·&nbsp;
   <a href="#开发与构建">从源码构建</a>
   &nbsp;·&nbsp;
@@ -27,11 +27,7 @@
 <p align="center">
   <a href="https://baogutang.github.io/niko-shot/"><img src="website/assets/app-ocr.png" width="1120" alt="niko-shot 当前原生 OCR 与翻译工作区：文字区块编辑、原文和译文并排核对"></a>
 </p>
-<p align="center"><sub>当前源码的原生离屏预览，使用公开合成数据。窗口未激活，部分控件呈非活动外观；预览不替代真实交互验收。</sub></p>
-
-> **当前源码版本 0.1.3，为开发候选。** 本机 202 项回归测试通过，GitHub 为每个候选重新构建并测试；下载指向最近成功的 GitHub 候选，并非所有新提交都已打包。Nightly 使用 ad hoc 签名，尚未完成 Developer ID 分发与公证；冷启动及使用后内存预算未达标，真实账号、外设与部分实机交互仍有待验收，整体 DoD 尚未通过。完整依据见[验收记录](docs/ACCEPTANCE.md)。
-
-0.1.3 把截图操作收成一排：点击右侧对号完成并自动复制，标注工具按需展开。长截图默认高亮选择窗口后直接开始，自行滚动、稳定后自动拼接；自动滚动与固定栏配置保留在高级操作。修复小幅滚动无法匹配、回滚重复拼接、失败后重试失效及窗口移动后拍错位置的问题。M 芯片与 Intel 各有独立安装包。
+<p align="center"><sub>OCR 与翻译工作区 · 编辑识别结果，原文与译文并排核对。</sub></p>
 
 ## 一张截图，动作接着走
 
@@ -43,25 +39,25 @@
 - **把常用内容留在手边**：贴图置顶、调透明度，历史支持 OCR 搜索、重新编辑和拖出。全局快捷键、Shortcuts、URL 与 CLI 接入同一个常驻进程。
 
 <p align="center"><img src="website/assets/app-annotation.png" width="424" alt="niko-shot 原生截图工具栏：标注、OCR、贴图、长截图、保存、取消与右侧完成对号"></p>
-<p align="center"><sub>原生工具栏离屏预览。官网可直接练习框选、画箭头、导出或复制图片；网页不会读取屏幕或发起 OCR、翻译请求。</sub></p>
+<p align="center"><sub>选区底部保留常用动作，右侧对号完成并复制。展开标注后，可使用全部 12 种工具。</sub></p>
 
 ## 下载与安装
 
-[**按芯片下载 Mac 版**](https://baogutang.github.io/niko-shot/#download) · [GitHub 候选导航](https://github.com/baogutang/niko-shot/releases/tag/nightly) · [全部发布说明](https://github.com/baogutang/niko-shot/releases)
+[**下载最新版本**](https://github.com/baogutang/niko-shot/releases/latest) · [官网按芯片下载](https://baogutang.github.io/niko-shot/#download) · [更新记录](https://github.com/baogutang/niko-shot/releases)
+
+支持 **macOS 14 或更新版本**。M 芯片与 Intel 分别提供独立安装包，在苹果菜单「关于本机」中可确认芯片或处理器类型。
 
 | 你的 Mac | DMG 安装包 | ZIP 安装包 |
 |---|---|---|
-| M 芯片 · Apple Silicon | `niko-shot-arm64.dmg` | `niko-shot-arm64.zip` |
-| Intel | `niko-shot-x86_64.dmg` | `niko-shot-x86_64.zip` |
+| M 芯片 · Apple Silicon | [niko-shot-arm64.dmg](https://github.com/baogutang/niko-shot/releases/latest/download/niko-shot-arm64.dmg) | [niko-shot-arm64.zip](https://github.com/baogutang/niko-shot/releases/latest/download/niko-shot-arm64.zip) |
+| Intel | [niko-shot-x86_64.dmg](https://github.com/baogutang/niko-shot/releases/latest/download/niko-shot-x86_64.dmg) | [niko-shot-x86_64.zip](https://github.com/baogutang/niko-shot/releases/latest/download/niko-shot-x86_64.zip) |
 
-1. 确认系统为 macOS 14 或更新版本。在苹果菜单「关于本机」查看芯片或处理器，选择对应的独立安装包。官网默认标注 M 芯片，可切换 Intel；不通过浏览器平台字符串猜测硬件。当前分发不提供 Universal 包。
-2. 打开 DMG，将 niko-shot.app 拖入「应用程序」；或解压 ZIP 后把应用放入「应用程序」或你自己的 Applications 目录。
-3. 打开应用，在菜单栏进入首次向导：欢迎 → 屏幕录制授权 → 试截一张。默认按 **⇧⌘A** 开始区域截图。
-4. 需要翻译时，再按下文配置自己的服务；录屏麦克风、摄像头与自动滚动权限按需开启。
+1. 下载对应芯片的 DMG，将 **niko-shot.app** 拖入「应用程序」。也可解压 ZIP 后复制应用。
+2. 打开 niko-shot，按首次向导开启「屏幕录制」权限。
+3. 按 **⇧⌘A** 框选截图，点击右侧 **✓** 或按 **Enter** 完成并复制。
+4. 长截图时选定窗口并自行滚动，完成后继续标注、复制或保存。
 
-GitHub Actions 在 main 通过构建、测试及两架构打包后更新 **Nightly 导航页**。同一个独立、不可变的候选包含 8 个文件：两架构的 4 个安装包、`release-info-arm64.json`、`release-info-x86_64.json`、汇总 `release-info.json` 和 `SHA256SUMS`。官网确认 8 个资产均完整上传后才同时启用两种芯片的下载；读取失败或候选不完整时保留 GitHub 导航，无 JavaScript 时也有两套明确入口。汇总 manifest 使用 schema 2，`variants.arm64` 与 `variants.x86_64` 保留各自完整构建信息。文件不会在下载期间被滚动覆盖，可核对哈希与完整源码提交；[Actions](https://github.com/baogutang/niko-shot/actions/workflows/build.yml)保留自动构建记录。下载不会自动重装或替换本机已有应用。
-
-当前候选未完成 Developer ID 签名与 Apple 公证，macOS 可能阻止首次打开。请先核对发布来源与文件哈希，再按 [Apple 的安全打开说明](https://support.apple.com/zh-cn/102445)决定是否允许打开此次应用。ad hoc 签名完整性与测试通过不代表 Apple 已公证。
+首次打开若收到系统提示，可按 [Apple 的打开说明](https://support.apple.com/zh-cn/102445)在「系统设置 → 隐私与安全性」中处理。每个 Release 提供安装包、[SHA256 校验文件](https://github.com/baogutang/niko-shot/releases/latest/download/SHA256SUMS)与[构建信息](https://github.com/baogutang/niko-shot/releases/latest/download/release-info.json)。
 
 ### 只在功能需要时授权
 
@@ -97,7 +93,7 @@ API 密钥保存在系统 Keychain；设置不会回显已保存的明文，复�
 
 **[查看完整官方申请步骤、控制台链接与模板示例 →](docs/TRANSLATION.md)**
 
-官方资料核对日期：2026-10-13。已有 DeepL Free / Pro 密钥按官方端点规则使用；五家真实账号连通仍需分别验收。
+官方资料核对日期：2026-10-13。已有 DeepL Free / Pro 密钥按官方端点规则使用；服务开通与计费状态以各家控制台为准。
 
 <a id="快捷键"></a>
 
@@ -172,7 +168,7 @@ niko --help
 
 ## 从源码构建
 
-使用完整 Xcode 与 XcodeGen。当前本机验证环境为 Xcode 26.3 / Swift 6.2.4，应用部署目标为 macOS 14。
+使用完整 Xcode 与 XcodeGen。工程使用 Xcode 26.3 / Swift 6.2.x，应用部署目标为 macOS 14。
 
 从干净检出进入项目目录后，两步生成并构建：
 
@@ -182,7 +178,7 @@ xcodebuild -scheme niko-shot -configuration Debug build
 ```
 
 <details>
-<summary>完整验证、Release 与正式签名分发</summary>
+<summary>测试与 Release 构建</summary>
 
 可重复执行完整干净构建与测试：
 
@@ -201,18 +197,16 @@ scripts/release-manifest.py build/local-ci-packages
 scripts/release-manifest.py build/local-ci-packages --verify
 ```
 
-两份应用必须各自仅包含指定架构；打包脚本会校验并拒绝架构不符的输入。汇总脚本核对两份版本、提交、签名、公证状态及资产，再生成 schema 2 manifest 和校验文件；任一架构失败都不能作为完整候选发布。Developer ID 签名与公证使用同一分架构流程，需要有效的 Application 证书与公证账户配置，详见[发布说明](docs/RELEASES.md)。没有证书时，开发签名不能代替正式分发。
+两份应用各自只包含指定架构。打包脚本校验版本、源码提交与文件完整性，并生成构建信息及 SHA256 校验文件。GitHub Actions 在版本标签推送后完成测试、打包和发布；维护流程见[发布文档](docs/RELEASES.md)。
 
-工程由 [project.yml](project.yml) 管理；唯一功能规格为 [PROMPT.md](PROMPT.md)，B0–B9 全部保持 P0 范围。实现说明与真实验收分别记录，构建成功不等于产品验收完成。
+工程由 [project.yml](project.yml) 管理。使用 Swift 6 严格并发、AppKit / SwiftUI 与系统框架，运行时不依赖 WebView、ffmpeg 或第三方二进制。
 
 </details>
 
-## 架构与验收
-
-当前实现使用 Swift 6 严格并发、AppKit / SwiftUI 与系统框架。运行时没有 WebView、ffmpeg、登录 Helper 或第三方二进制。当前 0.1.3 本机回归为 **202 项、0 failures、0 skipped**，GitHub 对各候选独立复验；真实设备、账号、分发与性能结果保持独立。
+## 原生架构
 
 <details>
-<summary>原生架构与数据流（Mermaid）</summary>
+<summary>原生架构与数据流</summary>
 
 ```mermaid
 flowchart TD
@@ -241,59 +235,13 @@ AppKit 与原生配置停留在 MainActor；像素渲染、识别、拼接、编
 
 </details>
 
-<details>
-<summary>完整性能预算、实测表与证据边界</summary>
-
-构建、合成/原生媒体测试、实际授权设备测试、账号连通和分发签名分开记录，详见 [验收记录](docs/ACCEPTANCE.md)。测试通过不能替代真实屏幕、麦克风、摄像头或服务账号验收。
-
-当前机器：Apple M1 Max，macOS 15.7.7，Xcode 26.3 / Swift 6.2.4；唯一显示器为 5120×2880、75Hz 的 Kuycon G27P。
-
-下表实机指标来自改版前 B9 候选 `f6cb924`，应用体积行来自当前 0.1.3 独立 clean Release。尚未重测整套新版实机性能；保留此前未达标项，不能据此宣布新版满足全部性能预算。
-
-| 指标 | 预算 | 当前实测 / 状态 |
-|---|---|---|
-| 冷启动至菜单可用 | <400ms | 延迟初始化后的最终候选 414.24ms，**这次未达标**；前两候选 427.74ms、415.30ms；旧候选三个独立启动为 348.87、353.98、381.22ms，保留全部原始结果 |
-| 空闲 RSS | <40MB | 最终候选两小时 fresh idle 峰值 32,400 KiB；使用标注、OCR、贴图后关闭全部窗口并等待 15 秒，仍为 334,064 KiB（326.2MiB），**使用后未达标** |
-| 空闲 CPU | 0% | 最终候选两小时 121 次 external ps 采样全部 0%；尚不是 Instruments Time Sampler 验收 |
-| 热键至冻结覆盖窗 | <120ms，4K <200ms | 真实 5K 首次区域覆盖准备 403.91ms；非物理热键、非 4K，不宣称预算通过 |
-| 框选交互 | ProMotion 120fps | 75Hz 屏幕实际 CADisplayLink 74.82fps；120Hz 需对应设备 |
-| 常驻应用进程 | 1 | 重复启动及两个 CLI 同时冷启动后均只有 1 个常驻 PID；两个 CLI 返回相同 OCR 文本 |
-| Release 安装体积 | <15MB | **0.1.3 本机独立 clean Release**：M 芯片应用 4,045,717 字节（4.05MB）；Intel 应用 4,134,005 字节（4.13MB）。安装包由 GitHub 独立构建，体积和哈希以该候选 manifest 为准 |
-| 1080p30 录屏 CPU | <8% | 真实 SCStream 1920×1080 HEVC/AAC，短 top 样本 4.2%；静态桌面 VFR 平均 23.31fps，持续动态 30fps 预算未验证 |
-| 10000px 长图拼接峰值 | <500MB | 1920×10000 编码约 42MB RSS；含完整 PNG 解码校验的独立进程约 366MB，需区分编码与测试校验 |
-| 退出后资源 | 0 窗口 / 监听 / 计时器 | 最终候选完成录屏设置取消、标注、OCR、贴图后正常退出，全部资源计数 0；PID 与采样器均已退出 |
-| 两小时空闲 | RSS 无增长 | 最终候选 2026-10-13 00:03:16–02:03:16，完整 7200.01 秒、121 次采样；RSS 从 32,352 降至 30,512 KiB，净变化 −1,840 KiB |
-
-`scripts/measure-idle.py` 用外部采样器记录真实进程的 MenuReady 时间、RSS 和 CPU，不向应用加入轮询。默认运行两小时，原始 JSON、终止统计与 display-link 时间戳存于 `build/evidence`。可另外使用 `xcrun xctrace` 的 Time Profiler、Allocations 和 App Launch 模板记录原始 Instruments trace。
-
-改版前 B9 候选完成干净构建与 149 项测试。上一轮界面改版、发布前安全修复与 OCR 漏行恢复后的本机回归为 176 项、0 failures。0.1.2 本机与 GitHub Actions 历史回归为 179 项；当前 0.1.3 本机回归为 202 项、0 failures、0 skipped；Swift 6 完整并发检查与编译警告作为错误的门禁通过。新增官方接入导航、免密 REST、编码占位符认证、OPTIONS 的真实本机 HTTP 验证，以及五类服务错误回显与编码变体的密钥脱敏回归。测试覆盖原生图片／音视频编码、Vision 混排、模板签名、跨进程自动化、窗口及任务生命周期；最终候选的真实屏幕、账号和外设验收范围保持独立。
-
-改版前 B9 最终候选已复制至 `~/Applications/niko-shot.app`，主二进制哈希保持一致。原生登录启动开关实际完成启用及注销，最终恢复关闭；没有执行注销登录或重启系统。正常启动安装副本并重启 Shortcuts 后，系统发现全部五个正式动作，最近 OCR 动作在应用运行时和退出后均实际返回公开测试文字；前四个动作的完整捕获仍需对应权限和实机验收。
-
-</details>
-
-<details>
-<summary>已知限制与尚未完成的验收</summary>
-
-- 系统 ImageIO 没有 WebP 编码，当前输出提供 PNG、JPEG、HEIF、TIFF 和原生 GIF。这是规格中明确的已知限制。
-- macOS 14 功能通过部署目标和严格类型检查覆盖；macOS 14 真机、双屏异 DPI、拔插屏、全屏 Spaces、VoiceOver 和 ProMotion 120Hz 仍必须分别实测。
-- 有效翻译账号和 Developer ID 证书由使用/分发环境提供，不能用 mock 响应或 ad hoc 签名宣称账号连通或公证成功。
-- 使用后空闲 RSS <40MB 目前未达标。独立原生 Vision 混排探针释放图片和请求后 15 秒，默认设备仍为 207.03MiB；GPU、CPU、Neural Engine 分别为 278.12、374.44、238.92MiB，均未达到预算。未找到经过验证的系统模型缓存卸载办法，不能用重启进程或 physical footprint 替换 RSS 指标。
-- 后续增量可以增加更多自定义 REST 预设、标注样式预设和可复用快捷指令示例。现有 B0–B9 功能保持交付范围，不以路线图替代当前验收。
-
-系统 API 依据：[App Intents](https://developer.apple.com/documentation/appintents/appintent)、[AppKit macOS 14 显示刷新接口](https://developer.apple.com/videos/play/wwdc2023/10054/)、[SMAppService](https://developer.apple.com/documentation/servicemanagement/smappservice)。
-
-</details>
-
 ## 文档与反馈
 
 | 想了解 | 入口 |
 |---|---|
-| 产品与下载 | [官网](https://baogutang.github.io/niko-shot/) · [Nightly](https://github.com/baogutang/niko-shot/releases/tag/nightly) |
+| 产品与下载 | [官网](https://baogutang.github.io/niko-shot/) · [最新 Release](https://github.com/baogutang/niko-shot/releases/latest) |
 | 服务申请、密钥与模板 | [翻译配置指南](docs/TRANSLATION.md) |
-| 原生界面与预览依据 | [界面改版记录](docs/UI-REDESIGN.md) · [原创品牌横幅](website/assets/readme-hero.svg) |
-| 已验证结果与待验收项 | [验收记录](docs/ACCEPTANCE.md) |
-| 功能规格与交付范围 | [PROMPT.md](PROMPT.md) |
+| 发布流程 | [发布文档](docs/RELEASES.md) |
 | 自动构建 | [GitHub Actions](https://github.com/baogutang/niko-shot/actions/workflows/build.yml) |
 | 问题与建议 | [GitHub Issues](https://github.com/baogutang/niko-shot/issues) |
 

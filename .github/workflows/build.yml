@@ -1,9 +1,10 @@
-# Verifies every change and publishes public, traceable development candidates from main only.
-name: Build and publish candidate
+# Tests every change; version tags publish complete, traceable GitHub Releases.
+name: Build and release
 
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -12,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: candidate-${{ github.ref }}
+  group: build-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -20,7 +21,7 @@ env:
 
 jobs:
   build:
-    name: Clean tests and separate Apple Silicon / Intel Releases
+    name: Test and build Mac applications
     runs-on: macos-15
     timeout-minutes: 180
     steps:
@@ -43,6 +44,24 @@ jobs:
           mkdir -p build/evidence
           xcodegen generate 2>&1 | tee build/evidence/ci-generate.log
 
+      - name: Validate release tag and version
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PYTHON'
+          import os, re
+          from pathlib import Path
+          tag = os.environ['RELEASE_TAG']
+          if not re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', tag):
+              raise SystemExit('Release tags must use vMAJOR.MINOR.PATCH.')
+          version = re.search(r'^        MARKETING_VERSION: ([^\n]+)$', Path('project.yml').read_text(), re.M)
+          if not version or tag != 'v' + version[1].strip():
+              raise SystemExit('Release tag and application version differ.')
+          if not Path(f'docs/releases/{tag}.md').is_file():
+              raise SystemExit('A versioned release note is required.')
+          PYTHON
+
       - name: Clean build and hosted tests with strict Swift 6 concurrency
         run: |
           set -euo pipefail
@@ -54,7 +73,7 @@ jobs:
             clean build test 2>&1 | tee build/evidence/ci-tests.log
 
       - name: Prepare optional Developer ID and notarization credentials
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
           CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -69,7 +88,7 @@ jobs:
               echo 'Signing credentials are incomplete: configure the P12 certificate or remove the partial configuration.' >&2
               exit 1
             fi
-            echo 'No Developer ID configured: this candidate will be ad hoc signed and not notarized.'
+            echo 'Signing metadata: ad-hoc; notarized=false.'
             exit 0
           fi
           [[ "$DEVELOPER_ID_APPLICATION" == 'Developer ID Application:'* ]]
@@ -100,6 +119,7 @@ jobs:
           fi
 
       - name: Build independent optimized arm64 and x86_64 applications
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           set -euo pipefail
           for architecture in arm64 x86_64; do
@@ -113,6 +133,7 @@ jobs:
           done
 
       - name: Verify both architectures and seal ZIP, DMG, checksums and provenance
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           set -euo pipefail
           for architecture in arm64 x86_64; do
@@ -140,6 +161,7 @@ jobs:
           retention-days: 14
 
       - name: Upload tested installation packages
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installation-packages
@@ -148,125 +170,119 @@ jobs:
           retention-days: 14
 
   publish:
-    name: Publish public development candidate
+    name: Publish versioned Release
     needs: build
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    concurrency:
+      group: niko-shot-release
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
-      - name: Check out this run's release validator
+      - name: Check out this release's source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Download this run's tested packages
+      - name: Download tested installation packages
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: installation-packages
           path: distribution
 
-      - name: Verify checksums and write factual release notes
+      - name: Validate version, provenance and release notes
         env:
+          RELEASE_TAG: ${{ github.ref_name }}
           RELEASE_SHA: ${{ github.sha }}
           RELEASE_REPOSITORY: ${{ github.repository }}
-          RELEASE_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
           python3 scripts/release-manifest.py distribution --verify
-          python3 - <<'PY'
-          import json, os
+          python3 - <<'PYTHON'
+          import json, os, re
           from pathlib import Path
           info = json.loads(Path('distribution/release-info.json').read_text())
+          tag = os.environ['RELEASE_TAG']
+          assert re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', tag)
+          assert tag == 'v' + info['version']
           assert info['commit'] == os.environ['RELEASE_SHA']
-          if info['notarized']:
-              signing = 'Developer ID 签名；Apple 公证已接受，应用与 DMG 均已 staple 并校验。'
-          elif info['signing'] == 'developer-id':
-              signing = 'Developer ID 签名，但未公证；Gatekeeper 仍可能阻止首次打开。'
-          else:
-              signing = 'ad hoc 开发签名，未取得 Developer ID 签名或 Apple 公证。macOS 首次打开可能拦截。'
+          assert info['sourceProvenance'] == 'github-actions'
           repository = os.environ['RELEASE_REPOSITORY']
-          notes = f'''原生 macOS 开发候选；macOS 14 或更新，Apple Silicon 与 Intel 分别提供独立安装包。
+          base = f'https://github.com/{repository}/releases/download/{tag}'
+          notes = Path(f'docs/releases/{tag}.md').read_text().rstrip()
+          notes += f"""
 
-          {signing}
+          ### 下载与安装
 
-          M 系列芯片请下载 `niko-shot-arm64.dmg` 或 `.zip`；Intel Mac 请下载 `niko-shot-x86_64.dmg` 或 `.zip`。可在苹果菜单「关于本机」确认芯片或处理器类型。
+          适用于 macOS {info['minimumMacOS']} 或更新版本。在苹果菜单「关于本机」确认芯片类型，下载对应安装包，将 niko-shot.app 拖入「应用程序」。
 
-          下载 DMG 后把 niko-shot.app 拖入 Applications，或解压 ZIP 后复制应用。若首次打开被阻止，请核对来源与 SHA256 后，按 [Apple 官方说明](https://support.apple.com/102445)在系统设置「隐私与安全性」中允许本次打开；不要关闭系统整体安全检查。
+          | 你的 Mac | DMG | ZIP |
+          |---|---|---|
+          | M 芯片 · Apple Silicon | [下载 DMG]({base}/niko-shot-arm64.dmg) | [下载 ZIP]({base}/niko-shot-arm64.zip) |
+          | Intel | [下载 DMG]({base}/niko-shot-x86_64.dmg) | [下载 ZIP]({base}/niko-shot-x86_64.zip) |
 
-          - 应用版本：{info['version']}，构建号 {info['build']}。
-          - 完整提交：[{info['commit']}](https://github.com/{repository}/commit/{info['commit']})。
-          - 干净构建、测试和两个架构的独立 Release：[本次运行]({info['runUrl']})。
-          - 四个 ZIP / DMG、两份架构清单与汇总清单的全部七项校验值见 SHA256SUMS；签名、架构与二进制哈希见 release-info.json（schemaVersion 2）。
+          首次打开如收到系统提示，可按 [Apple 的打开说明](https://support.apple.com/zh-cn/102445)在「隐私与安全性」中处理。
 
-          自动测试通过不代表完整产品验收通过。冷启动、使用后内存及部分账号、外设与系统版本验收仍有边界，见 [验收记录](https://github.com/{repository}/blob/{info['commit']}/docs/ACCEPTANCE.md)。
+          [官网](https://baogutang.github.io/niko-shot/) · [翻译服务接入指南](https://baogutang.github.io/niko-shot/guide.html) · [SHA256 校验文件]({base}/SHA256SUMS) · [版本、签名与构建信息]({base}/release-info.json)
 
-          每次成功运行另有独立 candidate 标签保留原始资产；nightly 指向 main 的最近成功候选。它们都是预发布，不是已通过整体 DoD 的正式版。
-          '''
-          Path('release-notes.md').write_text(notes)
-          PY
+          构建号 {info['build']} · [源码](https://github.com/{repository}/commit/{info['commit']}) · [自动构建记录]({info['runUrl']})
+          """
+          Path('release-notes.md').write_text(notes + '\n')
+          PYTHON
 
-      - name: Preserve this candidate and update nightly downloads
+      - name: Upload complete assets and publish Release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
           RELEASE_SHA: ${{ github.sha }}
-          RELEASE_RUN_NUMBER: ${{ github.run_number }}
-          RELEASE_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          short_sha="${RELEASE_SHA:0:12}"
-          version="$(python3 -c 'import json; print(json.load(open("distribution/release-info.json"))["version"])')"
-          candidate="candidate-${RELEASE_RUN_NUMBER}-${RELEASE_RUN_ATTEMPT}-${short_sha}"
-          gh release create "$candidate" distribution/* --target "$RELEASE_SHA" --prerelease --latest=false \
-            --title "niko-shot $version candidate $short_sha" --notes-file release-notes.md
-          # Immutable candidate assets stay together; nightly changes only navigation.
-          # A later failed main build must not hide an earlier successful candidate.
-          if gh api "repos/$GH_REPO/releases/tags/nightly" > nightly.json 2> nightly-error.txt; then
-            python3 - <<'PY'
+          version="${RELEASE_TAG#v}"
+          gh release create "$RELEASE_TAG" distribution/* --verify-tag --target "$RELEASE_SHA" \
+            --draft --latest=false --title "niko-shot $version" --notes-file release-notes.md
+          gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" > uploaded-release.json
+          python3 - <<'PYTHON'
+          import hashlib, json, os
+          from pathlib import Path
+          release = json.loads(Path('uploaded-release.json').read_text())
+          assert release['tag_name'] == os.environ['RELEASE_TAG']
+          assert release['draft'] is True and release['prerelease'] is False
+          files = {path.name: path for path in Path('distribution').iterdir()}
+          assets = release['assets']
+          assert len(assets) == len(files) == 8
+          assert {asset['name'] for asset in assets} == set(files)
+          for asset in assets:
+              path = files[asset['name']]
+              assert asset['state'] == 'uploaded' and asset['size'] == path.stat().st_size
+              assert asset['digest'] == 'sha256:' + hashlib.sha256(path.read_bytes()).hexdigest()
+          PYTHON
+          if gh api "repos/$GH_REPO/releases/latest" > latest-release.json 2> latest-error.txt; then
+            mark_latest="$(python3 - <<'PYTHON'
           import json, os, re
           from pathlib import Path
-          previous = json.loads(Path('nightly.json').read_text())
-          match = re.search(r'<!-- niko-shot-candidate: candidate-(\d+)-(\d+)-[0-9a-f]{12} -->', previous.get('body') or '')
-          current = (int(os.environ['RELEASE_RUN_NUMBER']), int(os.environ['RELEASE_RUN_ATTEMPT']))
-          if match and tuple(map(int, match.groups())) > current:
-              Path('preserve-newer-nightly').touch()
-          PY
-            if [[ -f preserve-newer-nightly ]]; then
-              echo 'Preserved the newer successful candidate; this run has its own immutable release.'
-              exit 0
-            fi
-            nightly_exists=true
-          elif grep -q 'HTTP 404' nightly-error.txt; then
-            nightly_exists=false
+          previous = json.loads(Path('latest-release.json').read_text())['tag_name']
+          match = re.fullmatch(r'v([0-9]+)\.([0-9]+)\.([0-9]+)', previous)
+          current = tuple(map(int, os.environ['RELEASE_TAG'][1:].split('.')))
+          print('true' if not match or current >= tuple(map(int, match.groups())) else 'false')
+          PYTHON
+            )"
+          elif grep -q 'HTTP 404' latest-error.txt; then
+            mark_latest=true
           else
-            cat nightly-error.txt >&2
+            cat latest-error.txt >&2
             exit 1
           fi
-          python3 - "$candidate" <<'PY'
-          import os, sys
+          gh release edit "$RELEASE_TAG" --verify-tag --draft=false --prerelease=false --latest="$mark_latest"
+          gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" > published-release.json
+          python3 - <<'PYTHON'
+          import json, os
           from pathlib import Path
-          candidate = sys.argv[1]
-          base = f'https://github.com/{os.environ["GH_REPO"]}/releases/download/{candidate}'
-          links = f'''<!-- niko-shot-candidate: {candidate} -->
-
-          本导航页指向一套完整、不可变的成功构建产物。所有文件均来自同一个候选；源码请以该候选标签与 release-info.json 为准。
-
-          **Apple Silicon（M 系列）：[下载 DMG]({base}/niko-shot-arm64.dmg) · [下载 ZIP]({base}/niko-shot-arm64.zip)**
-
-          **Intel Mac：[下载 DMG]({base}/niko-shot-x86_64.dmg) · [下载 ZIP]({base}/niko-shot-x86_64.zip)**
-
-          [SHA256SUMS]({base}/SHA256SUMS) · [构建与签名信息]({base}/release-info.json) · [独立候选发布页](https://github.com/{os.environ["GH_REPO"]}/releases/tag/{candidate})
-
-          '''
-          Path('nightly-notes.md').write_text(links + Path('release-notes.md').read_text())
-          PY
-          if [[ "$nightly_exists" == true ]]; then
-            gh api --method PATCH "repos/$GH_REPO/git/refs/tags/nightly" -f sha="$RELEASE_SHA" -F force=true >/dev/null
-            gh release edit nightly --target "$RELEASE_SHA" --prerelease --latest=false \
-              --title "niko-shot $version nightly $short_sha" --notes-file nightly-notes.md
-          else
-            gh release create nightly --target "$RELEASE_SHA" --prerelease --latest=false \
-              --title "niko-shot $version nightly $short_sha" --notes-file nightly-notes.md
-          fi
+          release = json.loads(Path('published-release.json').read_text())
+          assert release['tag_name'] == os.environ['RELEASE_TAG']
+          assert release['draft'] is False and release['prerelease'] is False
+          assert len(release['assets']) == 8
+          print(release['html_url'])
+          PYTHON
