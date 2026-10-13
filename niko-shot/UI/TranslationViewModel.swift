@@ -17,6 +17,28 @@ final class TranslationViewModel {
     @ObservationIgnored private var requestTask: Task<Void, Never>?
     @ObservationIgnored private var pendingRequests: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var generation = UUID()
+    @ObservationIgnored private var requestedInput: Input?
+
+    /// Contains only user text and public service configuration; credentials stay in Keychain.
+    struct Input: Equatable {
+        let text: String
+        let source: Language?
+        let target: Language
+        let provider: TranslationProviderID
+        let custom: CustomRESTConfiguration?
+        @MainActor init(text: String, source: Language?, target: Language, settings: AppSettings) {
+            self.text = text; self.source = source; self.target = target
+            provider = settings.translationProvider
+            custom = provider == .custom ? settings.customTranslationServices.first {
+                $0.id == settings.selectedCustomTranslationID
+            } : nil
+        }
+    }
+
+    /// Reopening a workspace keeps the same result, in-flight request or recoverable error.
+    func hasRequested(text: String, settings: AppSettings) -> Bool {
+        requestedInput == Input(text: text, source: source, target: target, settings: settings)
+    }
 
     deinit { for task in pendingRequests.values { task.cancel() } }
 
@@ -24,7 +46,7 @@ final class TranslationViewModel {
     var pendingRequestCount: Int { pendingRequests.count }
 
     /// Translates explicitly through the chosen peer provider without fallback or retries.
-    func translate(text: String, settings: AppSettings) {
+    func translate(text: String, settings: AppSettings, router: TranslationRouter = .shared) {
         cancel()
         translatedText = ""
         detectedSource = nil
@@ -32,6 +54,7 @@ final class TranslationViewModel {
         errorMessage = nil
         statusMessage = nil
         requestedText = text
+        requestedInput = Input(text: text, source: source, target: target, settings: settings)
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             errorMessage = "请先勾选需要翻译的文字。"
             return
@@ -49,7 +72,7 @@ final class TranslationViewModel {
         let task = Task { [weak self] in
             defer { self?.pendingRequests.removeValue(forKey: current) }
             do {
-                let result = try await TranslationRouter.shared.translate(request, provider: provider, custom: provider == .custom ? custom : nil)
+                let result = try await router.translate(request, provider: provider, custom: provider == .custom ? custom : nil)
                 try Task.checkCancellation()
                 guard let self, self.generation == current else { return }
                 self.translatedText = result.text
@@ -92,6 +115,7 @@ final class TranslationViewModel {
     /// Clears obsolete results when text, languages or the chosen provider change.
     func invalidate(message: String? = nil) {
         cancel()
+        requestedInput = nil
         translatedText = ""
         detectedSource = nil
         rawProviderInfo = nil

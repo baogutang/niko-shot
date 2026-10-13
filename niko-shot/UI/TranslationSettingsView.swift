@@ -65,7 +65,7 @@ struct TranslationSettingsView: View {
         Toggle("识别完成后自动翻译", isOn: $settings.automaticTranslation)
           .toggleStyle(.switch).controlSize(.small)
           .accessibilityLabel("文字识别完成后自动翻译")
-          .help("OCR 完成后自动使用当前服务翻译")
+          .help("截图文字卡片与完整工作区共用；识别完成后自动翻译，编辑停止后更新译文")
         VStack(alignment: .leading, spacing: 8) {
           Text("配置服务").font(.system(size: 13, weight: .medium))
             .accessibilityAddTraits(.isHeader)

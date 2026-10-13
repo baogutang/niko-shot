@@ -1,4 +1,4 @@
-// Embeds editable OCR and explicit translation beneath the active screenshot toolbar.
+// Embeds editable OCR and automatic translation beneath the active screenshot toolbar.
 import AppKit
 import SwiftUI
 
@@ -135,10 +135,11 @@ private struct ScreenshotTextView: View {
         .onChange(of: model.settings.translationProvider) { _, _ in model.providerConfigurationChanged() }
         .onChange(of: model.settings.selectedCustomTranslationID) { _, _ in model.providerConfigurationChanged() }
         .onChange(of: model.settings.customTranslationServices) { _, _ in model.providerConfigurationChanged() }
+        .onChange(of: model.settings.automaticTranslation) { _, _ in model.automaticTranslationChanged() }
     }
 
     @ViewBuilder private var textArea: some View {
-        if model.ocr.isRecognizing || (model.section == .translation && model.translation.isTranslating) {
+        if model.ocr.isRecognizing || (model.section == .translation && (model.translation.isTranslating || model.isAwaitingTranslation)) {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
                 Text(model.ocr.isRecognizing ? "正在识别文字…" : "正在翻译…").foregroundStyle(.secondary)
@@ -150,7 +151,8 @@ private struct ScreenshotTextView: View {
                 ScreenshotTextEditor(text: Binding(get: { model.originalText }, set: { model.editOriginal($0) }), editable: true)
             }
         } else if model.translation.translatedText.isEmpty {
-            placeholder(model.originalText.isEmpty ? "识别文字后，点击翻译。" : "点击翻译，将原文发送到当前服务。")
+            placeholder(model.originalText.isEmpty ? "识别完成后在这里显示译文。" : model.settings.automaticTranslation ?
+                "译文将显示在这里；可检查当前服务配置或重试。" : "点击翻译，将原文发送到当前服务。")
         } else {
             ScreenshotTextEditor(text: .constant(model.translation.translatedText), editable: false)
         }
@@ -180,13 +182,14 @@ private struct ScreenshotTextView: View {
     }
 
     @ViewBuilder private var mainActions: some View {
-        if model.translation.isTranslating {
-            Button("取消翻译") { model.translation.cancel() }
-        } else {
-            Button(model.translation.errorMessage == nil ? "翻译" : "重试翻译", systemImage: "character.bubble") {
+        if model.translation.isTranslating || model.isAwaitingTranslation {
+            Button("取消翻译") { model.cancelTranslation() }
+        } else if !model.settings.automaticTranslation || model.translation.errorMessage != nil ||
+                    model.translation.translatedText.isEmpty && !model.ocr.isRecognizing && !model.originalText.isEmpty {
+            Button(model.translation.errorMessage == nil ? (model.settings.automaticTranslation ? "重新翻译" : "翻译") : "重试翻译", systemImage: "character.bubble") {
                 model.requestTranslation()
             }.buttonStyle(.borderedProminent).foregroundStyle(NikoTheme.onAccent)
-                .disabled(!model.ocr.isRecognizing && model.originalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(!model.ocr.isRecognizing && model.originalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.translation.unsupportedReason(settings: model.settings) != nil)
         }
         Button("复制译文") { model.copy(.translation) }.disabled(model.translation.translatedText.isEmpty)
         Button("复制原文") { model.copy(.original) }.disabled(model.originalText.isEmpty || model.ocr.isRecognizing)

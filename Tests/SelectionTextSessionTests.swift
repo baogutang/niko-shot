@@ -1,10 +1,50 @@
 // Exercises real screenshot HUD actions while recognition and translation are isolated from external services.
 import AppKit
 import XCTest
+import os
 @testable import NikoShot
 
 @MainActor
 final class SelectionTextSessionTests: XCTestCase {
+    func testDefaultOCRShowsTheChineseServiceResultWithoutASecondTranslateButton() async throws {
+        let (settings, suite) = try isolatedSettings()
+        settings.automaticTranslation = true
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        InlineTranslationURLProtocol.requests.withLock { $0 = 0 }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [InlineTranslationURLProtocol.self]
+        let transport = URLSession(configuration: configuration)
+        defer { transport.invalidateAndCancel() }
+        let router = TranslationRouter(session: transport,
+            credentials: KeychainStore(testValues: ["baidu.appid": "fixture", "baidu.secret": "fixture-secret"]))
+        let controller = ScreenshotTextController(settings: settings, recognition: { _, _, _ in
+            [OCRBlock(text: "Capture a thought. Keep your flow.", boundingBox: .zero, confidence: 1)]
+        }, translationOperation: { model, text, settings in
+            model.translate(text: text, settings: settings, router: router)
+        })
+        let session = SelectionSession(makeTextController: { controller })
+        defer { session.finish() }
+        try start(session) { _ in XCTFail("Translation must retain the screenshot") }
+        try button("识别文字", in: try panel().contentView).performClick(nil)
+        try await waitUntil { controller.translationModel.translatedText == "截下一瞬，保持思路。" }
+        XCTAssertEqual(controller.model.section, .translation)
+        let resultView = controller.view
+        resultView.layoutSubtreeIfNeeded()
+        try await waitUntil { self.textViews(in: resultView).contains { $0.string == "截下一瞬，保持思路。" } }
+        XCTAssertTrue(textViews(in: resultView).allSatisfy { !$0.isEditable })
+        let labels = buttons(resultView).compactMap { $0.accessibilityLabel() }
+        XCTAssertFalse(labels.contains("翻译"))
+        XCTAssertFalse(labels.contains("重新翻译"))
+        XCTAssertFalse(labels.contains("重试翻译"))
+        XCTAssertEqual(InlineTranslationURLProtocol.requests.withLock { $0 }, 1)
+        XCTAssertTrue(controller.translationModel.hasRequested(text: controller.model.originalText, settings: settings),
+            "Expanding the workspace must reuse this translation instead of starting another request")
+        controller.model.selectTarget(.japanese)
+        XCTAssertFalse(controller.translationModel.hasRequested(text: controller.model.originalText, settings: settings))
+        await session.finishAndDrain()
+        XCTAssertEqual(session.resourceCounts.values.reduce(0, +), 0)
+    }
+
     func testRecognitionStaysInScreenshotHUDAndCompletionStillCopiesPixels() async throws {
         let (settings, suite) = try isolatedSettings()
         defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
@@ -201,7 +241,9 @@ final class SelectionTextSessionTests: XCTestCase {
     private func isolatedSettings() throws -> (AppSettings, String) {
         let suite = "niko-shot.inline-session-tests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        return (AppSettings(defaults: defaults), suite)
+        let settings = AppSettings(defaults: defaults)
+        settings.automaticTranslation = false
+        return (settings, suite)
     }
 
     private func panel() throws -> NSWindow {
@@ -209,10 +251,15 @@ final class SelectionTextSessionTests: XCTestCase {
     }
 
     private func button(_ title: String, in view: NSView?) throws -> NSButton {
-        func buttons(_ view: NSView) -> [NSButton] {
-            (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(buttons)
-        }
         return try XCTUnwrap(view.flatMap { buttons($0).first { $0.accessibilityLabel() == title } }, title)
+    }
+
+    private func buttons(_ view: NSView) -> [NSButton] {
+        (view as? NSButton).map { [$0] } ?? view.subviews.flatMap(buttons)
+    }
+
+    private func textViews(in view: NSView) -> [NSTextView] {
+        (view as? NSTextView).map { [$0] } ?? view.subviews.flatMap { textViews(in: $0) }
     }
 
     private func waitUntil(_ condition: () -> Bool) async throws {
@@ -220,6 +267,24 @@ final class SelectionTextSessionTests: XCTestCase {
         while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertTrue(condition(), "Screenshot text operation did not finish")
     }
+}
+
+private final class InlineTranslationURLProtocol: URLProtocol, @unchecked Sendable {
+    static let requests = OSAllocatedUnfairLock(initialState: 0)
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        Self.requests.withLock { $0 += 1 }
+        guard let url = request.url, url.host == "fanyi-api.baidu.com",
+              let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+                                             headerFields: ["Content-Type": "application/json"]) else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badURL)); return
+        }
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(#"{"from":"en","trans_result":[{"dst":"截下一瞬，保持思路。"}]}"#.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }
 
 private actor ScreenshotRecognitionProbe {

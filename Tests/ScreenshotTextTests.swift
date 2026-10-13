@@ -1,4 +1,4 @@
-// Exercises inline OCR cancellation, edited text, retries and explicit translation without external services.
+// Exercises automatic and manual inline translation without external services.
 import AppKit
 import CoreText
 import XCTest
@@ -6,8 +6,9 @@ import XCTest
 
 @MainActor
 final class ScreenshotTextTests: XCTestCase {
-    func testOCRStaysLocalEvenWhenAutomaticTranslationPreferenceIsEnabled() async throws {
+    func testEnabledAutomaticTranslationDisplaysTheTargetWithoutAnExtraClick() async throws {
         let store = try settings()
+        store.settings.automaticTranslation = true
         let log = TranslationLog()
         let gate = RecognitionGate()
         let controller = makeController(settings: store.settings, gate: gate, log: log)
@@ -18,10 +19,95 @@ final class ScreenshotTextTests: XCTestCase {
         await gate.complete(1, text: "原文第一行\nOriginal second line")
         try await waitUntil { !controller.model.ocr.isRecognizing }
         XCTAssertEqual(recognized, ["原文第一行\nOriginal second line"])
-        XCTAssertEqual(log.texts, [], "An automatic workspace preference is not consent to translate this card")
+        XCTAssertEqual(log.texts, recognized)
+        XCTAssertEqual(log.targets, [.simplifiedChinese])
+        XCTAssertEqual(controller.model.section, .translation)
         XCTAssertEqual(controller.model.ocr.selectedText, recognized.first)
         XCTAssertTrue(controller.model.isActive)
         await controller.finishAndDrain()
+        store.remove()
+    }
+
+    func testAutomaticEditsAreCoalescedAndKeepTheOriginalEditorSelected() async throws {
+        let store = try settings()
+        store.settings.automaticTranslation = true
+        let log = TranslationLog(), gate = RecognitionGate()
+        let controller = makeController(settings: store.settings, gate: gate, log: log)
+        controller.recognize(try image(width: 8), translateAfterRecognition: false)
+        try await waitForCalls(gate, 1)
+        await gate.complete(1, text: "Hello")
+        try await waitUntil { log.texts.count == 1 }
+        controller.model.section = .original
+        controller.model.editOriginal("Hello first edit")
+        controller.model.editOriginal("Hello final edit")
+        XCTAssertEqual(log.texts, ["Hello"], "Typing must not send a request for each keystroke")
+        XCTAssertTrue(controller.model.isAwaitingTranslation)
+        try await waitUntil { log.texts.count == 2 }
+        XCTAssertEqual(log.texts, ["Hello", "Hello final edit"])
+        XCTAssertEqual(controller.model.section, .original, "Updating the result must not interrupt typing")
+        XCTAssertEqual(controller.model.ocr.selectedText, "Hello final edit")
+        await controller.finishAndDrain()
+        XCTAssertEqual(controller.resourceCounts.scheduledTranslations, 0)
+        store.remove()
+    }
+
+    func testAutomaticLanguageAndProviderChangesRequestOnlyTheFinalSelection() async throws {
+        let store = try settings()
+        store.settings.automaticTranslation = true
+        let log = TranslationLog(), gate = RecognitionGate()
+        let controller = makeController(settings: store.settings, gate: gate, log: log)
+        controller.recognize(try image(width: 8), translateAfterRecognition: false)
+        try await waitForCalls(gate, 1)
+        await gate.complete(1, text: "Hello")
+        try await waitUntil { log.texts.count == 1 }
+        controller.model.selectTarget(.japanese)
+        controller.model.selectTarget(.traditionalChinese)
+        controller.model.selectProvider(TranslationProviderID.google.rawValue)
+        controller.model.providerConfigurationChanged() // The native preference observer repeats this notification.
+        controller.model.providerConfigurationChanged()
+        try await waitUntil { log.texts.count == 2 }
+        XCTAssertEqual(log.targets, [.simplifiedChinese, .traditionalChinese])
+        XCTAssertEqual(log.providers, [.baidu, .google])
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(log.texts.count, 2, "Observer updates must not restart the selected request")
+        await controller.finishAndDrain()
+        store.remove()
+    }
+
+    func testDisablingAutomaticTranslationDuringOCRKeepsTheResultLocal() async throws {
+        let store = try settings()
+        store.settings.automaticTranslation = true
+        let log = TranslationLog(), gate = RecognitionGate()
+        let controller = makeController(settings: store.settings, gate: gate, log: log)
+        controller.recognize(try image(width: 8), translateAfterRecognition: false)
+        try await waitForCalls(gate, 1)
+        store.settings.automaticTranslation = false
+        controller.model.automaticTranslationChanged()
+        await gate.complete(1, text: "Hello")
+        try await waitUntil { !controller.model.ocr.isRecognizing }
+        XCTAssertEqual(log.texts, [])
+        controller.requestTranslation()
+        XCTAssertEqual(log.texts, ["Hello"], "A manual request remains available after disabling automation")
+        await controller.finishAndDrain()
+        store.remove()
+    }
+
+    func testClosingTheCardCancelsQueuedAutomaticEditsAndDrainsTheirTasks() async throws {
+        let store = try settings()
+        store.settings.automaticTranslation = true
+        let log = TranslationLog(), gate = RecognitionGate()
+        let controller = makeController(settings: store.settings, gate: gate, log: log)
+        controller.recognize(try image(width: 8), translateAfterRecognition: false)
+        try await waitForCalls(gate, 1)
+        await gate.complete(1, text: "Hello")
+        try await waitUntil { log.texts.count == 1 }
+        controller.model.editOriginal("This edit must remain local after closing")
+        XCTAssertGreaterThan(controller.resourceCounts.scheduledTranslations, 0)
+        await controller.finishAndDrain()
+        try await Task.sleep(for: .milliseconds(450))
+        XCTAssertEqual(log.texts, ["Hello"])
+        XCTAssertEqual(controller.resourceCounts.scheduledTranslations, 0)
+        XCTAssertFalse(controller.isWorking)
         store.remove()
     }
 
@@ -250,16 +336,19 @@ final class ScreenshotTextTests: XCTestCase {
         ScreenshotTextController(settings: settings,
             recognition: { image, languages, accurate in
                 try await gate.recognize(image, languages: languages, accurate: accurate)
-            }, translationOperation: { _, text, settings in
+            }, translationOperation: { model, text, settings in
                 log.texts.append(text)
                 log.providers.append(settings.translationProvider)
+                log.targets.append(model.target)
             })
     }
 
     private func settings() throws -> SettingsStore {
         let suite = "com.n1ko.niko-shot.screenshot-text-tests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        return SettingsStore(settings: AppSettings(defaults: defaults), defaults: defaults, suite: suite)
+        let settings = AppSettings(defaults: defaults)
+        settings.automaticTranslation = false
+        return SettingsStore(settings: settings, defaults: defaults, suite: suite)
     }
 
     private func waitUntil(attempts: Int = 2_000, _ predicate: () -> Bool) async throws {
@@ -317,6 +406,7 @@ final class ScreenshotTextTests: XCTestCase {
     private final class TranslationLog {
         var texts: [String] = []
         var providers: [TranslationProviderID] = []
+        var targets: [Language] = []
     }
 }
 

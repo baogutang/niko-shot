@@ -9,8 +9,6 @@ struct TranslationPane: View {
     let isRecognizing: Bool
     @Bindable private var settings: AppSettings
     @State private var model: TranslationViewModel
-    @State private var recognitionGeneration = 0
-    @State private var automaticGeneration: Int?
     @State private var showsSetupGuide = false
 
     /// Shows a snapshot-aware translation pane sharing persisted provider preferences.
@@ -19,9 +17,6 @@ struct TranslationPane: View {
         self.isRecognizing = isRecognizing
         self.settings = settings
         _model = State(initialValue: model ?? TranslationViewModel())
-        if let model, model.requestedText == text, !model.translatedText.isEmpty || model.isTranslating {
-            _automaticGeneration = State(initialValue: 0)
-        }
     }
 
     var body: some View {
@@ -79,8 +74,10 @@ struct TranslationPane: View {
                     Spacer()
                     if model.isTranslating {
                         Button("取消翻译") { model.cancel() }
-                    } else {
-                        Button("翻译", systemImage: "character.bubble") { model.translate(text: text, settings: settings) }
+                    } else if !settings.automaticTranslation || model.errorMessage != nil || model.translatedText.isEmpty && !isRecognizing {
+                        Button(model.errorMessage == nil ? (settings.automaticTranslation ? "重新翻译" : "翻译") : "重试翻译", systemImage: "character.bubble") {
+                            model.translate(text: text, settings: settings)
+                        }
                             .buttonStyle(.borderedProminent)
                             .foregroundStyle(NikoTheme.onAccent)
                             .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isRecognizing || model.unsupportedReason(settings: settings) != nil)
@@ -90,32 +87,43 @@ struct TranslationPane: View {
         }
         .tint(NikoTheme.accent)
         .sheet(isPresented: $showsSetupGuide) { ProviderSetupGuideView(provider: settings.translationProvider) }
-        .onAppear { automaticTranslateIfReady() }
-        .onChange(of: isRecognizing) { old, new in
-            if new {
-                recognitionGeneration += 1
-                automaticGeneration = nil
-                model.invalidate()
-            } else if old { automaticTranslateIfReady() }
+        .task(id: automaticInput) {
+            guard settings.automaticTranslation, !isRecognizing,
+                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !model.hasRequested(text: text, settings: settings) else { return }
+            do { try await Task.sleep(for: .milliseconds(400)) } catch { return }
+            guard !Task.isCancelled, settings.automaticTranslation, !isRecognizing,
+                  !model.hasRequested(text: text, settings: settings) else { return }
+            model.translate(text: text, settings: settings)
         }
-        .onChange(of: text) { _, new in model.originalTextChanged(new) }
-        .onChange(of: settings.automaticTranslation) { _, enabled in if enabled { automaticTranslateIfReady() } }
+        .onChange(of: isRecognizing) { _, new in if new { model.invalidate() } }
+        .onChange(of: text) { _, new in
+            model.originalTextChanged(new)
+            if settings.automaticTranslation { model.invalidate() }
+        }
         .onChange(of: settings.translationProvider) { _, _ in model.invalidate() }
-        .onChange(of: settings.selectedCustomTranslationID) { _, _ in model.invalidate() }
-        .onChange(of: settings.customTranslationServices) { _, _ in
+        .onChange(of: settings.selectedCustomTranslationID) { _, _ in
             if settings.translationProvider == .custom { model.invalidate() }
+        }
+        .onChange(of: settings.customTranslationServices) { old, new in
+            if settings.translationProvider == .custom,
+               old.first(where: { $0.id == settings.selectedCustomTranslationID }) !=
+                new.first(where: { $0.id == settings.selectedCustomTranslationID }) { model.invalidate() }
         }
         .onChange(of: model.source) { _, _ in model.invalidate() }
         .onChange(of: model.target) { _, _ in model.invalidate() }
         .onDisappear { model.cancel() }
     }
 
-    private func automaticTranslateIfReady() {
-        guard settings.automaticTranslation, !isRecognizing,
-              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              automaticGeneration != recognitionGeneration else { return }
-        automaticGeneration = recognitionGeneration
-        model.translate(text: text, settings: settings)
+    private struct AutomaticInput: Equatable {
+        let request: TranslationViewModel.Input
+        let isRecognizing: Bool
+        let enabled: Bool
+    }
+
+    private var automaticInput: AutomaticInput {
+        AutomaticInput(request: .init(text: text, source: model.source, target: model.target, settings: settings),
+            isRecognizing: isRecognizing, enabled: settings.automaticTranslation)
     }
 
     private func supports(_ language: Language, asSource: Bool) -> Bool {
