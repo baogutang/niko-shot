@@ -131,6 +131,64 @@ final class SelectionTextSessionTests: XCTestCase {
         XCTAssertEqual(session.resourceCounts.values.reduce(0, +), 0)
     }
 
+    func testDismissingEditedTextRestoresSelectionKeyboardAndReturnCopiesPixels() async throws {
+        try await assertDismissRestoresKeyboard(annotationTool: nil)
+    }
+
+    func testDismissingEditedTextRestoresAnnotationKeyboardAndReturnCopiesPixels() async throws {
+        try await assertDismissRestoresKeyboard(annotationTool: .rectangle)
+    }
+
+    private func assertDismissRestoresKeyboard(annotationTool: AnnotationTool?) async throws {
+        let (settings, suite) = try isolatedSettings()
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let controller = ScreenshotTextController(settings: settings, recognition: { _, _, _ in
+            [OCRBlock(text: "editable original", boundingBox: .zero, confidence: 1)]
+        })
+        let session = SelectionSession(makeTextController: { controller })
+        defer { session.finish() }
+        var captured: CGImage?
+        try start(session) { captured = $0 }
+        if let annotationTool {
+            session.beginAnnotation(tool: annotationTool)
+            await session.drainPendingOperations()
+        }
+        let overlay = try XCTUnwrap(session.windows.first)
+        let responder = try XCTUnwrap(overlay.firstResponder as? NSView)
+        session.requestScreenshotText()
+        try await waitUntil { controller.model.hasRecognizedResult }
+        let panel = try panel()
+        panel.contentView?.layoutSubtreeIfNeeded()
+        try await waitUntil { self.editableText(in: panel.contentView) != nil }
+        let editor = try XCTUnwrap(editableText(in: panel.contentView))
+        panel.makeKeyAndOrderFront(nil)
+        XCTAssertTrue(panel.makeFirstResponder(editor))
+        XCTAssertTrue(NSApp.keyWindow === panel)
+        editor.string = "corrected original"
+        editor.delegate?.textDidChange?(Notification(name: NSText.didChangeNotification, object: editor))
+        XCTAssertEqual(controller.model.originalText, "corrected original")
+        controller.onDismiss?()
+        XCTAssertTrue(NSApp.keyWindow === overlay, "Closing the result must return keyboard input to the screenshot")
+        XCTAssertTrue(overlay.firstResponder === responder)
+        XCTAssertNil(captured, "Closing the text card keeps the screenshot open")
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: overlay.windowNumber, context: nil, characters: "\r", charactersIgnoringModifiers: "\r",
+            isARepeat: false, keyCode: 36))
+        overlay.sendEvent(event)
+        try await waitUntil { captured != nil }
+        XCTAssertEqual(captured?.width, 300)
+        XCTAssertEqual(captured?.height, 240)
+        XCTAssertEqual(session.outputAction, .copy)
+        await session.drainPendingOperations()
+        XCTAssertEqual(session.resourceCounts.values.reduce(0, +), 0)
+    }
+
+    private func editableText(in view: NSView?) -> NSTextView? {
+        guard let view else { return nil }
+        if let editor = view as? NSTextView, editor.isEditable { return editor }
+        return view.subviews.lazy.compactMap { self.editableText(in: $0) }.first
+    }
+
     private func start(_ session: SelectionSession, completion: @escaping (CGImage) -> Void) throws {
         let context = try ImageUtilities.context(width: 900, height: 700)
         let image = try XCTUnwrap(context.makeImage())

@@ -384,7 +384,7 @@ final class SelectionSession {
         }
     }
 
-    private func closeScreenshotText() {
+    private func closeScreenshotText(restoreKeyboardFocus: Bool = true) {
         textResultGeneration = UUID()
         if let id = textSnapshotOperation { operations[id]?.cancel() }
         textSnapshotOperation = nil
@@ -394,11 +394,30 @@ final class SelectionSession {
         controller.onRecognizedText = nil; controller.onRetrySnapshot = nil
         controller.cancel()
         toolbar?.setTextResultView(nil)
+        if restoreKeyboardFocus { restoreCaptureKeyboardFocus() }
         let id = UUID()
         retiringTextResults[id] = Task { [weak self] in
             await controller.finishAndDrain()
             self?.retiringTextResults.removeValue(forKey: id)
         }
+    }
+
+    /// AppKit does not choose a new key window after the nonactivating text panel resigns it.
+    private func restoreCaptureKeyboardFocus() {
+        let responder: NSView?
+        if state == .annotating, let canvas {
+            responder = canvas
+        } else if state == .selected {
+            if let scroll = imageEditorWindow?.contentView as? NSScrollView {
+                responder = scroll.documentView
+            } else {
+                responder = windows.compactMap { $0.contentView as? SelectionView }
+                    .first { $0.frameInfo.screen.id == activeScreen }
+            }
+        } else { return }
+        guard let responder, let window = responder.window else { return }
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(responder)
     }
 
     private func perform(_ action: ToolbarAction) {
@@ -539,7 +558,7 @@ final class SelectionSession {
     /// Closes all overlays and removes listeners; also used for cancellation and display changes.
     func finish(completed: Bool = false) {
         let didFinish = onFinish; onFinish = nil
-        closeScreenshotText()
+        closeScreenshotText(restoreKeyboardFocus: false)
         for operation in operations.values { operation.cancel() }
         if let canvas { retire(canvas) }
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
