@@ -144,7 +144,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .annotation-copy > p { font-size: 13px; margin-top: 14px; }
 .feature-detail { font-size: 12px !important; line-height: 1.85; color: var(--muted); }
 .annotation-preview { min-width: 0; }
-.annotation-preview img { width: 100%; filter: drop-shadow(0 9px 12px var(--shadow)); }
+.annotation-preview img { width: 100%; max-width: 424px; filter: drop-shadow(0 9px 12px var(--shadow)); }
 .annotation-preview figcaption { color: var(--muted); font-size: 11px; margin-top: 18px; }
 .feature-pair { display: grid; grid-template-columns: 1.12fr 1fr; gap: 0; margin-top: 32px; }
 .feature-pair article { padding: 30px 40px 28px 0; }
@@ -170,6 +170,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .preview-tabs button:focus-visible { outline-offset: -4px; }
 .native-image-wrap { display: flex; align-items: center; justify-content: center; height: clamp(360px, 52vw, 660px); padding: 24px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--surface); overflow: hidden; }
 .native-image-wrap img { width: auto; max-width: 100%; max-height: 100%; height: auto; box-shadow: 0 20px 48px -22px var(--shadow); border-radius: 8px; }
+.native-image-wrap img.scroll-preview { max-width: min(100%, 384px); }
 .native-preview figcaption { font-size: 11px; line-height: 1.8; color: var(--muted); margin-top: 16px; max-width: 800px; }
 .translation-section { display: grid; grid-template-columns: 1fr 1fr; gap: 80px; align-items: start; padding-top: 38px; }
 .translation-heading > p { max-width: 380px; margin-top: 22px; font-size: 15px; line-height: 1.85; }
@@ -198,6 +199,23 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .download-identity h2 { font-size: clamp(34px, 3.9vw, 49px); }
 .download-identity p { font-size: 14px; margin-top: 22px; }
 .download-panel { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); padding: 30px; }
+.chip-selector { padding: 0; margin: 0 0 10px; border: 0; min-width: 0; }
+.chip-selector legend { padding: 0; margin-bottom: 9px; font-size: 13px; font-weight: 600; }
+.chip-options { display: flex; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 11px; background: var(--canvas); }
+.chip-option { position: relative; flex: 1; min-width: 0; cursor: pointer; }
+.chip-option input { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; }
+.chip-option span { display: flex; flex-direction: column; height: 100%; padding: 9px 11px; border: 1px solid transparent; border-radius: 7px; }
+.chip-option strong { font-size: 13px; font-weight: 600; }
+.chip-option small { color: var(--muted); font-size: 10px; }
+.chip-option input:checked + span { background: var(--elevated); border-color: var(--line); color: var(--accent-text); box-shadow: 0 1px 3px var(--shadow); }
+.chip-option input:focus-visible { outline: 0; }
+.chip-option input:focus-visible + span { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+.chip-option:hover span { background: var(--tint); }
+.chip-hint { font-size: 11px; margin-bottom: 12px; }
+.no-script-downloads { display: grid; gap: 12px; margin-block: 16px; }
+.no-script-downloads > div { display: flex; flex-direction: column; gap: 4px; }
+.no-script-downloads strong { font-size: 13px; }
+.no-script-downloads a { color: var(--accent-text); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }
 .release-status { min-height: 44px; color: var(--text); font-size: 13px; overflow-wrap: anywhere; }
 .download-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-block: 18px; }
 .release-links { display: flex; flex-wrap: wrap; gap: 6px 20px; color: var(--muted); font-size: 11px; margin-bottom: 20px; }
@@ -282,7 +300,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   .workflow-path span { font-size: 11px; }
   .annotation-feature { grid-template-columns: 1fr; gap: 26px; }
   .annotation-copy { max-width: 650px; }
-  .annotation-preview img { max-width: 740px; }
+  .annotation-preview img { max-width: 424px; }
   .translation-section, .privacy-section, .download-section { gap: 40px; }
   .keyboard-flow { gap: 9px; }
   .keyboard-flow kbd { min-width: 90px; padding-inline: 10px; font-size: 15px; }

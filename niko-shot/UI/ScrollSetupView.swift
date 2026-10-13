@@ -11,7 +11,8 @@ struct ScrollSetupView: View {
     private let onStart: (ScrollCaptureMode, Int, Int) -> Void
     private let onOpenAccessibility: () -> Void
     private let onCancel: () -> Void
-    @State private var mode: ScrollCaptureMode = .automatic
+    private let isRestart: Bool
+    @State private var mode: ScrollCaptureMode = .manual
     @State private var edge: IgnoredEdge = .top
     @State private var ignoredTop = 0
     @State private var ignoredBottom = 0
@@ -19,19 +20,32 @@ struct ScrollSetupView: View {
     /// Creates a preview without changing Accessibility consent or starting capture.
     init(image: CGImage, scale: CGFloat, automaticAllowed: Bool,
          onStart: @escaping (ScrollCaptureMode, Int, Int) -> Void,
-         onOpenAccessibility: @escaping () -> Void, onCancel: @escaping () -> Void) {
+         onOpenAccessibility: @escaping () -> Void, onCancel: @escaping () -> Void,
+         initialMode: ScrollCaptureMode = .manual, ignoredTop: Int = 0, ignoredBottom: Int = 0,
+         isRestart: Bool = false) {
         self.image = image
         self.scale = scale.isFinite && scale > 0 ? scale : 1
         self.automaticAllowed = automaticAllowed
         self.onStart = onStart
         self.onOpenAccessibility = onOpenAccessibility
         self.onCancel = onCancel
+        self.isRestart = isRestart
+        _mode = State(initialValue: initialMode)
+        let maximum = max(0, image.height - 240)
+        let top = min(maximum, max(0, ignoredTop))
+        _ignoredTop = State(initialValue: top)
+        _ignoredBottom = State(initialValue: min(maximum - top, max(0, ignoredBottom)))
     }
 
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    if isRestart {
+                        Label("应用这些选项会从首屏重新开始，之前的拼接分块不会沿用。", systemImage: "arrow.counterclockwise")
+                            .font(.system(size: 12)).foregroundStyle(NikoTheme.accent)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     VStack(alignment: .leading, spacing: 10) {
                         HStack(spacing: 12) {
                             Text("滚动方式").fontWeight(.semibold).accessibilityAddTraits(.isHeader)
@@ -41,7 +55,7 @@ struct ScrollSetupView: View {
                             Spacer()
                         }
                         Text(mode == .automatic
-                             ? "自动向下滚动并拼接，请保持窗口静止。"
+                             ? "自动向下滚动并拼接。窗口可移动，调整尺寸后需重新选择。"
                              : "自行向下滚动，稳定后自动捕获；完成点“结束”。")
                             .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         if mode == .automatic && !automaticAllowed {
@@ -96,7 +110,7 @@ struct ScrollSetupView: View {
             HStack(spacing: 12) {
                 Button("取消", action: onCancel).keyboardShortcut(.cancelAction).accessibilityLabel("取消长截图设置")
                 Spacer()
-                Button("开始长截图") { onStart(mode, ignoredTop, ignoredBottom) }
+                Button(isRestart ? "从首屏重新开始" : "开始长截图") { onStart(mode, ignoredTop, ignoredBottom) }
                     .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                     .foregroundStyle(NikoTheme.onAccent)
                     .disabled(usableHeight < 240).accessibilityLabel("使用所选滚动方式和忽略区域开始长截图")

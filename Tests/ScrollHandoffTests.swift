@@ -26,6 +26,19 @@ final class ScrollHandoffTests: XCTestCase {
         XCTAssertGreaterThan(panel.level.rawValue, try XCTUnwrap(view.window).level.rawValue)
         XCTAssertFalse(panel.canBecomeKey, "Pointer use must keep the selection's keyboard responder")
         try await waitUntil { panel.alphaValue >= 0.95 }
+        let compactButtons = allButtons(in: hud)
+        XCTAssertFalse(hud.isAnnotationExpanded)
+        XCTAssertEqual(compactButtons.count, 7, "Selection must begin with one compact action row")
+        XCTAssertEqual(compactButtons.filter { $0.accessibilityLabel() == ToolbarAction.copy.title }.count, 1)
+        XCTAssertFalse(compactButtons.contains { $0.accessibilityLabel() == "复制" })
+        XCTAssertFalse(compactButtons.contains { $0.accessibilityLabel() == AnnotationTool.rectangle.title })
+        let completion = try XCTUnwrap(compactButtons.first { $0.accessibilityLabel() == ToolbarAction.copy.title })
+        let cancel = try XCTUnwrap(compactButtons.first { $0.accessibilityLabel() == ToolbarAction.close.title })
+        XCTAssertGreaterThan(completion.convert(completion.bounds, to: hud).minX,
+                             cancel.convert(cancel.bounds, to: hud).minX)
+        try XCTUnwrap(compactButtons.first { $0.accessibilityLabel() == "标注工具" }).performClick(nil)
+        XCTAssertTrue(hud.isAnnotationExpanded)
+        hud.layoutSubtreeIfNeeded()
         let buttons = allButtons(in: hud)
         for title in AnnotationTool.allCases.map(\.title) + ToolbarAction.allCases.map(\.title) {
             let button = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == title }, title)
@@ -67,6 +80,9 @@ final class ScrollHandoffTests: XCTestCase {
         try mouse(.leftMouseUp, point: CGPoint(x: 400, y: 330), to: view)
         let panel = try XCTUnwrap(NSApp.windows.first { $0.isVisible && $0.accessibilityLabel() == "截图标注工具条" })
         let hud = try XCTUnwrap(panel.contentView as? HUDContentView)
+        XCTAssertFalse(hud.isAnnotationExpanded)
+        try XCTUnwrap(allButtons(in: hud).first { $0.accessibilityLabel() == "标注工具" }).performClick(nil)
+        XCTAssertTrue(hud.isAnnotationExpanded)
         let rectangle = try XCTUnwrap(allButtons(in: hud).first { $0.accessibilityLabel() == AnnotationTool.rectangle.title })
         rectangle.performClick(nil)
         try await waitUntil {
@@ -98,12 +114,17 @@ final class ScrollHandoffTests: XCTestCase {
         defer { hud.closeAuxiliaryControls() }
         hud.frame.size = hud.configure(maximumWidth: 704)
         hud.layoutSubtreeIfNeeded()
-        let buttons = allButtons(in: hud)
-        let button = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "长截图" })
+        let compactButtons = allButtons(in: hud)
+        XCTAssertEqual(compactButtons.count, 7)
+        let button = try XCTUnwrap(compactButtons.first { $0.accessibilityLabel() == "长截图" })
         XCTAssertEqual(button.title, "长截图", "The primary action must be discoverable without hovering")
         XCTAssertNotNil(button.image)
         XCTAssertGreaterThanOrEqual(button.frame.width, 44)
         XCTAssertGreaterThanOrEqual(button.frame.height, 44)
+        try XCTUnwrap(compactButtons.first { $0.accessibilityLabel() == "标注工具" }).performClick(nil)
+        hud.frame.size = hud.configure(maximumWidth: 704)
+        hud.layoutSubtreeIfNeeded()
+        let buttons = allButtons(in: hud)
         for tool in AnnotationTool.allCases {
             XCTAssertNotNil(buttons.first { $0.accessibilityLabel() == tool.title })
         }
@@ -125,6 +146,37 @@ final class ScrollHandoffTests: XCTestCase {
         XCTAssertEqual(button.title, "长截图")
         XCTAssertGreaterThanOrEqual(button.frame.width, 44)
         XCTAssertGreaterThanOrEqual(button.frame.height, 44)
+    }
+
+    func testDefaultCompletionButtonAndReturnBothCopySelectedPixels() async throws {
+        let image = try await fixture(width: 640, height: 480)
+        let screen = ScreenGeometry(id: 63, frame: CGRect(x: 80, y: 80, width: 640, height: 480), scale: 1)
+        let target = CaptureContext(screen: screen, localRect: CGRect(x: 60, y: 50, width: 340, height: 280),
+                                    kind: "region", appBundleID: "com.example.fixture")
+        for keyboard in [false, true] {
+            let selection = SelectionSession()
+            defer { selection.finish() }
+            var captured: (CGImage, CaptureContext)?
+            selection.start(frames: [FrozenFrame(screen: screen, image: image)], initial: target,
+                            autoConfirm: false) { captured = ($0, $1) }
+            let panel = try XCTUnwrap(NSApp.windows.first { $0.isVisible && $0.accessibilityLabel() == "截图标注工具条" })
+            let hud = try XCTUnwrap(panel.contentView as? HUDContentView)
+            XCTAssertFalse(hud.isAnnotationExpanded)
+            if keyboard {
+                let selector = try XCTUnwrap(selection.windows.first?.contentView as? SelectionView)
+                try key("\r", code: 36, to: selector)
+            } else {
+                try XCTUnwrap(allButtons(in: hud).first { $0.accessibilityLabel() == "完成并复制" }).performClick(nil)
+            }
+            try await waitUntil { captured != nil }
+            let result = try XCTUnwrap(captured)
+            XCTAssertEqual(selection.outputAction, .copy)
+            XCTAssertEqual(result.0.width, 340)
+            XCTAssertEqual(result.0.height, 280)
+            XCTAssertEqual(result.1.localRect, target.localRect)
+            await selection.drainPendingOperations()
+            XCTAssertEqual(selection.resourceCounts.values.reduce(0, +), 0)
+        }
     }
 
     func testLiveHandoffClosesOverlaysBeforeCallbackAndRetainsMixedDisplayWindowIdentity() async throws {
@@ -207,7 +259,7 @@ final class ScrollHandoffTests: XCTestCase {
         let selection = SelectionSession(afterImageOperation: { await gate.pause() })
         var previews: [CaptureContext] = []
         let coordinator = ScrollCoordinator(engine: CaptureEngine(), selection: selection, windows: WindowList(),
-            onCapture: { _, _ in XCTFail("Showing setup must not produce capture output") }, capturePreview: { context in
+            onCapture: { _, _ in XCTFail("Starting the follow controls must wait for an explicit finish before output") }, capturePreview: { context in
                 XCTAssertEqual(selection.windowCount, 0)
                 XCTAssertEqual(selection.monitorCount, 0)
                 XCTAssertEqual(selection.resourceCounts.values.reduce(0, +), 0)
@@ -225,10 +277,22 @@ final class ScrollHandoffTests: XCTestCase {
         XCTAssertEqual(coordinator.resourceCounts["operation"], 1)
         XCTAssertTrue(previews.isEmpty, "The live request must await the old archive/render worker")
         await gate.release()
-        try await waitUntil { coordinator.resourceCounts["setup"] == 1 }
+        try await waitUntil {
+            coordinator.resourceCounts["controls"] == 1 && coordinator.controlProgress.frames == 1 &&
+            !coordinator.controlProgress.isWorking
+        }
+        XCTAssertEqual(coordinator.resourceCounts["setup"], 0, "A selected viewport starts following without another confirmation window")
+        XCTAssertEqual(coordinator.controlProgress.mode, .manual)
+        XCTAssertEqual(coordinator.controlProgress.height, fresh.height)
+        XCTAssertFalse(coordinator.controlProgress.isPaused)
+        XCTAssertFalse(coordinator.controlProgress.isMatching)
         XCTAssertEqual(previews.count, 1)
         assertViewport(try XCTUnwrap(previews.first), equals: target)
         assertViewport(try XCTUnwrap(coordinator.selectedViewport), equals: target)
+        try await Task.sleep(for: .milliseconds(180))
+        XCTAssertEqual(coordinator.resourceCounts["controls"], 1, "A stationary page must remain ready for the user to scroll")
+        XCTAssertEqual(coordinator.controlProgress.frames, 1)
+        XCTAssertTrue(coordinator.isBusy)
         await coordinator.cancel()
         XCTAssertEqual(coordinator.resourceCounts.values.reduce(0, +), 0)
         XCTAssertEqual(selection.resourceCounts.values.reduce(0, +), 0)
@@ -252,6 +316,9 @@ final class ScrollHandoffTests: XCTestCase {
         let cancellation = Task { await coordinator.cancel() }
         try await waitUntil { coordinator.resourceCounts["cleanup"] == 1 }
         XCTAssertEqual(previews, 0)
+        XCTAssertEqual(coordinator.resourceCounts["controls"], 0)
+        XCTAssertEqual(coordinator.resourceCounts["setup"], 0)
+        XCTAssertEqual(coordinator.controlProgress.frames, 0)
         await gate.release()
         await cancellation.value
         XCTAssertEqual(previews, 0)

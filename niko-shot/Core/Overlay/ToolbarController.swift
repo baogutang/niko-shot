@@ -9,7 +9,7 @@ enum ToolbarAction: String, CaseIterable, Sendable {
     /// VoiceOver and tooltip name for this command.
     var title: String {
         switch self {
-        case .copy: "复制"
+        case .copy: "完成并复制"
         case .save: "保存"
         case .pin: "贴图"
         case .ocr: "识别文字"
@@ -24,7 +24,7 @@ enum ToolbarAction: String, CaseIterable, Sendable {
     /// Native SF Symbol for the command.
     var symbol: String {
         switch self {
-        case .copy: "doc.on.clipboard"
+        case .copy: "checkmark"
         case .save: "square.and.arrow.down"
         case .pin: "pin"
         case .ocr: "text.viewfinder"
@@ -64,9 +64,16 @@ final class ToolbarController {
     private let confirmationTitle: String?
     private var scrollEnabled = true
     private var scrollExplanation = "沿当前选区捕获滚动内容。"
+    private var placement: (selection: CGRect, screen: CGRect)?
+    private var canUndo = false
+    private var canRedo = false
 
     /// Number of panels retained by the controller, for session teardown assertions.
     var windowCount: Int { panel == nil ? 0 : 1 }
+    /// Whether the tools are visible after either pointer disclosure or keyboard tool selection.
+    var isAnnotationExpanded: Bool { content?.isAnnotationExpanded ?? false }
+    /// Retained color and stroke-width popovers; finishing a session must leave none.
+    var auxiliaryControlCount: Int { content?.auxiliaryControlCount ?? 0 }
 
     /// Creates the HUD without opening a panel or registering event monitors.
     init(onTool: @escaping (AnnotationTool) -> Void,
@@ -84,15 +91,22 @@ final class ToolbarController {
         guard let remainingPanel = panel else { return }
         // Normal use calls close() first; this fallback also handles release off the main thread.
         if Thread.isMainThread {
-            MainActor.assumeIsolated { remainingPanel.orderOut(nil); remainingPanel.close() }
+            MainActor.assumeIsolated {
+                (remainingPanel.contentView as? HUDContentView)?.closeAuxiliaryControls()
+                remainingPanel.orderOut(nil); remainingPanel.contentView = nil; remainingPanel.close()
+            }
         } else {
-            Task { @MainActor in remainingPanel.orderOut(nil); remainingPanel.close() }
+            Task { @MainActor in
+                (remainingPanel.contentView as? HUDContentView)?.closeAuxiliaryControls()
+                remainingPanel.orderOut(nil); remainingPanel.contentView = nil; remainingPanel.close()
+            }
         }
     }
 
     /// Shows the HUD outside the global AppKit selection, clamped to its owning screen.
     func show(near selectionGlobal: CGRect, screenFrame: CGRect) {
         guard screenFrame.width > 0, screenFrame.height > 0 else { return }
+        placement = (selectionGlobal, screenFrame)
         let available = Self.safeFrame(screenFrame)
         if panel == nil {
             let content = HUDContentView(onTool: { [weak self] tool in
@@ -126,12 +140,15 @@ final class ToolbarController {
             window.setAccessibilityLabel("截图标注工具条")
             self.content = content
             panel = window
+            content.onLayoutChange = { [weak self] in self?.updateFrame() }
         }
         guard let panel, let content else { return }
-        let size = content.configure(maximumWidth: max(44, available.width))
         content.setSelectedTool(selectedTool)
+        if selectedTool != nil { content.setAnnotationExpanded(true, notify: false) }
+        content.setActionEnabled(.undo, enabled: canUndo)
+        content.setActionEnabled(.redo, enabled: canRedo)
         content.setScrollAvailability(enabled: scrollEnabled, explanation: scrollExplanation)
-        let frame = Self.preferredFrame(near: selectionGlobal, screenFrame: available, size: size)
+        let frame = layoutFrame(content: content, selection: selectionGlobal, screen: available)
         let isNewlyShown = !panel.isVisible
         panel.setFrame(frame, display: true)
         if isNewlyShown && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
@@ -159,9 +176,12 @@ final class ToolbarController {
     func close() {
         let oldPanel = panel
         content?.closeAuxiliaryControls()
+        content?.onLayoutChange = nil
         panel = nil
         content = nil
         selectedTool = nil
+        placement = nil
+        canUndo = false; canRedo = false
         oldPanel?.orderOut(nil)
         oldPanel?.contentView = nil
         oldPanel?.close()
@@ -171,10 +191,12 @@ final class ToolbarController {
     func setSelectedTool(_ tool: AnnotationTool) {
         selectedTool = tool
         content?.setSelectedTool(tool)
+        content?.setAnnotationExpanded(true)
     }
 
     /// Enables undo and redo only when the document has an applicable snapshot.
     func setUndoAvailability(canUndo: Bool, canRedo: Bool) {
+        self.canUndo = canUndo; self.canRedo = canRedo
         content?.setActionEnabled(.undo, enabled: canUndo)
         content?.setActionEnabled(.redo, enabled: canRedo)
     }
@@ -183,6 +205,32 @@ final class ToolbarController {
     func setScrollAvailability(enabled: Bool, explanation: String) {
         scrollEnabled = enabled; scrollExplanation = explanation
         content?.setScrollAvailability(enabled: enabled, explanation: explanation)
+    }
+
+    private func updateFrame() {
+        guard let panel, let content, let placement else { return }
+        let frame = layoutFrame(content: content, selection: placement.selection,
+                                screen: Self.safeFrame(placement.screen))
+        panel.setFrame(frame, display: true)
+        content.layoutSubtreeIfNeeded()
+    }
+
+    private func layoutFrame(content: HUDContentView, selection: CGRect, screen: CGRect) -> CGRect {
+        let width = max(44, screen.width)
+        let size = content.configure(maximumWidth: width)
+        let preferred = Self.preferredFrame(near: selection, screenFrame: screen, size: size)
+        guard preferred.intersects(selection), content.isAnnotationExpanded else { return preferred }
+        // An expanded inspector can fit beside a tall selection when a wide tool row cannot fit above it.
+        let sideWidths = [selection.minX - screen.minX - 12, screen.maxX - selection.maxX - 12]
+            .filter { $0 >= 64 && $0 < width }.sorted(by: >)
+        for sideWidth in sideWidths {
+            let alternative = content.configure(maximumWidth: sideWidth)
+            guard alternative.height <= screen.height else { continue }
+            let frame = Self.preferredFrame(near: selection, screenFrame: screen, size: alternative)
+            if !frame.intersects(selection) { return frame }
+        }
+        _ = content.configure(maximumWidth: width)
+        return preferred
     }
 
     /// Computes a deterministic placement, preferring below, above, then either side.
@@ -225,13 +273,15 @@ private final class HUDPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-/// Two compact native tool rows; appearance controls use transient system popovers.
+/// One compact completion bar with an optional annotation inspector and transient style controls.
 @MainActor
 final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
     private let column = NSStackView()
     private var toolGroups: [[NSView]] = []
     private var styleGroups: [[NSView]] = []
     private var commandGroups: [[NSView]] = []
+    private var editingGroups: [[NSView]] = []
+    private var annotationButton: HUDIconButton?
     private var toolButtons: [(AnnotationTool, HUDIconButton)] = []
     private var actionButtons: [ToolbarAction: HUDIconButton] = [:]
     private var colorButton: HUDIconButton?
@@ -249,11 +299,21 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
     ]
     private var lastWidth: CGFloat = 0
     private var configuredSize = CGSize.zero
+    private var layoutDirty = true
+    private let confirmationOnly: Bool
+
+    /// Changes the actual owning panel frame after the inspector opens or closes.
+    var onLayoutChange: (() -> Void)?
+    /// The native disclosure state shared by pointer and keyboard entry points.
+    private(set) var isAnnotationExpanded = false
+    /// Retained transient style controllers, including those being explicitly closed.
+    var auxiliaryControlCount: Int { (colorPopover == nil ? 0 : 1) + (widthPopover == nil ? 0 : 1) }
 
     init(onTool: @escaping (AnnotationTool) -> Void, onAction: @escaping (ToolbarAction) -> Void,
          onColor: @escaping (NSColor) -> Void, onWidth: @escaping (CGFloat) -> Void, confirmationTitle: String? = nil) {
         onColorChange = onColor
         onWidthChange = onWidth
+        confirmationOnly = confirmationTitle != nil
         super.init(frame: .zero)
         material = .hudWindow
         blendingMode = .behindWindow
@@ -275,12 +335,21 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
             column.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -7)
         ])
         if confirmationTitle == nil {
+        let annotation = HUDIconButton(symbol: "pencil", title: "标注工具", visibleTitle: "标注")
+        annotation.toolTip = "展开标注工具 · 也可按数字键选工具"
+        annotation.setAccessibilityExpanded(false)
+        annotation.setAccessibilityHelp("展开十二种标注工具、颜色、线宽、撤销、重做和调整选区。")
+        annotation.onPress = { [weak self] in
+            guard let self else { return }
+            self.setAnnotationExpanded(!self.isAnnotationExpanded)
+        }
+        annotationButton = annotation
         let tools = Array(AnnotationTool.allCases)
         for start in stride(from: 0, to: tools.count, by: 4) {
             var group: [NSView] = []
             for tool in tools[start..<min(start + 4, tools.count)] {
                 let button = HUDIconButton(symbol: tool.symbol, title: tool.title)
-                button.onPress = { onTool(tool) }
+                button.onPress = { [weak self] in self?.setSelectedTool(tool); onTool(tool) }
                 toolButtons.append((tool, button))
                 group.append(button)
             }
@@ -294,22 +363,28 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
         widthButton = width
         styleGroups = [[color, width]]
         }
-        let groups: [[ToolbarAction]] = confirmationTitle == nil ? [[.undo, .redo], [.selection], [.copy, .save, .pin, .ocr, .scroll], [.close]] : [[.copy], [.close]]
+        let groups: [[ToolbarAction]] = confirmationTitle == nil
+            ? [[.undo, .redo], [.selection], [.ocr, .pin, .scroll], [.save], [.close, .copy]]
+            : [[.close, .copy]]
         for group in groups {
             var views: [NSView] = []
             for action in group {
                 let title = action == .copy ? (confirmationTitle ?? action.title) : action.title
-                let button = HUDIconButton(symbol: action == .copy && confirmationTitle != nil ? "checkmark.circle" : action.symbol,
-                                           title: title, tint: action == .copy || action == .scroll ? HUDPalette.accent : nil,
-                                           prominent: action == .copy || action == .scroll,
-                                           visibleTitle: action == .scroll ? "长截图" : nil)
+                let button = HUDIconButton(symbol: action.symbol, title: title,
+                                           tint: action == .copy ? HUDPalette.accent : nil,
+                                           prominent: action == .copy,
+                                           visibleTitle: action == .scroll ? "长截图"
+                                                : action == .copy && confirmationTitle != nil ? title : nil)
+                if action == .undo || action == .redo { button.isEnabled = false }
                 button.toolTip = action.keyHint.map { "\(title) · \($0)" } ?? title
                 button.onPress = { onAction(action) }
                 actionButtons[action] = button
                 views.append(button)
             }
-            commandGroups.append(views)
+            if group.contains(.undo) || group.contains(.selection) { editingGroups.append(views) }
+            else { commandGroups.append(views) }
         }
+        if let annotationButton { commandGroups.insert([annotationButton], at: 0) }
         displayNotifications.addObserver(self, selector: #selector(displayOptionsChanged),
                                          name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
         updateAppearance()
@@ -321,28 +396,47 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
 
     /// Closes transient native controls before the capture session releases its HUD.
     func closeAuxiliaryControls() {
-        colorPopover?.close()
-        colorPopover?.contentViewController = nil
-        colorPopover?.delegate = nil
-        colorPopover = nil
-        widthPopover?.close()
-        widthPopover?.contentViewController = nil
-        widthPopover?.delegate = nil
-        widthPopover = nil
+        closeStylePopovers()
         displayNotifications.removeObserver(self)
     }
 
+    /// Discloses all editing tools without changing the active tool or document.
+    func setAnnotationExpanded(_ expanded: Bool, notify: Bool = true) {
+        guard !confirmationOnly, isAnnotationExpanded != expanded else { return }
+        closeStylePopovers()
+        isAnnotationExpanded = expanded
+        annotationButton?.setSelected(expanded)
+        annotationButton?.setAccessibilityExpanded(expanded)
+        annotationButton?.toolTip = expanded ? "收起标注工具" : "展开标注工具 · 也可按数字键选工具"
+        layoutDirty = true
+        if notify { onLayoutChange?() }
+    }
+
+    private func closeStylePopovers() {
+        let oldPopovers = [colorPopover, widthPopover].compactMap { $0 }
+        colorPopover = nil; widthPopover = nil
+        colorButton?.setSelected(false); widthButton?.setSelected(false)
+        for popover in oldPopovers {
+            popover.delegate = nil
+            popover.animates = false
+            popover.close()
+            popover.contentViewController = nil
+        }
+    }
+
     func configure(maximumWidth: CGFloat) -> CGSize {
-        guard abs(lastWidth - maximumWidth) > 0.5 else { return configuredSize }
-        colorPopover?.close()
-        widthPopover?.close()
+        guard layoutDirty || abs(lastWidth - maximumWidth) > 0.5 else { return configuredSize }
+        closeStylePopovers()
+        layoutDirty = false
         lastWidth = maximumWidth
         for row in column.arrangedSubviews { column.removeArrangedSubview(row); row.removeFromSuperview() }
-        let limit = max(44, min(maximumWidth, 704) - 20)
+        let limit = max(44, min(maximumWidth, 624) - 20)
         for button in actionButtons.values { button.constrainWidth(to: limit) }
+        annotationButton?.constrainWidth(to: limit)
         var largest: CGFloat = 44
         var rowCount = 0
-        for groups in [toolGroups + styleGroups, commandGroups] {
+        let rows = isAnnotationExpanded ? [toolGroups, styleGroups + editingGroups, commandGroups] : [commandGroups]
+        for groups in rows {
             var rowViews: [NSView] = []
             var rowWidth: CGFloat = 0
             func finishRow() {
@@ -426,9 +520,9 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
     @objc private func displayOptionsChanged() { updateAppearance() }
 
     private func showColorPopover() {
-        guard let colorButton else { return }
-        if let colorPopover, colorPopover.isShown { colorPopover.close(); return }
-        widthPopover?.close()
+        guard isAnnotationExpanded, let colorButton, colorButton.window != nil else { return }
+        if let colorPopover, colorPopover.isShown { closeStylePopovers(); return }
+        closeStylePopovers()
         let content = NSView(frame: CGRect(x: 0, y: 0, width: 216, height: 142))
         let heading = NSTextField(labelWithString: "标注颜色")
         heading.font = .systemFont(ofSize: 12, weight: .semibold)
@@ -460,9 +554,9 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
     }
 
     private func showWidthPopover() {
-        guard let widthButton else { return }
-        colorPopover?.close()
-        if let widthPopover, widthPopover.isShown { widthPopover.close(); return }
+        guard isAnnotationExpanded, let widthButton, widthButton.window != nil else { return }
+        if let widthPopover, widthPopover.isShown { closeStylePopovers(); return }
+        closeStylePopovers()
         let content = NSView(frame: CGRect(x: 0, y: 0, width: 216, height: 86))
         let heading = NSTextField(labelWithString: "线宽")
         heading.font = .systemFont(ofSize: 12, weight: .semibold)
@@ -537,6 +631,7 @@ private final class HUDIconButton: NSButton {
     private let prominent: Bool
     private let isColorSwatch: Bool
     private let visibleTitle: String?
+    private let preferredWidth: CGFloat
     private var widthConstraint: NSLayoutConstraint?
     var layoutWidth: CGFloat { widthConstraint?.constant ?? 44 }
 
@@ -544,6 +639,9 @@ private final class HUDIconButton: NSButton {
         symbolTint = tint
         self.prominent = prominent
         self.visibleTitle = visibleTitle
+        preferredWidth = visibleTitle.map {
+            max(64, ceil(($0 as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium)]).width) + 40)
+        } ?? 44
         isColorSwatch = symbol == "circle.fill" && tint != nil
         super.init(frame: CGRect(x: 0, y: 0, width: 44, height: 44))
         isBordered = false
@@ -564,7 +662,7 @@ private final class HUDIconButton: NSButton {
         layer?.cornerRadius = 8
         focusRingType = .exterior
         translatesAutoresizingMaskIntoConstraints = false
-        let width = widthAnchor.constraint(equalToConstant: visibleTitle == nil ? 44 : 104)
+        let width = widthAnchor.constraint(equalToConstant: preferredWidth)
         widthConstraint = width
         NSLayoutConstraint.activate([width, heightAnchor.constraint(equalToConstant: 44)])
         refreshAppearance()
@@ -575,10 +673,11 @@ private final class HUDIconButton: NSButton {
     /// Preserves a 44-point hit target and the visible label when narrow screens require extra rows.
     func constrainWidth(to maximumWidth: CGFloat) {
         guard visibleTitle != nil else { return }
-        let width = min(104, max(44, maximumWidth))
+        let width = min(preferredWidth, max(44, maximumWidth))
         widthConstraint?.constant = width
-        imagePosition = width >= 84 ? .imageLeading : .imageAbove
-        font = .systemFont(ofSize: width >= 84 ? 13 : 11, weight: .medium)
+        let labelFits = width >= preferredWidth - 0.5
+        imagePosition = labelFits ? .imageLeading : .imageAbove
+        font = .systemFont(ofSize: labelFits ? 13 : 11, weight: .medium)
     }
 
     @objc private func pressed() { onPress?() }

@@ -20,9 +20,9 @@ env:
 
 jobs:
   build:
-    name: Clean tests and universal Release
+    name: Clean tests and separate Apple Silicon / Intel Releases
     runs-on: macos-15
-    timeout-minutes: 90
+    timeout-minutes: 180
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -99,19 +99,26 @@ jobs:
             echo 'NOTARY_PROFILE=niko-shot-ci' >> "$GITHUB_ENV"
           fi
 
-      - name: Build an optimized arm64 and x86_64 application
+      - name: Build independent optimized arm64 and x86_64 applications
         run: |
           set -euo pipefail
-          xcodebuild -scheme niko-shot -configuration Release -destination 'generic/platform=macOS' \
-            -derivedDataPath build/CI-Release ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO \
-            SWIFT_VERSION=6.0 SWIFT_STRICT_CONCURRENCY=complete SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
-            GCC_TREAT_WARNINGS_AS_ERRORS=YES ENABLE_TESTABILITY=NO CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="${CI_SIGNING_IDENTITY:--}" DEVELOPMENT_TEAM="${CI_SIGNING_TEAM:-}" \
-            CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
-            clean build 2>&1 | tee build/evidence/ci-release.log
+          for architecture in arm64 x86_64; do
+            xcodebuild -scheme niko-shot -configuration Release -destination 'generic/platform=macOS' \
+              -derivedDataPath "build/CI-Release-$architecture" ARCHS="$architecture" ONLY_ACTIVE_ARCH=NO \
+              SWIFT_VERSION=6.0 SWIFT_STRICT_CONCURRENCY=complete SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
+              GCC_TREAT_WARNINGS_AS_ERRORS=YES ENABLE_TESTABILITY=NO CODE_SIGN_STYLE=Manual \
+              CODE_SIGN_IDENTITY="${CI_SIGNING_IDENTITY:--}" DEVELOPMENT_TEAM="${CI_SIGNING_TEAM:-}" \
+              CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+              clean build 2>&1 | tee "build/evidence/ci-release-$architecture.log"
+          done
 
-      - name: Verify and package ZIP, DMG, checksums and provenance
-        run: scripts/ci-package.sh build/CI-Release/Build/Products/Release/niko-shot.app build/ci-dist
+      - name: Verify both architectures and seal ZIP, DMG, checksums and provenance
+        run: |
+          set -euo pipefail
+          for architecture in arm64 x86_64; do
+            scripts/ci-package.sh "build/CI-Release-$architecture/Build/Products/Release/niko-shot.app" build/ci-dist "$architecture"
+          done
+          python3 scripts/release-manifest.py build/ci-dist
 
       - name: Delete temporary signing material
         if: always()
@@ -149,6 +156,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Check out this run's release validator
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Download this run's tested packages
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -162,7 +174,7 @@ jobs:
           RELEASE_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
-          (cd distribution && sha256sum --check SHA256SUMS)
+          python3 scripts/release-manifest.py distribution --verify
           python3 - <<'PY'
           import json, os
           from pathlib import Path
@@ -175,16 +187,18 @@ jobs:
           else:
               signing = 'ad hoc 开发签名，未取得 Developer ID 签名或 Apple 公证。macOS 首次打开可能拦截。'
           repository = os.environ['RELEASE_REPOSITORY']
-          notes = f'''原生 macOS 开发候选；macOS 14 或更新，Apple Silicon 与 Intel 通用版本。
+          notes = f'''原生 macOS 开发候选；macOS 14 或更新，Apple Silicon 与 Intel 分别提供独立安装包。
 
           {signing}
+
+          M 系列芯片请下载 `niko-shot-arm64.dmg` 或 `.zip`；Intel Mac 请下载 `niko-shot-x86_64.dmg` 或 `.zip`。可在苹果菜单「关于本机」确认芯片或处理器类型。
 
           下载 DMG 后把 niko-shot.app 拖入 Applications，或解压 ZIP 后复制应用。若首次打开被阻止，请核对来源与 SHA256 后，按 [Apple 官方说明](https://support.apple.com/102445)在系统设置「隐私与安全性」中允许本次打开；不要关闭系统整体安全检查。
 
           - 应用版本：{info['version']}，构建号 {info['build']}。
           - 完整提交：[{info['commit']}](https://github.com/{repository}/commit/{info['commit']})。
-          - 干净构建、测试和 universal Release：[本次运行]({info['runUrl']})。
-          - ZIP / DMG 的校验值见 SHA256SUMS；签名、架构与二进制哈希见 release-info.json。
+          - 干净构建、测试和两个架构的独立 Release：[本次运行]({info['runUrl']})。
+          - 四个 ZIP / DMG、两份架构清单与汇总清单的全部七项校验值见 SHA256SUMS；签名、架构与二进制哈希见 release-info.json（schemaVersion 2）。
 
           自动测试通过不代表完整产品验收通过。冷启动、使用后内存及部分账号、外设与系统版本验收仍有边界，见 [验收记录](https://github.com/{repository}/blob/{info['commit']}/docs/ACCEPTANCE.md)。
 
@@ -239,7 +253,9 @@ jobs:
 
           本导航页指向一套完整、不可变的成功构建产物。所有文件均来自同一个候选；源码请以该候选标签与 release-info.json 为准。
 
-          **[下载 DMG]({base}/niko-shot-universal.dmg) · [下载 ZIP]({base}/niko-shot-universal.zip)**
+          **Apple Silicon（M 系列）：[下载 DMG]({base}/niko-shot-arm64.dmg) · [下载 ZIP]({base}/niko-shot-arm64.zip)**
+
+          **Intel Mac：[下载 DMG]({base}/niko-shot-x86_64.dmg) · [下载 ZIP]({base}/niko-shot-x86_64.zip)**
 
           [SHA256SUMS]({base}/SHA256SUMS) · [构建与签名信息]({base}/release-info.json) · [独立候选发布页](https://github.com/{os.environ["GH_REPO"]}/releases/tag/{candidate})
 

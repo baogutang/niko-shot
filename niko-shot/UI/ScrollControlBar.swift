@@ -7,7 +7,7 @@ import SwiftUI
 @MainActor @Observable
 final class ScrollControlState {
     /// Current effective mode, including a coordinator-selected manual fallback.
-    var mode: ScrollCaptureMode = .automatic
+    var mode: ScrollCaptureMode = .manual
     /// The stitched image's current height in pixels.
     var height = 0
     /// Number of accepted screen-sized frames.
@@ -24,9 +24,41 @@ final class ScrollControlState {
     var overlap = 150
     /// Largest valid overlap; the coordinator sets this to the smaller usable frame height minus one.
     var maximumOverlap = 199
+    /// Advanced controls stay collapsed during ordinary manual capture.
+    var showsAdvanced = false
+    /// First-frame preparation, seam application or PNG encoding disables conflicting commands.
+    var isWorking = false
+    /// A terminal disk worker can be replaced but must never be retried.
+    var requiresRestart = false
+    /// A moved region, resized window or changed display needs a new native selection.
+    var requiresReselection = false
+    /// The user is browsing already-captured content above the accepted boundary.
+    var isBacktracking = false
+    var ignoredTop = 0
+    var ignoredBottom = 0
+
+    var progress: ScrollControlProgress {
+        ScrollControlProgress(mode: mode, height: height, frames: frames, status: status,
+            isPaused: isPaused, isMatching: isMatching, isWorking: isWorking,
+            requiresRestart: requiresRestart, requiresReselection: requiresReselection, isBacktracking: isBacktracking)
+    }
 
     /// Creates idle progress without any window, timer, capture, or permission request.
     init() {}
+}
+
+/// Sendable scalar diagnostics for the coordinator and its real workflow tests.
+struct ScrollControlProgress: Sendable {
+    let mode: ScrollCaptureMode
+    let height: Int
+    let frames: Int
+    let status: String
+    let isPaused: Bool
+    let isMatching: Bool
+    let isWorking: Bool
+    let requiresRestart: Bool
+    let requiresReselection: Bool
+    let isBacktracking: Bool
 }
 
 /// Owns a nonactivating HUD that accepts keyboard focus only after user interaction.
@@ -40,6 +72,9 @@ final class ScrollControlBarController {
     private let onRetry: () -> Void
     private let onManualOverlap: (Int) -> Void
     private let onManualMode: () -> Void
+    private let onAdvancedSettings: () -> Void
+    private let onAutomaticMode: () -> Void
+    private let onPause: () -> Void
     private var selectionGlobal: CGRect?
 
     /// Retained HUD count for lifecycle assertions.
@@ -48,13 +83,15 @@ final class ScrollControlBarController {
     /// Creates controls without allocating a panel or running a timer.
     init(state: ScrollControlState, onFinish: @escaping () -> Void, onCancel: @escaping () -> Void,
          onRetry: @escaping () -> Void, onManualOverlap: @escaping (Int) -> Void,
-         onManualMode: @escaping () -> Void) {
+         onManualMode: @escaping () -> Void, onAdvancedSettings: @escaping () -> Void = {},
+         onAutomaticMode: @escaping () -> Void = {}, onPause: @escaping () -> Void = {}) {
         self.state = state
         self.onFinish = onFinish
         self.onCancel = onCancel
         self.onRetry = onRetry
         self.onManualOverlap = onManualOverlap
         self.onManualMode = onManualMode
+        self.onAdvancedSettings = onAdvancedSettings; self.onAutomaticMode = onAutomaticMode; self.onPause = onPause
     }
 
     deinit {
@@ -72,7 +109,7 @@ final class ScrollControlBarController {
         selectionGlobal = selection
         let screen = selection.flatMap { rect in NSScreen.screens.first { $0.frame.intersects(rect) } } ?? NSScreen.main
         let visible = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1200, height: 800)
-        let size = CGSize(width: min(440, visible.width - 16), height: desiredHeight)
+        let size = CGSize(width: min(384, visible.width - 16), height: desiredHeight)
         let window = ScrollHUDPanel(contentRect: placement(size: size, visible: visible, selection: selection),
                                     styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         window.level = .floating
@@ -96,7 +133,10 @@ final class ScrollControlBarController {
         let hosting = NSHostingView(rootView: ScrollControlBar(state: state,
             onFinish: { [weak self] in self?.onFinish() }, onCancel: { [weak self] in self?.onCancel() },
             onRetry: { [weak self] in self?.onRetry() }, onManualOverlap: { [weak self] in self?.onManualOverlap($0) },
-            onManualMode: { [weak self] in self?.onManualMode() }, onLayoutChanged: { [weak self] in self?.resizeForState() }))
+            onManualMode: { [weak self] in self?.onManualMode() },
+            onAdvancedSettings: { [weak self] in self?.onAdvancedSettings() },
+            onAutomaticMode: { [weak self] in self?.onAutomaticMode() }, onPause: { [weak self] in self?.onPause() },
+            onLayoutChanged: { [weak self] in self?.resizeForState() }))
         hosting.translatesAutoresizingMaskIntoConstraints = false
         effect.addSubview(hosting)
         NSLayoutConstraint.activate([
@@ -128,7 +168,9 @@ final class ScrollControlBarController {
         old?.close()
     }
 
-    private var desiredHeight: CGFloat { state.isMatching ? 220 : state.isPaused ? 172 : 112 }
+    private var desiredHeight: CGFloat {
+        106 + (state.showsAdvanced ? 108 : 0) + (state.isMatching ? 130 : state.isPaused ? 54 : 0)
+    }
 
     private func resizeForState() {
         guard let panel else { return }
@@ -174,99 +216,139 @@ private struct ScrollControlBar: View {
     let onRetry: () -> Void
     let onManualOverlap: (Int) -> Void
     let onManualMode: () -> Void
+    let onAdvancedSettings: () -> Void
+    let onAutomaticMode: () -> Void
+    let onPause: () -> Void
     let onLayoutChanged: () -> Void
     @State private var overlapText: String
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     init(state: ScrollControlState, onFinish: @escaping () -> Void, onCancel: @escaping () -> Void,
          onRetry: @escaping () -> Void, onManualOverlap: @escaping (Int) -> Void,
-         onManualMode: @escaping () -> Void, onLayoutChanged: @escaping () -> Void) {
+         onManualMode: @escaping () -> Void, onAdvancedSettings: @escaping () -> Void,
+         onAutomaticMode: @escaping () -> Void, onPause: @escaping () -> Void,
+         onLayoutChanged: @escaping () -> Void) {
         self.state = state
         self.onFinish = onFinish; self.onCancel = onCancel; self.onRetry = onRetry
         self.onManualOverlap = onManualOverlap; self.onManualMode = onManualMode
+        self.onAdvancedSettings = onAdvancedSettings; self.onAutomaticMode = onAutomaticMode; self.onPause = onPause
         self.onLayoutChanged = onLayoutChanged
         _overlapText = State(initialValue: String(state.overlap))
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                VStack(alignment: .leading, spacing: 3) {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Text(max(0, state.height).formatted()).font(.system(size: 17, weight: .semibold)).monospacedDigit()
+                        Image(systemName: "rectangle.expand.vertical").foregroundStyle(NikoTheme.accent)
+                        Text(max(0, state.height).formatted()).font(.system(size: 16, weight: .semibold)).monospacedDigit()
                         Text("px").font(.system(size: 11)).foregroundStyle(.secondary)
                     }
-                    HStack(spacing: 7) {
-                        Label(state.mode.title, systemImage: state.mode == .automatic ? "arrow.down" : "hand.draw")
-                        Text("·").accessibilityHidden(true)
-                        Text("\(max(0, state.frames)) 屏").monospacedDigit()
-                    }.font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text("\(state.mode.title) · \(max(0, state.frames)) 屏")
+                        .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
                 }.frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityElement(children: .combine)
-                    .accessibilityLabel("\(state.mode.title)，长截图总高度 \(state.height) 像素，已捕获 \(state.frames) 屏")
-                ScrollHUDButton(title: "结束并编辑长图", symbol: "checkmark", tint: .accentColor,
-                                showsTitle: true, visibleTitle: "结束", prominent: true, action: onFinish)
+                    .accessibilityLabel("\(state.mode.title)，长截图高度 \(state.height) 像素，已捕获 \(state.frames) 屏")
+                ScrollHUDButton(title: state.showsAdvanced ? "收起高级操作" : "展开高级操作", symbol: "slider.horizontal.3",
+                    showsTitle: true, visibleTitle: "高级") { state.showsAdvanced.toggle() }
+                    .keyboardShortcut(",", modifiers: .command)
+                    .accessibilityValue(state.showsAdvanced ? "已展开" : "已收起")
+                ScrollHUDButton(title: "结束并编辑长图", symbol: "checkmark", tint: NikoTheme.accent,
+                    showsTitle: true, visibleTitle: "完成", prominent: true,
+                    enabled: state.frames > 0 && !state.isWorking && !state.requiresRestart, action: onFinish)
                     .keyboardShortcut(.return, modifiers: .command)
                 ScrollHUDButton(title: "取消长截图", symbol: "xmark", action: onCancel)
                     .keyboardShortcut(.escape, modifiers: [])
             }.frame(minHeight: 44)
-            HStack(spacing: 8) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(state.status).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2).help(state.status)
-                    if state.mode == .manual {
-                        Text("自行滚动，画面稳定后自动捕获。")
-                            .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
-                            .accessibilityLabel("手动模式：请自行滚动，画面稳定后自动捕获，完成请点结束")
-                    }
-                }.frame(maxWidth: .infinity, alignment: .leading)
-                Spacer()
-                if state.mode == .automatic {
-                    ScrollHUDButton(title: "改为手动", symbol: "hand.draw", showsTitle: true, action: onManualMode)
-                        .keyboardShortcut("m", modifiers: [.command, .shift])
-                }
-            }.frame(minHeight: 44)
-            if state.isMatching {
-                Divider()
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack {
-                        Label("确认接缝", systemImage: "rectangle.on.rectangle").font(.system(size: 12, weight: .semibold))
-                        Spacer()
-                        Text(correlationLabel).font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
-                    }
-                    HStack(spacing: 6) {
-                        Text("重叠").font(.system(size: 12))
-                        TextField("重叠像素", text: $overlapText).textFieldStyle(.roundedBorder)
-                            .multilineTextAlignment(.trailing).font(.system(size: 12)).monospacedDigit()
-                            .frame(width: 68, height: 44).accessibilityLabel("手动重叠像素，允许零到 \(maximumOverlap)")
-                            .onSubmit(commitOverlap)
-                        Text("px").font(.system(size: 11)).foregroundStyle(.secondary)
-                        Spacer(minLength: 0)
-                        ScrollHUDButton(title: "按此重叠拼接", symbol: "rectangle.stack", showsTitle: true,
-                                        visibleTitle: "拼接", prominent: true, enabled: validOverlap != nil, action: commitOverlap)
-                        ScrollHUDButton(title: "重试当前帧", symbol: "arrow.clockwise", action: onRetry)
-                            .keyboardShortcut("r", modifiers: .command)
-                    }
-                    Text("0–\(maximumOverlap) px · 回车确认 · ⌘R 重试")
-                        .font(.system(size: 11)).foregroundStyle(validOverlap == nil ? Color.red : Color.secondary)
-                }.padding(.top, 3)
-            } else if state.isPaused {
+            HStack(alignment: .top, spacing: 7) {
+                Image(systemName: state.isWorking ? "hourglass" : state.isPaused ? "pause.circle" : "arrow.down")
+                    .foregroundStyle(state.isPaused ? Color.orange : NikoTheme.accent)
+                Text(state.status).font(.system(size: 11)).foregroundStyle(.secondary)
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true).help(state.status)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }.frame(minHeight: 32, alignment: .top)
+            if state.showsAdvanced { advancedControls }
+            if state.isMatching { seamControls }
+            else if state.isPaused {
                 Divider()
                 HStack {
-                    Label("捕获已暂停", systemImage: "pause.circle").font(.system(size: 12)).foregroundStyle(.secondary)
+                    Text(state.requiresRestart ? "旧分块不会沿用" : state.requiresReselection ? "已停止捕获原位置" : "捕获已暂停")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
                     Spacer()
-                    ScrollHUDButton(title: "继续重试", symbol: "arrow.clockwise", showsTitle: true, action: onRetry)
+                    ScrollHUDButton(title: recoveryTitle, symbol: "arrow.clockwise", showsTitle: true,
+                        enabled: !state.isWorking, action: onRetry)
                         .keyboardShortcut("r", modifiers: .command)
-                }
+                }.frame(minHeight: 44)
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background { if reduceTransparency { NikoTheme.canvas } }
+        .tint(NikoTheme.accent)
         .onChange(of: state.isMatching) { _, _ in onLayoutChanged() }
         .onChange(of: state.isPaused) { _, _ in onLayoutChanged() }
-        .onChange(of: state.mode) { _, _ in onLayoutChanged() }
+        .onChange(of: state.showsAdvanced) { _, _ in onLayoutChanged() }
         .onChange(of: state.overlap) { _, value in overlapText = String(value) }
     }
 
+    private var advancedControls: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Divider()
+            HStack(spacing: 8) {
+                Picker("滚动方式", selection: Binding(get: { state.mode }, set: { mode in
+                    if mode == .manual { onManualMode() } else { onAutomaticMode() }
+                })) {
+                    Text("自行滚动").tag(ScrollCaptureMode.manual)
+                    Text("自动滚动").tag(ScrollCaptureMode.automatic)
+                }.pickerStyle(.segmented).labelsHidden()
+                    .accessibilityLabel("高级操作，手动或自动滚动方式")
+                    .disabled(state.isWorking || state.requiresRestart || state.requiresReselection)
+                ScrollHUDButton(title: state.isPaused ? recoveryTitle : "暂停捕获", symbol: state.isPaused ? "play" : "pause",
+                    enabled: !state.isWorking, action: state.isPaused ? onRetry : onPause)
+            }.frame(minHeight: 44)
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("固定栏").font(.system(size: 12, weight: .medium))
+                    Text("顶部 \(state.ignoredTop) · 底部 \(state.ignoredBottom) px")
+                        .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+                }
+                Spacer()
+                ScrollHUDButton(title: "配置固定栏并从首屏重新开始", symbol: "arrow.counterclockwise",
+                    showsTitle: true, visibleTitle: "配置与重启…", enabled: !state.isWorking && !state.requiresReselection,
+                    action: onAdvancedSettings)
+            }.frame(minHeight: 44)
+        }
+    }
+
+    private var seamControls: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Divider()
+            HStack {
+                Label("确认接缝", systemImage: "rectangle.on.rectangle").font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Text(correlationLabel).font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+            }
+            HStack(spacing: 6) {
+                Text("重叠").font(.system(size: 12))
+                TextField("重叠像素", text: $overlapText).textFieldStyle(.roundedBorder)
+                    .multilineTextAlignment(.trailing).font(.system(size: 12)).monospacedDigit()
+                    .frame(width: 68, height: 44).accessibilityLabel("手动重叠像素，允许零到 \(maximumOverlap)")
+                    .onSubmit(commitOverlap)
+                Text("px").font(.system(size: 11)).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                ScrollHUDButton(title: "按此重叠拼接", symbol: "rectangle.stack", showsTitle: true,
+                    visibleTitle: "拼接", prominent: true, enabled: validOverlap != nil && !state.isWorking, action: commitOverlap)
+                ScrollHUDButton(title: "重试当前帧", symbol: "arrow.clockwise", enabled: !state.isWorking, action: onRetry)
+                    .keyboardShortcut("r", modifiers: .command)
+            }
+            Text("0–\(maximumOverlap) px · 回车确认 · ⌘R 重试")
+                .font(.system(size: 11)).foregroundStyle(validOverlap == nil ? Color.red : Color.secondary)
+        }.padding(.top, 3)
+    }
+
+    private var recoveryTitle: String {
+        state.requiresReselection ? "重新选择" : state.requiresRestart ? "重新开始" : "继续重试"
+    }
     private var maximumOverlap: Int { max(0, state.maximumOverlap) }
     private var validOverlap: Int? {
         guard let value = Int(overlapText.trimmingCharacters(in: .whitespaces)), (0...maximumOverlap).contains(value) else { return nil }
@@ -278,8 +360,7 @@ private struct ScrollControlBar: View {
     }
     private func commitOverlap() {
         guard let value = validOverlap else { return }
-        state.overlap = value
-        onManualOverlap(value)
+        state.overlap = value; onManualOverlap(value)
     }
 }
 

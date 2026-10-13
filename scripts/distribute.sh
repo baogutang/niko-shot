@@ -1,20 +1,44 @@
 #!/bin/bash
-# Archives, signs and notarizes only with the caller's existing Developer ID and Keychain notary profile.
+# Independently archives both Mac architectures and packages them with optional Developer ID/notarization.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-: "${DEVELOPER_ID_APPLICATION:?Set the full Developer ID Application certificate name.}"
-: "${NOTARY_PROFILE:?Set an existing notarytool Keychain profile name.}"
+if [[ $# -gt 1 ]]; then
+  echo 'Usage: scripts/distribute.sh [output-directory]' >&2
+  exit 64
+fi
+output_dir="${1:-build/distribution/packages}"
+if [[ -e "$output_dir" && ( ! -d "$output_dir" || -n "$(find "$output_dir" -mindepth 1 -print -quit)" ) ]]; then
+  echo "Refusing to replace an existing distribution: $output_dir" >&2
+  exit 1
+fi
+identity="${DEVELOPER_ID_APPLICATION:--}"
+team=''
+if [[ "$identity" == - ]]; then
+  if [[ -n "${NOTARY_PROFILE:-}" ]]; then
+    echo 'Notarization requires a Developer ID Application signing identity.' >&2
+    exit 1
+  fi
+elif [[ "$identity" == 'Developer ID Application:'* ]]; then
+  team="${identity##*\(}"
+  team="${team%\)}"
+  [[ "$team" =~ ^[A-Z0-9]{10}$ ]]
+else
+  echo 'Use a full Developer ID Application certificate name or leave signing unset for ad hoc packages.' >&2
+  exit 64
+fi
 mkdir -p build/distribution
+distribution_stage="$(mktemp -d build/distribution/split-archive.XXXXXX)"
+trap 'rm -rf "$distribution_stage"' EXIT
+export CI_SIGNING_IDENTITY="$identity"
 xcodegen generate
-xcodebuild -scheme niko-shot -configuration Release -destination 'platform=macOS' \
-  -archivePath build/distribution/niko-shot.xcarchive \
-  CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$DEVELOPER_ID_APPLICATION" archive
-app="build/distribution/niko-shot.xcarchive/Products/Applications/niko-shot.app"
-codesign --verify --deep --strict --verbose=2 "$app"
-ditto -c -k --keepParent "$app" build/distribution/niko-shot-notarization.zip
-xcrun notarytool submit build/distribution/niko-shot-notarization.zip \
-  --keychain-profile "$NOTARY_PROFILE" --wait --output-format json > build/distribution/notarization.json
-xcrun stapler staple "$app"
-xcrun stapler validate "$app"
-ditto -c -k --keepParent "$app" build/distribution/niko-shot.zip
-shasum -a 256 build/distribution/niko-shot.zip > build/distribution/SHA256SUMS
+for architecture in arm64 x86_64; do
+  archive="$distribution_stage/niko-shot-$architecture.xcarchive"
+  xcodebuild -scheme niko-shot -configuration Release -destination 'generic/platform=macOS' \
+    -archivePath "$archive" -derivedDataPath "$distribution_stage/DerivedData-$architecture" \
+    ARCHS="$architecture" ONLY_ACTIVE_ARCH=NO SWIFT_VERSION=6.0 SWIFT_STRICT_CONCURRENCY=complete \
+    SWIFT_TREAT_WARNINGS_AS_ERRORS=YES GCC_TREAT_WARNINGS_AS_ERRORS=YES ENABLE_TESTABILITY=NO \
+    CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$identity" DEVELOPMENT_TEAM="$team" \
+    CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO clean archive
+  scripts/ci-package.sh "$archive/Products/Applications/niko-shot.app" "$output_dir" "$architecture"
+done
+python3 scripts/release-manifest.py "$output_dir"

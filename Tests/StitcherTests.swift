@@ -30,6 +30,72 @@ final class StitcherTests: XCTestCase {
         XCTAssertFalse(result.isAmbiguous)
     }
 
+    func testNaturalWheelAndTrackpadStepsSearchTheWholeViewport() async throws {
+        let fixture = ScrollImageFixture()
+        let previous = try await fixture.frame(width: 193, height: 1_000, start: 0)
+        for movement in [20, 60, 300] {
+            let current = try await fixture.frame(width: 193, height: 1_000, start: movement)
+            let result = try await fixture.match(previous, current)
+            XCTAssertEqual(result.overlap, 1_000 - movement, accuracy: 1)
+            XCTAssertGreaterThan(result.correlation, 0.99)
+            XCTAssertFalse(result.isAmbiguous)
+            XCTAssertFalse(result.isBacktracking)
+        }
+    }
+
+    func testUpwardMovementIsIdentifiedWithoutConvertingItToAForwardSeam() async throws {
+        let fixture = ScrollImageFixture()
+        let previous = try await fixture.frame(width: 193, height: 1_000, start: 300)
+        for movement in [20, 60, 300] {
+            let earlier = try await fixture.frame(width: 193, height: 1_000, start: 300 - movement)
+            let result = try await fixture.match(previous, earlier)
+            XCTAssertEqual(result.overlap, 1_000 - movement, accuracy: 1)
+            XCTAssertGreaterThan(result.correlation, 0.99)
+            XCTAssertFalse(result.isAmbiguous)
+            XCTAssertTrue(result.isBacktracking)
+        }
+    }
+
+    func testNaturalMovementWithExplicitFixedBandsDoesNotMatchWindowChrome() async throws {
+        let fixture = ScrollImageFixture()
+        let previous = try await fixture.frame(width: 193, height: 1_056, start: 0, top: 32, bottom: 24, chrome: 10)
+        let current = try await fixture.frame(width: 193, height: 1_056, start: 60, top: 32, bottom: 24, chrome: 220)
+        let result = try await fixture.match(previous, current, top: 32, bottom: 24)
+        XCTAssertEqual(result.overlap, 940, accuracy: 1)
+        XCTAssertGreaterThan(result.correlation, 0.99)
+        XCTAssertFalse(result.isAmbiguous)
+        XCTAssertFalse(result.isBacktracking)
+    }
+
+    func testTallViewportBoundsTheProfileAndStillRefinesAtNativePixels() async throws {
+        let fixture = ScrollImageFixture()
+        let previous = try await fixture.frame(width: 193, height: 9_000, start: 0)
+        let current = try await fixture.frame(width: 193, height: 9_000, start: 21)
+        let result = try await fixture.match(previous, current)
+        XCTAssertEqual(result.overlap, 8_979, accuracy: 1)
+        XCTAssertGreaterThan(result.correlation, 0.99)
+        XCTAssertFalse(result.isAmbiguous)
+        XCTAssertFalse(result.isBacktracking)
+        let budget = try await fixture.analysisBudget(previous)
+        XCTAssertLessThanOrEqual(budget.profileFloats, 65_536)
+        XCTAssertLessThan(budget.residentBytes, 1_500_000)
+    }
+
+    func testBlankDocumentRowsAtTheViewportEdgeDoNotHideForwardOrBackwardMovement() async throws {
+        let fixture = ScrollImageFixture()
+        for backward in [false, true] {
+            let start = backward ? 300 : 0
+            let blank = backward ? 300..<400 : 900..<1_000
+            let previous = try await fixture.frame(width: 193, height: 1_000, start: start, blankDocumentRows: blank)
+            let current = try await fixture.frame(width: 193, height: 1_000, start: start + (backward ? -60 : 60), blankDocumentRows: blank)
+            let result = try await fixture.match(previous, current)
+            XCTAssertEqual(result.overlap, 940, accuracy: 1)
+            XCTAssertGreaterThan(result.correlation, 0.99)
+            XCTAssertFalse(result.isAmbiguous)
+            XCTAssertEqual(result.isBacktracking, backward)
+        }
+    }
+
     func testFixedHeaderAndFooterAreRemovedBeforeMatchingAndSignatures() async throws {
         let fixture = ScrollImageFixture()
         let previous = try await fixture.frame(width: 128, height: 430, start: 0, top: 23, bottom: 17, chrome: 10)
@@ -85,13 +151,15 @@ struct ScrollPNGInspection: Sendable {
 /// Rasterizes and decodes fixture images away from MainActor; no fixture pixel arrays cross actors.
 actor ScrollImageFixture {
     func frame(width: Int, height: Int, start: Int, seed: UInt64 = 1, top: Int = 0, bottom: Int = 0,
-               chrome: UInt8 = 70, alpha: Bool = false, periodic: Bool = false) throws -> CGImage {
+               chrome: UInt8 = 70, alpha: Bool = false, periodic: Bool = false,
+               blankDocumentRows: Range<Int>? = nil) throws -> CGImage {
         var pixels = Data(count: width * height * 4)
         pixels.withUnsafeMutableBytes { raw in
             guard let bytes = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
             for row in 0..<height { for column in 0..<width {
                 let value: [UInt8]
                 if row < top || row >= height - bottom { value = [chrome, 255 - chrome, 80, 255] }
+                else if blankDocumentRows?.contains(start + row - top) == true { value = [255, 255, 255, 255] }
                 else { value = Self.pixel(x: column, y: start + row - top, seed: seed, alpha: alpha, periodic: periodic) }
                 let offset = (row * width + column) * 4
                 for channel in 0..<4 { bytes[offset + channel] = value[channel] }
@@ -120,6 +188,10 @@ actor ScrollImageFixture {
     func signatureDifference(_ first: CGImage, _ second: CGImage, top: Int = 0, bottom: Int = 0) throws -> Float {
         try Stitcher.signature(for: first, ignoringTop: top, ignoringBottom: bottom)
             .normalizedDifference(to: Stitcher.signature(for: second, ignoringTop: top, ignoringBottom: bottom))
+    }
+    func analysisBudget(_ image: CGImage) throws -> (profileFloats: Int, residentBytes: Int) {
+        let analysis = try Stitcher.analyze(image, top: 0, bottom: 0)
+        return (analysis.profile.count, analysis.residentBytes)
     }
 
     func inspect(_ url: URL, expectedWidth: Int, expectedHeight: Int, seed: UInt64 = 1, alpha: Bool = false) throws -> ScrollPNGInspection {

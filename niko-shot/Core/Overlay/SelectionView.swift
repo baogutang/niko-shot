@@ -10,6 +10,9 @@ final class SelectionView: NSView {
     var onCancel: (() -> Void)?
     var onAnnotate: (() -> Void)?
     var onSave: (() -> Void)?
+    /// Only a completed mouse gesture starts direct scrolling; intermediate drags never do.
+    var onSelectionCompleted: (() -> Void)?
+    var onSelectionModeChanged: (() -> Void)?
     var candidates: [WindowCandidate] = []
     var windowMode = false
     var selectedWindow: WindowCandidate?
@@ -35,6 +38,8 @@ final class SelectionView: NSView {
     private var lastDisplayStatistics = ActiveDisplayLink.Statistics()
     private var hoverRect: CGRect?
     private var loupeVisible = false
+    private var scrollModeControl: NSSegmentedControl?
+    private var scrollHint: NSTextField?
     /// Active native display links; a detached or finished selection owns none.
     var displayLinkCount: Int { displayUpdates?.isActive == true ? 1 : 0 }
     /// Real callback timing retained after explicit teardown for session measurements.
@@ -85,6 +90,37 @@ final class SelectionView: NSView {
     }
     required init?(coder: NSCoder) { return nil }
 
+    /// Exposes window and region capture directly on the native selector, without another setup window.
+    func configureForScrollSelection() {
+        windowMode = true
+        let width = min(360, max(200, bounds.width - 32))
+        let surface = NSVisualEffectView(frame: CGRect(x: (bounds.width - width) / 2,
+            y: frameInfo.screen.safeTop + 12, width: width, height: 74))
+        surface.material = .hudWindow; surface.blendingMode = .withinWindow; surface.state = .active
+        surface.wantsLayer = true; surface.layer?.cornerRadius = 12; surface.layer?.masksToBounds = true
+        let modes = NSSegmentedControl(labels: ["选择窗口", "框选区域"], trackingMode: .selectOne,
+                                      target: self, action: #selector(changeScrollMode(_:)))
+        modes.frame = CGRect(x: 12, y: 38, width: width - 24, height: 26)
+        modes.selectedSegment = 0
+        modes.setAccessibilityLabel("长截图捕获范围，默认选择窗口")
+        modes.setAccessibilityHelp("单击窗口直接开始；可切换到区域后拖动选择。Tab 切换范围，Escape 取消。")
+        let hint = NSTextField(labelWithString: "单击窗口开始 · 空格切换重叠窗口 · Esc 取消")
+        hint.font = .systemFont(ofSize: 11); hint.textColor = .secondaryLabelColor
+        hint.alignment = .center; hint.frame = CGRect(x: 8, y: 10, width: width - 16, height: 20)
+        surface.addSubview(modes); surface.addSubview(hint); addSubview(surface)
+        scrollModeControl = modes; scrollHint = hint
+        setAccessibilityLabel("长截图选区：单击窗口直接开始，Tab 切换为框选区域，Escape 取消")
+    }
+
+    @objc private func changeScrollMode(_ sender: NSSegmentedControl) {
+        windowMode = sender.selectedSegment == 0
+        selection = .zero; selectedWindow = nil; hoverRect = nil; anchor = nil
+        scrollHint?.stringValue = windowMode ? "单击窗口开始 · 空格切换重叠窗口 · Esc 取消" : "拖动框选后直接开始 · Tab 切换窗口 · Esc 取消"
+        onSelectionModeChanged?()
+        window?.makeFirstResponder(self)
+        displayUpdates?.markDirty()
+    }
+
     deinit { colorTask?.cancel() }
 
     override func viewDidMoveToWindow() {
@@ -130,6 +166,9 @@ final class SelectionView: NSView {
         handlesLayer.path = handlePath
         badge.isHidden = selection.isEmpty
         badge.string = sizeLabel
+        if scrollModeControl != nil, !selection.isEmpty, selection.height * frameInfo.screen.scale < 240 {
+            badge.string = "选区至少需要 240 px 高"
+        }
         badge.frame = CGRect(x: min(max(8, selection.midX - 78), bounds.width - 164), y: max(frameInfo.screen.safeTop + 8, selection.minY - 34), width: 156, height: 26)
         hoverLayer.path = hoverRect.map { CGPath(rect: $0, transform: nil) }
         loupe.isHidden = !loupeVisible
@@ -171,6 +210,10 @@ final class SelectionView: NSView {
             let hits = WindowList.hits(at: global, in: candidates)
             if hits != hitWindows { hitWindows = hits; hoverIndex = 0 }
             highlightWindow()
+        }
+        if scrollModeControl != nil {
+            loupeVisible = false; displayUpdates?.markDirty()
+            return
         }
         let image = frameInfo.image
         let scale = frameInfo.screen.scale
@@ -241,6 +284,7 @@ final class SelectionView: NSView {
         onSelection?(selection)
         window?.invalidateCursorRects(for: self)
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        if !selection.isEmpty { onSelectionCompleted?() }
     }
     override func keyDown(with event: NSEvent) {
         displayUpdates?.recordInputEvent()
@@ -249,9 +293,17 @@ final class SelectionView: NSView {
         }
         if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "s" { onSave?(); return }
         switch event.keyCode {
-        case 36, 76: onConfirm?()
+        case 36, 76:
+            if scrollModeControl != nil, selection.isEmpty, windowMode, let selectedWindow {
+                let origin = CoordinateSpace.globalPointToScreenLocal(CGPoint(x: selectedWindow.frame.minX, y: selectedWindow.frame.maxY), screen: frameInfo.screen)
+                selection = CGRect(origin: origin, size: selectedWindow.frame.size).intersection(bounds)
+                onSelection?(selection)
+            }
+            onConfirm?()
         case 53: onCancel?()
-        case 48: onAnnotate?()
+        case 48:
+            if let modes = scrollModeControl { modes.selectedSegment = windowMode ? 1 : 0; changeScrollMode(modes) }
+            else { onAnnotate?() }
         case 49: hoverIndex += 1; highlightWindow()
         case 123, 124, 125, 126:
             let delta: CGFloat = (event.modifierFlags.contains(.shift) ? 10 : 1) / frameInfo.screen.scale

@@ -18,9 +18,12 @@ public struct StitchMatch: Sendable, Equatable {
     public let overlap: Int
     public let correlation: Float
     public let isAmbiguous: Bool
+    /// A confident upward move overlaps already accepted content and must not append rows.
+    public let isBacktracking: Bool
     /// Creates a match; ambiguous high peaks require the same explicit confirmation as low scores.
-    public init(overlap: Int, correlation: Float, isAmbiguous: Bool = false) {
+    public init(overlap: Int, correlation: Float, isAmbiguous: Bool = false, isBacktracking: Bool = false) {
         self.overlap = overlap; self.correlation = correlation; self.isAmbiguous = isAmbiguous
+        self.isBacktracking = isBacktracking
     }
 }
 
@@ -28,6 +31,8 @@ public struct StitchMatch: Sendable, Equatable {
 public enum ScrollAppendResult: Sendable, Equatable {
     case appended(height: Int, frames: Int)
     case duplicate
+    /// The user moved above the accepted boundary; keep that boundary and wait for forward motion.
+    case backtracking
     case needsConfirmation(StitchMatch)
 }
 
@@ -60,7 +65,7 @@ public enum ScrollCaptureError: LocalizedError, Sendable {
         switch self {
         case .image: "滚动截图图像无法读取。"
         case .invalidBands: "忽略的顶部与底部不能覆盖整个截图区域。"
-        case .changedWidth: "截图区域宽度已经改变，请重新开始滚动截图。"
+        case .changedWidth: "截图区域宽度已经改变，请恢复原宽度后重试，或结束并输出已捕获内容。"
         case .invalidOverlap: "重叠高度必须小于相邻两帧的有效高度。"
         case .dimensionOverflow: "长图尺寸超过 PNG 支持范围。"
         case .noFrames: "还没有捕获可输出的画面。"

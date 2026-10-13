@@ -29,32 +29,37 @@
 </p>
 <p align="center"><sub>当前源码的原生离屏预览，使用公开合成数据。窗口未激活，部分控件呈非活动外观；预览不替代真实交互验收。</sub></p>
 
-> **当前源码版本 0.1.2，为开发候选。** 本机 179 项回归测试通过；下载指向最近成功的 GitHub 候选，并非所有新提交都已打包。Nightly 使用 ad hoc 签名，尚未完成 Developer ID 分发与公证；冷启动及使用后内存预算未达标，真实账号、外设与部分实机交互仍有待验收，整体 DoD 尚未通过。完整依据见[验收记录](docs/ACCEPTANCE.md)。
+> **当前源码版本 0.1.3，为开发候选。** 本机 202 项回归测试通过，GitHub 为每个候选重新构建并测试；下载指向最近成功的 GitHub 候选，并非所有新提交都已打包。Nightly 使用 ad hoc 签名，尚未完成 Developer ID 分发与公证；冷启动及使用后内存预算未达标，真实账号、外设与部分实机交互仍有待验收，整体 DoD 尚未通过。完整依据见[验收记录](docs/ACCEPTANCE.md)。
 
-0.1.2 修复框选后工具栏被覆盖、打开菜单时异常退出的问题；收紧菜单和设置布局，明确显示权限状态，保留截图底部直接继续长截图的操作。新回归覆盖鼠标框选后的全部工具、OCR 输出、长截图交接，以及后台绘制线程的浅深色解析。
+0.1.3 把截图操作收成一排：点击右侧对号完成并自动复制，标注工具按需展开。长截图默认高亮选择窗口后直接开始，自行滚动、稳定后自动拼接；自动滚动与固定栏配置保留在高级操作。修复小幅滚动无法匹配、回滚重复拼接、失败后重试失效及窗口移动后拍错位置的问题。M 芯片与 Intel 各有独立安装包。
 
 ## 一张截图，动作接着走
 
 - **截取画面**：区域、窗口、全屏，延时截图或重复上次选区。高亮选择窗口，也能循环选择同一点的层叠窗口。
-- **标注重点**：箭头、文字、便签、马赛克等 12 种工具，随时撤销与重做。复制、保存 PNG / JPEG / HEIF / TIFF，或把图片拖到目标应用。
-- **继续长截图**：截图底部点击 **「长截图」**，沿用当前屏幕选区。自动或手动滚动，拼好后回到标注，再复制或保存；历史与导入图片会引导重新框选屏幕。
+- **标注重点**：点击「标注」展开箭头、文字、便签、马赛克等 12 种工具，随时撤销与重做。右侧对号完成并复制；也能保存 PNG / JPEG / HEIF / TIFF，或把图片拖到目标应用。
+- **继续长截图**：直接选窗口并自行滚动，画面稳定后自动拼接；也可从截图底部 **「长截图」** 沿用当前选区。拼好后回到标注，再用对号复制或保存；历史与导入图片会引导重新选择屏幕内容。
 - **提取文字，再接上翻译**：Vision 识别中、英、日混排，逐段勾选、编辑和复制。百度、Google、有道、DeepL 与自定义 REST 独立配置，原文译文并排核对。
 - **录下过程**：区域、窗口或屏幕录制，暂停后继续。系统音频、可选麦克风与摄像头画中画，导出 MP4 或 GIF。
 - **把常用内容留在手边**：贴图置顶、调透明度，历史支持 OCR 搜索、重新编辑和拖出。全局快捷键、Shortcuts、URL 与 CLI 接入同一个常驻进程。
 
-<p align="center"><img src="website/assets/app-annotation.png" width="704" alt="niko-shot 当前原生标注工具栏，展示全部工具、颜色、线宽与输出操作"></p>
+<p align="center"><img src="website/assets/app-annotation.png" width="424" alt="niko-shot 原生截图工具栏：标注、OCR、贴图、长截图、保存、取消与右侧完成对号"></p>
 <p align="center"><sub>原生工具栏离屏预览。官网可直接练习框选、画箭头、导出或复制图片；网页不会读取屏幕或发起 OCR、翻译请求。</sub></p>
 
 ## 下载与安装
 
-[**下载 Mac 版：DMG / ZIP**](https://github.com/baogutang/niko-shot/releases/tag/nightly) · [全部发布说明](https://github.com/baogutang/niko-shot/releases)
+[**按芯片下载 Mac 版**](https://baogutang.github.io/niko-shot/#download) · [GitHub 候选导航](https://github.com/baogutang/niko-shot/releases/tag/nightly) · [全部发布说明](https://github.com/baogutang/niko-shot/releases)
 
-1. 确认系统为 macOS 14 或更新版本。Universal 包同时包含 Apple Silicon 与 Intel 架构。
+| 你的 Mac | DMG 安装包 | ZIP 安装包 |
+|---|---|---|
+| M 芯片 · Apple Silicon | `niko-shot-arm64.dmg` | `niko-shot-arm64.zip` |
+| Intel | `niko-shot-x86_64.dmg` | `niko-shot-x86_64.zip` |
+
+1. 确认系统为 macOS 14 或更新版本。在苹果菜单「关于本机」查看芯片或处理器，选择对应的独立安装包。官网默认标注 M 芯片，可切换 Intel；不通过浏览器平台字符串猜测硬件。当前分发不提供 Universal 包。
 2. 打开 DMG，将 niko-shot.app 拖入「应用程序」；或解压 ZIP 后把应用放入「应用程序」或你自己的 Applications 目录。
 3. 打开应用，在菜单栏进入首次向导：欢迎 → 屏幕录制授权 → 试截一张。默认按 **⇧⌘A** 开始区域截图。
 4. 需要翻译时，再按下文配置自己的服务；录屏麦克风、摄像头与自动滚动权限按需开启。
 
-GitHub Actions 在 main 通过构建与测试后更新 **Nightly 导航页**，下载始终指向最近成功的候选。其中的 DMG、ZIP、SHA256SUMS 与 release-info.json 链接指向同一个独立、不可变的候选发布。文件不会在下载期间被滚动覆盖，可核对哈希与完整源码提交；[Actions](https://github.com/baogutang/niko-shot/actions/workflows/build.yml)保留自动构建记录。下载不会自动重装或替换本机已有应用。
+GitHub Actions 在 main 通过构建、测试及两架构打包后更新 **Nightly 导航页**。同一个独立、不可变的候选包含 8 个文件：两架构的 4 个安装包、`release-info-arm64.json`、`release-info-x86_64.json`、汇总 `release-info.json` 和 `SHA256SUMS`。官网确认 8 个资产均完整上传后才同时启用两种芯片的下载；读取失败或候选不完整时保留 GitHub 导航，无 JavaScript 时也有两套明确入口。汇总 manifest 使用 schema 2，`variants.arm64` 与 `variants.x86_64` 保留各自完整构建信息。文件不会在下载期间被滚动覆盖，可核对哈希与完整源码提交；[Actions](https://github.com/baogutang/niko-shot/actions/workflows/build.yml)保留自动构建记录。下载不会自动重装或替换本机已有应用。
 
 当前候选未完成 Developer ID 签名与 Apple 公证，macOS 可能阻止首次打开。请先核对发布来源与文件哈希，再按 [Apple 的安全打开说明](https://support.apple.com/zh-cn/102445)决定是否允许打开此次应用。ad hoc 签名完整性与测试通过不代表 Apple 已公证。
 
@@ -123,12 +128,12 @@ API 密钥保存在系统 Keychain；设置不会回显已保存的明文，复�
 
 - 截图先冻结每块屏幕，再在冻结帧上选区。窗口悬停高亮，Space 循环同一点的层叠窗口；Shift 锁比例，Option 从中心缩放，方向键按目标屏像素微调。U 切换尺寸单位，P 打开预设或输入宽高，Option+C 复制色值。
 - Tab 进入标注。矩形、椭圆、直线、箭头、画笔、马赛克、模糊、文字、便签、高亮、放大镜、序号均由可序列化命令驱动，可撤销、重做和重新选择裁剪区域。历史大图自动适应窗口宽度，保存保留原始像素尺寸。
-- Enter 复制；Command+S 选择 PNG、JPEG、HEIF 或 TIFF 保存。剪贴板同时提供 PNG、TIFF 和文件地址；预览支持文件承诺拖拽。输出设置可调整文件名模板、JPEG 质量和递增序号。
+- 点击右侧对号或按 Enter 完成并复制；Command+S 选择 PNG、JPEG、HEIF 或 TIFF 保存。剪贴板同时提供 PNG、TIFF 和文件地址；预览支持文件承诺拖拽。输出设置可调整文件名模板、JPEG 质量和递增序号。
 - 贴图可置顶、双指缩放、滚轮改变透明度、双击关闭；全部贴图显隐有独立快捷键。历史分页加载，支持删除、编辑、拖出、重新 OCR 和中文全文搜索。
 - OCR 支持中文、英文、日文混排，准确/快速模式及可配置语言。系统快速模型不支持所选中文时自动使用准确识别；启用日文的混排会复核原生候选，代价是额外识别时间和内存。逐块勾选、编辑、复制，可合并段落、整理换行和转换中文标点。历史自动 OCR 默认开启，并在后台回填 SQLite/FTS5。
 - OCR 的原文和译文并排显示，选择当前服务与语言对后翻译。五家服务平级，失败保留该家的错误，不重试或切换到其他服务。可关闭 OCR 完成后的自动翻译。
 - 录屏支持区域、窗口和屏幕，指定延时后有三秒倒计时；HUD 提供暂停、继续、停止、取消和可选摄像头画中画。系统声音默认开启，麦克风按需；默认 HEVC，也可选择 H.264。GIF 使用 AVAssetReader 与 ImageIO，支持宽度、抽帧、预估体积和全局 256 色调色板。
-- 长截图选区后确认模式，默认自动滚动。拖动或输入固定头尾忽略区；捕获及处理完成、画面稳定后才继续滚动。低相关度或重复纹理会暂停，可确认重叠像素、重试或切换手动。手动模式等待用户滚动，不会因停留而误判到底。长图进入同一个标注编辑器，再复制或保存。
+- 长截图默认选择窗口后直接开始，窗口内自行滚动，稳定后自动捕获并拼接；选择条也可切换区域。点击「完成」进入同一个标注编辑器，再用对号复制或保存。向上回看已捕获内容不会追加，继续向下超过已捕获边界才接着拼。高级操作保留自动滚动、暂停、固定头尾忽略区与从首屏重新开始；低相关度或重复纹理会暂停，可确认重叠像素或重试。窗口移动会跟随同一窗口，改变尺寸或显示器缩放时安全暂停并提示重新选择。
 
 
 </details>
@@ -185,14 +190,18 @@ xcodebuild -scheme niko-shot -configuration Debug build
 scripts/verify.sh B9
 ```
 
-Release 仅构建应用，不把测试运行时注入的 Apple 框架计入安装包：
+Release 按架构独立构建应用，不把测试运行时注入的 Apple 框架计入安装包：
 
 ```sh
-xcodebuild -scheme niko-shot -configuration Release -derivedDataPath build/Release build
-open build/Release/Build/Products/Release/niko-shot.app
+xcodebuild -scheme niko-shot -configuration Release -derivedDataPath build/Release-arm64 ARCHS=arm64 ONLY_ACTIVE_ARCH=NO build
+xcodebuild -scheme niko-shot -configuration Release -derivedDataPath build/Release-x86_64 ARCHS=x86_64 ONLY_ACTIVE_ARCH=NO build
+scripts/ci-package.sh build/Release-arm64/Build/Products/Release/niko-shot.app build/local-ci-packages arm64
+scripts/ci-package.sh build/Release-x86_64/Build/Products/Release/niko-shot.app build/local-ci-packages x86_64
+scripts/release-manifest.py build/local-ci-packages
+scripts/release-manifest.py build/local-ci-packages --verify
 ```
 
-Developer ID 分发需要有效的 Application 证书与已存入 Keychain 的公证配置。设置 DEVELOPER_ID_APPLICATION、NOTARY_PROFILE 后执行 [scripts/distribute.sh](scripts/distribute.sh)，脚本将 archive、校验签名、公证、staple 并生成 ZIP 与 SHA256。没有证书时，开发签名不能代替正式分发。
+两份应用必须各自仅包含指定架构；打包脚本会校验并拒绝架构不符的输入。汇总脚本核对两份版本、提交、签名、公证状态及资产，再生成 schema 2 manifest 和校验文件；任一架构失败都不能作为完整候选发布。Developer ID 签名与公证使用同一分架构流程，需要有效的 Application 证书与公证账户配置，详见[发布说明](docs/RELEASES.md)。没有证书时，开发签名不能代替正式分发。
 
 工程由 [project.yml](project.yml) 管理；唯一功能规格为 [PROMPT.md](PROMPT.md)，B0–B9 全部保持 P0 范围。实现说明与真实验收分别记录，构建成功不等于产品验收完成。
 
@@ -200,7 +209,7 @@ Developer ID 分发需要有效的 Application 证书与已存入 Keychain 的�
 
 ## 架构与验收
 
-当前实现使用 Swift 6 严格并发、AppKit / SwiftUI 与系统框架。运行时没有 WebView、ffmpeg、登录 Helper 或第三方二进制。最新本机回归 **176 项、0 failures**；真实设备、账号、分发与性能结果保持独立。
+当前实现使用 Swift 6 严格并发、AppKit / SwiftUI 与系统框架。运行时没有 WebView、ffmpeg、登录 Helper 或第三方二进制。当前 0.1.3 本机回归为 **202 项、0 failures、0 skipped**，GitHub 对各候选独立复验；真实设备、账号、分发与性能结果保持独立。
 
 <details>
 <summary>原生架构与数据流（Mermaid）</summary>
@@ -239,7 +248,7 @@ AppKit 与原生配置停留在 MainActor；像素渲染、识别、拼接、编
 
 当前机器：Apple M1 Max，macOS 15.7.7，Xcode 26.3 / Swift 6.2.4；唯一显示器为 5120×2880、75Hz 的 Kuycon G27P。
 
-下表实机指标来自改版前 B9 候选 `f6cb924`，应用体积行已更新为界面改版构建。界面改版尚未重新完成整套实机性能采样；保留此前未达标项，不能据此宣布新版满足全部性能预算。
+下表实机指标来自改版前 B9 候选 `f6cb924`，应用体积行来自当前 0.1.3 独立 clean Release。尚未重测整套新版实机性能；保留此前未达标项，不能据此宣布新版满足全部性能预算。
 
 | 指标 | 预算 | 当前实测 / 状态 |
 |---|---|---|
@@ -249,7 +258,7 @@ AppKit 与原生配置停留在 MainActor；像素渲染、识别、拼接、编
 | 热键至冻结覆盖窗 | <120ms，4K <200ms | 真实 5K 首次区域覆盖准备 403.91ms；非物理热键、非 4K，不宣称预算通过 |
 | 框选交互 | ProMotion 120fps | 75Hz 屏幕实际 CADisplayLink 74.82fps；120Hz 需对应设备 |
 | 常驻应用进程 | 1 | 重复启动及两个 CLI 同时冷启动后均只有 1 个常驻 PID；两个 CLI 返回相同 OCR 文本 |
-| Release 安装体积 | <15MB | 界面改版纯 Release universal 应用 7,232 KiB（7.41MB），ad hoc 开发 ZIP 3,389,663 字节（3.39MB）；没有第三方运行时二进制 |
+| Release 安装体积 | <15MB | **0.1.3 本机独立 clean Release**：M 芯片应用 4,045,717 字节（4.05MB）；Intel 应用 4,134,005 字节（4.13MB）。安装包由 GitHub 独立构建，体积和哈希以该候选 manifest 为准 |
 | 1080p30 录屏 CPU | <8% | 真实 SCStream 1920×1080 HEVC/AAC，短 top 样本 4.2%；静态桌面 VFR 平均 23.31fps，持续动态 30fps 预算未验证 |
 | 10000px 长图拼接峰值 | <500MB | 1920×10000 编码约 42MB RSS；含完整 PNG 解码校验的独立进程约 366MB，需区分编码与测试校验 |
 | 退出后资源 | 0 窗口 / 监听 / 计时器 | 最终候选完成录屏设置取消、标注、OCR、贴图后正常退出，全部资源计数 0；PID 与采样器均已退出 |
@@ -257,7 +266,7 @@ AppKit 与原生配置停留在 MainActor；像素渲染、识别、拼接、编
 
 `scripts/measure-idle.py` 用外部采样器记录真实进程的 MenuReady 时间、RSS 和 CPU，不向应用加入轮询。默认运行两小时，原始 JSON、终止统计与 display-link 时间戳存于 `build/evidence`。可另外使用 `xcrun xctrace` 的 Time Profiler、Allocations 和 App Launch 模板记录原始 Instruments trace。
 
-改版前 B9 候选完成干净构建与 149 项测试。界面改版、发布前安全修复与 OCR 漏行恢复后的本机回归为 176 项、0 failures；Swift 6 完整并发检查与编译警告作为错误的门禁通过。新增官方接入导航、免密 REST、编码占位符认证、OPTIONS 的真实本机 HTTP 验证，以及五类服务错误回显与编码变体的密钥脱敏回归。测试覆盖原生图片／音视频编码、Vision 混排、模板签名、跨进程自动化、窗口及任务生命周期；实际账号和外设验收范围保持独立。
+改版前 B9 候选完成干净构建与 149 项测试。上一轮界面改版、发布前安全修复与 OCR 漏行恢复后的本机回归为 176 项、0 failures。0.1.2 本机与 GitHub Actions 历史回归为 179 项；当前 0.1.3 本机回归为 202 项、0 failures、0 skipped；Swift 6 完整并发检查与编译警告作为错误的门禁通过。新增官方接入导航、免密 REST、编码占位符认证、OPTIONS 的真实本机 HTTP 验证，以及五类服务错误回显与编码变体的密钥脱敏回归。测试覆盖原生图片／音视频编码、Vision 混排、模板签名、跨进程自动化、窗口及任务生命周期；最终候选的真实屏幕、账号和外设验收范围保持独立。
 
 改版前 B9 最终候选已复制至 `~/Applications/niko-shot.app`，主二进制哈希保持一致。原生登录启动开关实际完成启用及注销，最终恢复关闭；没有执行注销登录或重启系统。正常启动安装副本并重启 Shortcuts 后，系统发现全部五个正式动作，最近 OCR 动作在应用运行时和退出后均实际返回公开测试文字；前四个动作的完整捕获仍需对应权限和实机验收。
 

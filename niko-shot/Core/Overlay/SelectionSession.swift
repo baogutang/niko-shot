@@ -7,6 +7,8 @@ struct CaptureContext: Sendable {
     var kind: String = "region"
     var appBundleID: String = ""
     var windowID: UInt32?
+    /// Point bounds of the identified window when selected, used to detect moved display regions.
+    var targetWindowFrame: CGRect?
     var globalRect: CGRect { CoordinateSpace.localToGlobal(localRect, screen: screen) }
 
     /// Imported and stitched images use a synthetic display and cannot identify live screen pixels.
@@ -33,6 +35,8 @@ final class SelectionSession {
     private var confirmationTitle: String?
     private var appBundleID = ""
     private var windowID: UInt32?
+    private var targetWindowFrame: CGRect?
+    private var directScrollSelection = false
     private var windowCandidates: [WindowCandidate] = []
     private var toolbar: ToolbarController?
     private var canvas: AnnotationCanvasView?
@@ -125,7 +129,7 @@ final class SelectionSession {
     }
 
     /// Starts a snapshot-only session, injectable so teardown can be tested without TCC.
-    func start(frames: [FrozenFrame], candidates: [WindowCandidate] = [], kind: String = "region", initial: CaptureContext? = nil, autoConfirm: Bool = true, confirmationTitle: String? = nil, completion: @escaping (CGImage, CaptureContext) -> Void) {
+    func start(frames: [FrozenFrame], candidates: [WindowCandidate] = [], kind: String = "region", initial: CaptureContext? = nil, autoConfirm: Bool = true, confirmationTitle: String? = nil, directScrollSelection: Bool = false, completion: @escaping (CGImage, CaptureContext) -> Void) {
         finish()
         completedDisplayStatistics.removeAll()
         self.completion = completion
@@ -134,6 +138,8 @@ final class SelectionSession {
         captureKind = kind
         appBundleID = initial?.appBundleID ?? ""
         windowID = initial?.windowID
+        targetWindowFrame = initial?.targetWindowFrame
+        self.directScrollSelection = directScrollSelection
         self.confirmationTitle = confirmationTitle
         windowCandidates = candidates
         store.replace(frames)
@@ -142,19 +148,30 @@ final class SelectionSession {
             let view = SelectionView(frameInfo: frame)
             view.candidates = candidates
             view.windowMode = kind == "window"
+            if directScrollSelection { view.configureForScrollSelection() }
             view.onSelection = { [weak self, weak view] rect in
                 let global = CoordinateSpace.localToGlobal(rect, screen: frame.screen)
                 let target = view?.selectedWindow ?? self?.windowCandidates.first { $0.frame.contains(CGPoint(x: global.midX, y: global.midY)) }
                 self?.appBundleID = target?.appBundleID ?? ""
                 self?.windowID = target?.id
+                self?.targetWindowFrame = target?.frame
+                if directScrollSelection { self?.captureKind = view?.windowMode == true ? "window" : "region" }
                 self?.select(frame: frame, rect: rect)
+            }
+            if directScrollSelection {
+                view.onSelectionCompleted = { [weak self] in self?.confirm() }
+                view.onSelectionModeChanged = { [weak self] in
+                    guard let self else { return }
+                    self.selected = nil; self.activeScreen = nil; self.state = .selecting
+                    for overlay in self.windows { overlay.ignoresMouseEvents = false }
+                }
             }
             view.onConfirm = { [weak self] in self?.confirm() }
             view.onCancel = { [weak self] in self?.finish() }
-            if confirmationTitle == nil {
+            if confirmationTitle == nil && !directScrollSelection {
                 view.onAnnotate = { [weak self] in self?.beginAnnotation(tool: .rectangle) }
                 view.onSave = { [weak self] in self?.outputAction = .save; self?.confirm() }
-            } else { view.setAccessibilityLabel("选择区域，Enter \(confirmationTitle ?? "确认")，Escape 取消") }
+            } else if !directScrollSelection { view.setAccessibilityLabel("选择区域，Enter \(confirmationTitle ?? "确认")，Escape 取消") }
             let window = OverlayWindow(screen: frame.screen, view: view)
             windows.append(window)
             window.makeKeyAndOrderFront(nil)
@@ -185,7 +202,7 @@ final class SelectionSession {
         }
         selected = (frame, rect)
         state = rect.isEmpty ? .selecting : .selected
-        if !rect.isEmpty { showToolbar(context: CaptureContext(screen: frame.screen, localRect: rect, kind: captureKind, appBundleID: appBundleID, windowID: windowID)) }
+        if !rect.isEmpty && !directScrollSelection { showToolbar(context: CaptureContext(screen: frame.screen, localRect: rect, kind: captureKind, appBundleID: appBundleID, windowID: windowID, targetWindowFrame: targetWindowFrame)) }
         updateScrollAvailability()
     }
 
@@ -207,7 +224,7 @@ final class SelectionSession {
         if let editorContext, editorContext.hasLiveScreenRegion { return editorContext }
         guard let (frame, rect) = selected else { return nil }
         let context = CaptureContext(screen: frame.screen, localRect: rect, kind: captureKind,
-                                     appBundleID: appBundleID, windowID: windowID)
+                                     appBundleID: appBundleID, windowID: windowID, targetWindowFrame: targetWindowFrame)
         return context.hasLiveScreenRegion ? context : nil
     }
 
@@ -245,7 +262,7 @@ final class SelectionSession {
         guard let (frame, rect) = selected, state == .selected else { return }
         state = .annotating
         let token = generation
-        let context = CaptureContext(screen: frame.screen, localRect: rect, kind: captureKind, appBundleID: appBundleID, windowID: windowID)
+        let context = CaptureContext(screen: frame.screen, localRect: rect, kind: captureKind, appBundleID: appBundleID, windowID: windowID, targetWindowFrame: targetWindowFrame)
         let pixels = CoordinateSpace.imagePixelRect(fromSelection: rect, screen: frame.screen)
         let gate = afterImageOperation
         runOperation { [weak self] in
@@ -367,6 +384,17 @@ final class SelectionSession {
 
     /// Crops the original snapshot; it never takes a second screenshot.
     func confirm() {
+        if directScrollSelection, let (frame, rect) = selected, state == .selected,
+           rect.height * frame.screen.scale >= 240, rect.width * frame.screen.scale >= 2 {
+            let callback = completion
+            let context = CaptureContext(screen: frame.screen, localRect: rect, kind: captureKind,
+                appBundleID: appBundleID, windowID: windowID, targetWindowFrame: targetWindowFrame)
+            // Only geometry is handed off. The scroll coordinator obtains its own live first frame.
+            finish(completed: true)
+            callback?(frame.image, context)
+            return
+        }
+        if directScrollSelection { return }
         if imageEditorWindow != nil, state == .selected { applyEditorCrop(output: outputAction); return }
         if let canvas, let context = editorContext, state == .annotating {
             state = .exporting
@@ -394,7 +422,7 @@ final class SelectionSession {
         updateScrollAvailability()
         let callback = completion
         let token = generation
-        let context = CaptureContext(screen: frame.screen, localRect: rect, kind: captureKind, appBundleID: appBundleID, windowID: windowID)
+        let context = CaptureContext(screen: frame.screen, localRect: rect, kind: captureKind, appBundleID: appBundleID, windowID: windowID, targetWindowFrame: targetWindowFrame)
         let gate = afterImageOperation
         runOperation { [weak self] in
             let image = try? await Self.imageWork(after: gate) { frame.image.cropping(to: pixels) }
@@ -421,6 +449,7 @@ final class SelectionSession {
                 stopDisplayUpdates(view)
                 view.onSelection = nil; view.onConfirm = nil; view.onCancel = nil
                 view.onAnnotate = nil; view.onSave = nil
+                view.onSelectionCompleted = nil; view.onSelectionModeChanged = nil
             }
             window.orderOut(nil)
             window.close()
@@ -430,7 +459,7 @@ final class SelectionSession {
         store.clear()
         selected = nil
         activeScreen = nil
-        appBundleID = ""; windowID = nil; confirmationTitle = nil
+        appBundleID = ""; windowID = nil; targetWindowFrame = nil; confirmationTitle = nil; directScrollSelection = false
         windowCandidates.removeAll()
         completion = nil
         monitorCount = 0

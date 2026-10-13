@@ -7,3 +7,4 @@ DerivedData/
 *.xcuserstate
 *.app/
 *.profraw
+__pycache__/
