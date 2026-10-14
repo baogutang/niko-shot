@@ -268,15 +268,25 @@ actor ScrollImageFixture {
     }
 
     func frame(width: Int, height: Int, start: Int, seed: UInt64 = 1, top: Int = 0, bottom: Int = 0,
-               chrome: UInt8 = 70, alpha: Bool = false, periodic: Bool = false,
-               blankDocumentRows: Range<Int>? = nil) throws -> CGImage {
+               chrome: UInt8 = 70, chromeDetail: Bool = false, alpha: Bool = false, periodic: Bool = false,
+               blankDocumentRows: Range<Int>? = nil, screenDither: Bool = false) throws -> CGImage {
         var pixels = Data(count: width * height * 4)
         pixels.withUnsafeMutableBytes { raw in
             guard let bytes = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
             for row in 0..<height { for column in 0..<width {
                 let value: [UInt8]
-                if row < top || row >= height - bottom { value = [chrome, 255 - chrome, 80, 255] }
-                else if blankDocumentRows?.contains(start + row - top) == true { value = [255, 255, 255, 255] }
+                if row < top || row >= height - bottom {
+                    if chromeDetail, row == top - 1 || row == height - bottom {
+                        value = [30, 30, 30, 255]
+                    } else if chromeDetail, column >= 12, column < width - 12,
+                              (row >= 6 && row < top - 6) || (row >= height - bottom + 6 && row < height - 6) {
+                        value = [((column / 8 + row / 3).isMultiple(of: 2) ? 40 : 200), chrome, 80, 255]
+                    } else { value = [chrome, 255 - chrome, 80, 255] }
+                }
+                else if blankDocumentRows?.contains(start + row - top) == true {
+                    let gray: UInt8 = screenDither ? ((row + column).isMultiple(of: 2) ? 251 : 253) : 255
+                    value = [gray, gray, gray, 255]
+                }
                 else { value = Self.pixel(x: column, y: start + row - top, seed: seed, alpha: alpha, periodic: periodic) }
                 let offset = (row * width + column) * 4
                 for channel in 0..<4 { bytes[offset + channel] = value[channel] }

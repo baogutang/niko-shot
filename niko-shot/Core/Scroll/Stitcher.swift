@@ -81,6 +81,47 @@ public enum Stitcher {
         let sum: Float, variance: Float
     }
 
+    /// Detects stationary edge chrome before committing a second viewport. Blank page margins
+    /// are deliberately insufficient: an edge must contain stationary detail and moving body rows.
+    static func stationaryBands(previous: StitchFrameAnalysis, current: StitchFrameAnalysis) -> (top: Int, bottom: Int) {
+        guard previous.width == current.width, previous.height == current.height,
+              previous.profileHeight == previous.height, current.profileHeight == current.height,
+              previous.profileWidth == current.profileWidth else { return (0, 0) }
+        let columns = previous.profileWidth, rows = previous.height
+        func stationary(_ row: Int) -> Bool {
+            let offset = row * columns
+            var difference: Float = 0
+            for column in 0..<columns { difference += abs(previous.profile[offset + column] - current.profile[offset + column]) }
+            return difference / Float(columns) <= 0.003
+        }
+        guard (0..<rows).filter({ !stationary($0) }).count >= 4 else { return (0, 0) }
+        func edge(backward: Bool) -> Int {
+            var lastDetail = 0, detailedRows = 0, stationaryRows = 0
+            for distance in 0..<(rows / 3) {
+                let row = backward ? rows - 1 - distance : distance
+                guard stationary(row) else { break }
+                stationaryRows = distance + 1
+                let offset = row * columns
+                var detail: Float = 0
+                if distance > 0 {
+                    let neighbor = (backward ? row + 1 : row - 1) * columns
+                    for column in 0..<columns {
+                        let value = previous.profile[offset + column] - previous.profile[neighbor + column]
+                        detail += value * value
+                    }
+                }
+                // Compositor dithering on near-white paper is stationary too. Its one/two-step
+                // noise must not count as toolbar detail or consume blank document margins.
+                if detail > Float(columns) * 0.000_1 { lastDetail = distance + 1; detailedRows += 1 }
+            }
+            // A vertical window border also crosses blank paper. Only changing rows establish
+            // chrome, and a long uniform suffix belongs to the page from its first row onward.
+            if stationaryRows - lastDetail >= 8 { lastDetail = max(0, lastDetail - 1) }
+            return detailedRows >= 4 && lastDetail >= 8 ? lastDetail : 0
+        }
+        return (edge(backward: false), edge(backward: true))
+    }
+
     static func match(previous: StitchFrameAnalysis, current: StitchFrameAnalysis,
                       currentImage: CGImage, ignoringTop: Int) throws -> StitchMatch {
         guard previous.width == current.width, previous.sampleWidth == current.sampleWidth else { throw ScrollCaptureError.changedWidth }

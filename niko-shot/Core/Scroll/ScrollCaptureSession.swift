@@ -9,6 +9,9 @@ public actor ScrollCaptureSession {
     private let directory: URL
     private let cancellation = OSAllocatedUnfairLock(initialState: false)
     private var previous: StitchFrameAnalysis?
+    // Only the first viewport is retained, until two frames establish whether window chrome is fixed.
+    private var firstImage: CGImage?
+    private var ignoredTop: Int, ignoredBottom: Int
     private var writer: ChunkedPNGWriter?
     private var state: ScrollCaptureState = .idle
     private var frames = 0
@@ -21,6 +24,7 @@ public actor ScrollCaptureSession {
                 previewEnabled: Bool = false) {
         self.options = ScrollCaptureOptions(ignoredTop: options.ignoredTop, ignoredBottom: options.ignoredBottom,
                                             minimumCorrelation: options.minimumCorrelation)
+        ignoredTop = options.ignoredTop; ignoredBottom = options.ignoredBottom
         directory = workingDirectory.appendingPathComponent("niko-scroll-\(UUID().uuidString)", isDirectory: true)
         if previewEnabled { preview = ScrollPreviewAccumulator() }
     }
@@ -33,7 +37,8 @@ public actor ScrollCaptureSession {
     public var resourceCounts: ScrollResourceCounts {
         ScrollResourceCounts(openFiles: writer?.openFiles ?? 0, chunkFiles: writer?.chunks.count ?? 0,
             ownedDirectories: (writer == nil ? 0 : 1) + (exportDirectory == nil ? 0 : 1),
-            residentBufferBytes: (previous?.residentBytes ?? 0) + (writer?.residentBufferBytes ?? 0) + (preview?.residentBufferBytes ?? 0),
+            residentBufferBytes: (previous?.residentBytes ?? 0) + (firstImage.map { $0.bytesPerRow * $0.height } ?? 0) +
+                (writer?.residentBufferBytes ?? 0) + (preview?.residentBufferBytes ?? 0),
             peakBufferBytes: peakBufferBytes)
     }
 
@@ -48,12 +53,48 @@ public actor ScrollCaptureSession {
     func canAppendReliably(_ image: CGImage) throws -> Bool {
         try checkOpen()
         guard let previous else { return false }
-        let next = try Stitcher.analyze(image, top: options.ignoredTop, bottom: options.ignoredBottom)
-        guard previous.width == next.width, previous.signature.normalizedDifference(to: next.signature) > 0.004 else { return false }
-        let match = try Stitcher.match(previous: previous, current: next, currentImage: image, ignoringTop: options.ignoredTop)
+        let candidate = try candidate(for: image)
+        let next = candidate.next
+        let reference = candidate.trimmedPrevious ?? previous
+        guard reference.width == next.width, reference.signature.normalizedDifference(to: next.signature) > 0.004 else { return false }
+        let match = candidate.match
         try checkCancellation()
         return !match.isAmbiguous && !match.isBacktracking && match.correlation >= max(0.995, options.minimumCorrelation) &&
             match.overlap >= min(previous.height, next.height) / 4 && match.overlap < min(previous.height, next.height)
+    }
+
+    /// Resolved content height also bounds automatic wheel steps after removing fixed window bars.
+    var viewportHeight: Int { previous?.height ?? 0 }
+    var contentBands: (top: Int, bottom: Int) { (ignoredTop, ignoredBottom) }
+
+    private struct Candidate {
+        let next: StitchFrameAnalysis
+        let match: StitchMatch
+        let trimmedPrevious: StitchFrameAnalysis?
+        let top: Int, bottom: Int
+    }
+
+    private func candidate(for image: CGImage, forced: Bool = false) throws -> Candidate {
+        let next = try Stitcher.analyze(image, top: ignoredTop, bottom: ignoredBottom)
+        guard let previous, !forced else {
+            return Candidate(next: next, match: StitchMatch(overlap: 0, correlation: 1), trimmedPrevious: nil,
+                             top: ignoredTop, bottom: ignoredBottom)
+        }
+        guard previous.width == next.width else { throw ScrollCaptureError.changedWidth }
+        if let firstImage, options.ignoredTop == 0, options.ignoredBottom == 0 {
+            let bands = Stitcher.stationaryBands(previous: previous, current: next)
+            if bands.top + bands.bottom > 0, image.height - bands.top - bands.bottom >= 240 {
+                let reference = try Stitcher.analyze(firstImage, top: bands.top, bottom: bands.bottom)
+                let content = try Stitcher.analyze(image, top: bands.top, bottom: bands.bottom)
+                let match = try Stitcher.match(previous: reference, current: content, currentImage: image, ignoringTop: bands.top)
+                // Stationarity alone never authorizes trimming; independently translated body detail must agree.
+                if !match.isAmbiguous, match.correlation >= max(0.99, options.minimumCorrelation) {
+                    return Candidate(next: content, match: match, trimmedPrevious: reference, top: bands.top, bottom: bands.bottom)
+                }
+            }
+        }
+        let match = try Stitcher.match(previous: previous, current: next, currentImage: image, ignoringTop: ignoredTop)
+        return Candidate(next: next, match: match, trimmedPrevious: nil, top: ignoredTop, bottom: ignoredBottom)
     }
 
     /// Streams a PNG and atomically commits it; an existing user file is protected until all rows succeed.
@@ -111,7 +152,8 @@ public actor ScrollCaptureSession {
         try checkOpen()
         var writing = false
         do {
-            let next = try Stitcher.analyze(image, top: options.ignoredTop, bottom: options.ignoredBottom)
+            let candidate = try candidate(for: image, forced: forcedOverlap != nil)
+            let next = candidate.next
             try checkCancellation()
             var overlap = 0
             if let previous {
@@ -121,8 +163,7 @@ public actor ScrollCaptureSession {
                     overlap = forcedOverlap
                 } else {
                     if previous.signature.normalizedDifference(to: next.signature) < 0.002 { return .duplicate }
-                    let match = try Stitcher.match(previous: previous, current: next, currentImage: image,
-                                                  ignoringTop: options.ignoredTop)
+                    let match = candidate.match
                     if match.correlation < options.minimumCorrelation || match.isAmbiguous {
                         state = .awaitingConfirmation; return .needsConfirmation(match)
                     }
@@ -132,21 +173,38 @@ public actor ScrollCaptureSession {
             } else if let forcedOverlap, forcedOverlap != 0 { throw ScrollCaptureError.invalidOverlap }
             // Once writing starts, a partial row/chunk cannot safely be retried in-place.
             writing = true
+            if forcedOverlap == nil, let reference = candidate.trimmedPrevious, let firstImage {
+                // No completed long image is held or rewritten: only the provisional first viewport.
+                writer?.cleanup(); writer = nil
+                ignoredTop = candidate.top; ignoredBottom = candidate.bottom
+                let flag = cancellation
+                writer = try ChunkedPNGWriter(directory: directory, width: next.width) { try Self.check(flag) }
+                try writer?.append(image: firstImage, firstRow: ignoredTop, numberOfRows: reference.height)
+                if preview != nil {
+                    preview = ScrollPreviewAccumulator()
+                    do { try preview?.append(firstImage, firstRow: ignoredTop, rows: reference.height,
+                                             sourceHeight: reference.height, frames: 1) }
+                    catch is CancellationError { throw CancellationError() }
+                    catch { preview = nil }
+                }
+            }
             if writer == nil {
                 let flag = cancellation
                 writer = try ChunkedPNGWriter(directory: directory, width: next.width) { try Self.check(flag) }
                 width = next.width
             }
             guard let writer else { throw ScrollCaptureError.noFrames }
-            try writer.append(image: image, firstRow: options.ignoredTop + overlap, numberOfRows: next.height - overlap)
+            try writer.append(image: image, firstRow: ignoredTop + overlap, numberOfRows: next.height - overlap)
             previous = next; frames += 1; height = writer.height; state = .capturing
+            firstImage = frames == 1 && options.ignoredTop == 0 && options.ignoredBottom == 0 ? image : nil
             if preview != nil {
-                do { try preview?.append(image, firstRow: options.ignoredTop + overlap, rows: next.height - overlap,
+                do { try preview?.append(image, firstRow: ignoredTop + overlap, rows: next.height - overlap,
                                          sourceHeight: height, frames: frames) }
                 catch is CancellationError { throw CancellationError() }
                 catch { preview = nil } // Preview allocation must never destroy accepted full-resolution content.
             }
-            peakBufferBytes = max(peakBufferBytes, writer.peakBufferBytes + next.residentBytes * 2 + (preview?.residentBufferBytes ?? 0) * 2)
+            peakBufferBytes = max(peakBufferBytes, writer.peakBufferBytes + next.residentBytes * 2 +
+                (firstImage.map { $0.bytesPerRow * $0.height } ?? 0) + (preview?.residentBufferBytes ?? 0) * 2)
             return .appended(height: height, frames: frames)
         } catch {
             if error is CancellationError || Task.isCancelled || cancellation.withLock({ $0 }) {
@@ -164,7 +222,7 @@ public actor ScrollCaptureSession {
         }
     }
     private func cleanup() {
-        writer?.cleanup(); writer = nil; previous = nil; preview = nil
+        writer?.cleanup(); writer = nil; previous = nil; firstImage = nil; preview = nil
         if let exportDirectory { try? FileManager.default.removeItem(at: exportDirectory) }
         exportDirectory = nil
     }

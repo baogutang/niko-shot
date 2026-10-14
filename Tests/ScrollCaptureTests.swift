@@ -6,6 +6,58 @@ import XCTest
 
 @MainActor
 final class ScrollCaptureTests: XCTestCase {
+    func testWindowChromeIsDetectedWithoutSetupAndTheDocumentIsReconstructedExactly() async throws {
+        let directory = try makeDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = ScrollImageFixture(), session = ScrollCaptureSession(workingDirectory: directory, previewEnabled: true)
+        for (index, start) in [0, 21, 138, 401, 607].enumerated() {
+            let image = try await fixture.frame(width: 193, height: 1_056, start: start,
+                top: 32, bottom: 24, chromeDetail: true)
+            if index == 1 {
+                let reliable = try await session.canAppendReliably(image)
+                XCTAssertTrue(reliable, "Fixed native chrome must not delay an otherwise exact moving frame")
+                let unchanged = await session.progress
+                XCTAssertEqual(unchanged.height, 1_056, "Provisional detection must not modify accepted pixels")
+            }
+            let result = try await session.append(image)
+            XCTAssertEqual(result, .appended(height: index == 0 ? 1_056 : 1_000 + start, frames: index + 1))
+            let preview = await session.livePreview
+            XCTAssertEqual(preview?.sourceHeight, index == 0 ? 1_056 : 1_000 + start)
+        }
+        let output = directory.appendingPathComponent("automatic-chrome.png")
+        _ = try await session.finish(to: output)
+        let result = try await fixture.inspect(output, expectedWidth: 193, expectedHeight: 1_607)
+        XCTAssertEqual(result.height, 1_607)
+        XCTAssertLessThanOrEqual(result.maximumChannelDifference, 1, "Every body row must survive all automatically aligned seams")
+        XCTAssertTrue(result.validCRCs)
+    }
+
+    func testSparseBlankDocumentMarginsAreNotMistakenForFixedChrome() async throws {
+        let fixture = ScrollImageFixture(), session = ScrollCaptureSession()
+        let first = try await fixture.sparseText(start: 0)
+        let next = try await fixture.sparseText(start: 60)
+        _ = try await session.append(first)
+        let result = try await session.append(next)
+        XCTAssertEqual(result, .appended(height: 1_260, frames: 2), "Stationary blank paper is document content")
+        await session.cancel()
+        let resources = await session.resourceCounts
+        XCTAssertEqual(resources.residentBufferBytes, 0)
+    }
+
+    func testStationaryCompositorDitherDoesNotTurnBlankPaperIntoWindowChrome() async throws {
+        let fixture = ScrollImageFixture()
+        for blank in [0..<160, 860..<1_300] {
+            let session = ScrollCaptureSession()
+            let first = try await fixture.frame(width: 193, height: 1_056, start: 0,
+                top: 32, bottom: 24, chromeDetail: true, blankDocumentRows: blank, screenDither: true)
+            let next = try await fixture.frame(width: 193, height: 1_056, start: 21,
+                top: 32, bottom: 24, chromeDetail: true, blankDocumentRows: blank, screenDither: true)
+            _ = try await session.append(first)
+            let result = try await session.append(next)
+            XCTAssertEqual(result, .appended(height: 1_021, frames: 2), "Only the fixed bars may be removed; all blank body rows must remain")
+            await session.cancel()
+        }
+    }
+
     func testTrimmedAlphaPNGHasExactPixelOrderAcrossTheSeam() async throws {
         let directory = try makeDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = ScrollImageFixture()

@@ -237,7 +237,7 @@ final class ScrollCoordinator {
                 self.setupWindow?.onClose = nil; self.setupWindow?.close(); self.setupWindow = nil
                 self.restart(context: context, mode: mode, options: ScrollCaptureOptions(ignoredTop: top, ignoredBottom: bottom))
             }, onOpenAccessibility: { AutoScroller.openSettings() }, onCancel: { [weak self] in self?.setupWindow?.close() },
-            initialMode: state.mode, ignoredTop: options?.ignoredTop ?? 0, ignoredBottom: options?.ignoredBottom ?? 0,
+            initialMode: state.mode, ignoredTop: state.ignoredTop, ignoredBottom: state.ignoredBottom,
             isRestart: hadSession))
         setupWindow = window; window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
@@ -318,8 +318,11 @@ final class ScrollCoordinator {
 
     private func refreshPreview(worker: ScrollCaptureSession, token: UUID) async {
         let snapshot = await worker.livePreview
+        let bands = await worker.contentBands, viewportHeight = await worker.viewportHeight
         guard generation == token, !Task.isCancelled else { return }
         state.preview = snapshot
+        state.ignoredTop = bands.top; state.ignoredBottom = bands.bottom
+        state.maximumOverlap = max(0, viewportHeight - 1)
     }
 
     /// Keeps capture running when the companion is hidden; reopening displays the current accepted image.
@@ -354,17 +357,19 @@ final class ScrollCoordinator {
             guard let self else { return }
             defer { if self.generation == token, self.loopID == id { self.loopTask = nil } }
             var currentFirst = captureCurrentFirst, duplicates = 0
+            var recoveryStarted: ContinuousClock.Instant?
             do {
-                while self.generation == token, self.loopID == id, !self.state.isPaused, !self.state.isMatching {
+                while self.generation == token, self.loopID == id, !self.state.isPaused {
                     try Task.checkCancellation()
                     guard let worker = self.session, let options = self.options else { return }
                     try self.updateValidatedContext(forAutomaticScroll: self.state.mode == .automatic && !currentFirst)
                     guard let context = self.context else { return }
-                    if self.state.mode == .automatic, !currentFirst {
-                        let height = context.localRect.height * context.screen.scale - CGFloat(options.ignoredTop + options.ignoredBottom)
+                    if self.state.mode == .automatic, !currentFirst, !self.state.isMatching {
+                        let height = CGFloat(await worker.viewportHeight)
                         let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
                         let location = CGPoint(x: context.globalRect.midX, y: CoordinateSpace.flippedY(context.globalRect.midY, primaryTop: primaryTop))
-                        do { try self.workflow.scroll(max(1, (height - 150) / context.screen.scale), location) }
+                        // Leave enough shared body content even when a window has fixed chrome.
+                        do { try self.workflow.scroll(max(1, height * 0.55 / context.screen.scale), location) }
                         catch {
                             self.state.mode = .manual
                             self.state.status = "自动滚动不可用，请自行向下滚动。"
@@ -381,10 +386,16 @@ final class ScrollCoordinator {
                     case .appended:
                         let signature = try await self.signature(for: image, options: options)
                         guard self.generation == token else { return }
+                        recoveryStarted = nil; self.clearPendingMatch()
                         duplicates = 0; self.acceptedSignature = signature; self.apply(result)
                         await self.refreshPreview(worker: worker, token: token)
                     case .duplicate:
                         guard self.loopID == id else { return }
+                        if self.state.isMatching {
+                            recoveryStarted = nil; self.clearPendingMatch()
+                            self.state.status = "已回到捕获位置，请继续向下滚动。"
+                            duplicates = 0; continue
+                        }
                         if self.state.isBacktracking {
                             self.state.isBacktracking = false; self.state.status = "已回到捕获边界，请继续向下滚动。"
                         }
@@ -395,15 +406,20 @@ final class ScrollCoordinator {
                         }
                     case .backtracking:
                         guard self.loopID == id else { return }
+                        recoveryStarted = nil; self.clearPendingMatch()
                         self.state.isBacktracking = true
                         self.state.status = "正在向上浏览；请回到已捕获位置后继续向下。"
                     case .needsConfirmation(let match):
                         guard self.loopID == id else { return }
-                        self.pendingImage = image; self.state.isMatching = true; self.state.isPaused = true; self.state.showsAdvanced = true
+                        // Keep the accepted image and keep observing. A transient compositor frame
+                        // or a quick gesture is not a request to edit a pixel-overlap parameter.
+                        if recoveryStarted == nil { recoveryStarted = .now }
+                        self.pendingImage = image; self.state.isMatching = true
                         self.state.correlation = match.correlation; self.state.overlap = match.overlap
-                        self.state.maximumOverlap = image.height - options.ignoredTop - options.ignoredBottom - 1
-                        self.state.status = match.isAmbiguous ? "接缝存在重复纹理，请在高级操作中确认。" : "接缝相关度不足，请在高级操作中确认。"
-                        return
+                        self.state.maximumOverlap = image.height - self.state.ignoredTop - self.state.ignoredBottom - 1
+                        self.state.status = recoveryStarted!.duration(to: .now) < .milliseconds(700)
+                            ? "正在对齐画面，已截内容会保留。"
+                            : "请向上滚动一点，回到预览末尾后继续向下。"
                     }
                 }
             } catch is CancellationError {}
@@ -424,7 +440,7 @@ final class ScrollCoordinator {
             guard generation == token, loop == nil || loopID == loop else { throw CancellationError() }
             let elapsed = started.duration(to: .now)
             let acceptedDifference = signature.normalizedDifference(to: acceptedSignature)
-            let mode = requireChange && !state.isBacktracking ? state.mode : .automatic
+            let mode = requireChange && !state.isBacktracking && !state.isMatching ? state.mode : .automatic
             // A complete compositor frame whose whole overlap agrees can become an anchor
             // during scrolling. This prevents a fast gesture from outrunning the viewport.
             if capture.isStreaming, !state.isBacktracking, acceptedDifference > 0.004, let worker = session,
@@ -443,6 +459,10 @@ final class ScrollCoordinator {
             try await Task.sleep(for: .milliseconds(60))
         }
         throw CancellationError()
+    }
+
+    private func clearPendingMatch() {
+        pendingImage = nil; state.isMatching = false; state.correlation = nil
     }
 
     private func handleCaptureError(_ error: Error, token: UUID) async {
@@ -506,7 +526,7 @@ final class ScrollCoordinator {
     func pause() {
         guard operationTask == nil, session != nil, !state.isPaused else { return }
         let token = generation, activeLoop = loopTask, source = capture
-        loopID = UUID(); state.isPaused = true; state.status = "已暂停。可继续，或在高级选项中从首屏重新配置。"
+        loopID = UUID(); state.isPaused = true; state.status = "已暂停，点击继续即可接着捕获。"
         launchOperation { [weak self] in
             await activeLoop?.value
             guard let self, self.generation == token else { return }
@@ -587,7 +607,7 @@ final class ScrollCoordinator {
     private func confirmOverlap(_ overlap: Int) {
         guard operationTask == nil, let image = pendingImage, let worker = session, let options,
               !state.requiresRestart, !state.requiresReselection,
-              overlap >= 0, overlap < image.height - options.ignoredTop - options.ignoredBottom else { return }
+              overlap >= 0, overlap < image.height - state.ignoredTop - state.ignoredBottom else { return }
         let token = generation
         state.isWorking = true; state.status = "正在应用确认的接缝…"
         launchOperation { [weak self] in
@@ -600,6 +620,11 @@ final class ScrollCoordinator {
                 self.loopTask = nil; self.pendingImage = nil; self.acceptedSignature = signature
                 self.state.isWorking = false; self.state.isPaused = false; self.state.isMatching = false; self.state.correlation = nil; self.apply(result)
                 await self.refreshPreview(worker: worker, token: token)
+                if self.capture == nil, let context = self.context {
+                    let prepared = try await self.workflow.prepare(context)
+                    guard self.generation == token, !Task.isCancelled else { await prepared.stop(); return }
+                    self.capture = prepared
+                }
                 if let context = self.context { self.workflow.activate(context) }
                 self.startLoop(token: token)
             } catch { await self.handleCaptureError(error, token: token) }
@@ -633,11 +658,11 @@ final class ScrollCoordinator {
                         guard self.generation == token else { return }
                         self.finalViewportPending = false
                         if case .needsConfirmation(let match) = result {
-                            self.pendingImage = image; self.state.isMatching = true; self.state.showsAdvanced = true
+                            self.pendingImage = image; self.state.isMatching = true
                             self.state.correlation = match.correlation; self.state.overlap = match.overlap
-                            self.state.maximumOverlap = image.height - (self.options?.ignoredTop ?? 0) - (self.options?.ignoredBottom ?? 0) - 1
+                            self.state.maximumOverlap = image.height - self.state.ignoredTop - self.state.ignoredBottom - 1
                             self.state.isWorking = false
-                            self.state.status = "最后一屏接缝待确认。确认后可继续；点击完成会输出已经截取的部分。"
+                            self.state.status = "最后一屏还未对齐。继续捕获并向上滚动一点，或完成已有内容。"
                             return
                         }
                         self.apply(result)

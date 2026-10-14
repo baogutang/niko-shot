@@ -1,4 +1,4 @@
-// Hosts timer-free native scroll-capture progress and explicit seam-confirmation controls.
+// Hosts native scroll progress; pixel-level matching controls require an explicit advanced action.
 import AppKit
 import Observation
 import SwiftUI
@@ -16,7 +16,7 @@ final class ScrollControlState {
     var status = "准备开始"
     /// A paused capture exposes an explicit Retry action.
     var isPaused = false
-    /// A candidate needs seam confirmation, including ambiguous high-correlation matches.
+    /// An unaligned candidate is retained while capture automatically looks for a safe continuation.
     var isMatching = false
     /// The candidate's normalized correlation, when available.
     var correlation: Float?
@@ -43,7 +43,8 @@ final class ScrollControlState {
     var progress: ScrollControlProgress {
         ScrollControlProgress(mode: mode, height: height, frames: frames, status: status,
             isPaused: isPaused, isMatching: isMatching, isWorking: isWorking,
-            requiresRestart: requiresRestart, requiresReselection: requiresReselection, isBacktracking: isBacktracking)
+            requiresRestart: requiresRestart, requiresReselection: requiresReselection, isBacktracking: isBacktracking,
+            showsAdvanced: showsAdvanced)
     }
 
     /// Creates idle progress without any window, timer, capture, or permission request.
@@ -62,6 +63,7 @@ struct ScrollControlProgress: Sendable {
     let requiresRestart: Bool
     let requiresReselection: Bool
     let isBacktracking: Bool
+    let showsAdvanced: Bool
 }
 
 /// Owns a nonactivating HUD that accepts keyboard focus only after user interaction.
@@ -177,7 +179,7 @@ final class ScrollControlBarController {
     }
 
     private var desiredHeight: CGFloat {
-        106 + (state.showsAdvanced ? 108 : 0) + (state.isMatching ? 130 : state.isPaused ? 54 : 0)
+        106 + (state.showsAdvanced ? 108 : 0) + (state.isMatching && state.showsAdvanced ? 130 : state.isPaused ? 54 : 0)
     }
 
     private func resizeForState() {
@@ -282,11 +284,11 @@ private struct ScrollControlBar: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }.frame(minHeight: 32, alignment: .top)
             if state.showsAdvanced { advancedControls }
-            if state.isMatching { seamControls }
+            if state.isMatching && state.showsAdvanced { seamControls }
             else if state.isPaused {
                 Divider()
                 HStack {
-                    Text(state.requiresRestart ? "旧分块不会沿用" : state.requiresReselection ? "已停止捕获原位置" : "捕获已暂停")
+                    Text(state.requiresRestart ? "旧分块不会沿用" : state.requiresReselection ? "已停止捕获原位置" : state.isMatching ? "已保留预览中的内容" : "捕获已暂停")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                     Spacer()
                     ScrollHUDButton(title: recoveryTitle, symbol: "arrow.clockwise", showsTitle: true,
@@ -298,9 +300,15 @@ private struct ScrollControlBar: View {
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background { if reduceTransparency { NikoTheme.canvas } }
         .tint(NikoTheme.accent)
-        .onChange(of: state.isMatching) { _, _ in onLayoutChanged() }
+        .onChange(of: state.isMatching) { _, matching in
+            if matching && state.showsAdvanced && !state.isPaused { onPause() }
+            onLayoutChanged()
+        }
         .onChange(of: state.isPaused) { _, _ in onLayoutChanged() }
-        .onChange(of: state.showsAdvanced) { _, _ in onLayoutChanged() }
+        .onChange(of: state.showsAdvanced) { _, expanded in
+            if expanded && state.isMatching && !state.isPaused { onPause() }
+            onLayoutChanged()
+        }
         .onChange(of: state.overlap) { _, value in overlapText = String(value) }
     }
 

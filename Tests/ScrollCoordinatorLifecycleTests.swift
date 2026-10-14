@@ -5,6 +5,57 @@ import XCTest
 
 @MainActor
 final class ScrollCoordinatorLifecycleTests: XCTestCase {
+    func testUnalignedFramesKeepObservingAndRecoverWithoutPausingOrOpeningAdvancedSettings() async throws {
+        let fixture = try await ScrollFlowFixture.make()
+        let unrelated = try await ScrollImageFixture().frame(width: 220, height: 320, start: 0, seed: 999)
+        let source = ScrollFlowSource(images: [fixture.images[0], unrelated, fixture.images[1]])
+        let selection = SelectionSession()
+        let workflow = ScrollCaptureWorkflow(freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
+            prepare: { context in RegionSnapshot(capture: { source.current }, validate: { context }, continuous: true) },
+            activate: { _ in })
+        let coordinator = ScrollCoordinator(engine: CaptureEngine(), selection: selection, windows: WindowList(),
+            onCapture: { _, _ in }, workflow: workflow)
+        coordinator.continueFromSelection(context: fixture.context)
+        try await waitUntil { coordinator.controlProgress.frames == 1 && !coordinator.controlProgress.isWorking }
+        source.index = 1
+        try await waitUntil { coordinator.controlProgress.isMatching }
+        XCTAssertFalse(coordinator.controlProgress.isPaused)
+        XCTAssertFalse(coordinator.controlProgress.showsAdvanced)
+        XCTAssertEqual(coordinator.controlProgress.height, 320)
+        XCTAssertEqual(coordinator.resourceCounts["livePreviewImage"], 1)
+        source.index = 2
+        try await waitUntil { coordinator.controlProgress.frames == 2 }
+        XCTAssertEqual(coordinator.controlProgress.height, 352)
+        XCTAssertFalse(coordinator.controlProgress.isMatching)
+        XCTAssertFalse(coordinator.controlProgress.isPaused)
+        XCTAssertFalse(coordinator.controlProgress.showsAdvanced)
+        await coordinator.cancel()
+        XCTAssertEqual(coordinator.resourceCounts.values.reduce(0, +), 0)
+    }
+
+    func testReturningToAcceptedViewportClearsRecoveryWithoutAppendingUnrelatedPixels() async throws {
+        let fixture = try await ScrollFlowFixture.make()
+        let unrelated = try await ScrollImageFixture().frame(width: 220, height: 320, start: 0, seed: 999)
+        let source = ScrollFlowSource(images: [fixture.images[0], unrelated, fixture.images[1]])
+        let selection = SelectionSession()
+        let workflow = ScrollCaptureWorkflow(freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
+            prepare: { context in RegionSnapshot(capture: { source.current }, validate: { context }) }, activate: { _ in })
+        let coordinator = ScrollCoordinator(engine: CaptureEngine(), selection: selection, windows: WindowList(),
+            onCapture: { _, _ in }, workflow: workflow)
+        coordinator.continueFromSelection(context: fixture.context)
+        try await waitUntil { coordinator.controlProgress.frames == 1 && !coordinator.controlProgress.isWorking }
+        source.index = 1
+        try await waitUntil { coordinator.controlProgress.isMatching }
+        source.index = 0
+        try await waitUntil { !coordinator.controlProgress.isMatching }
+        XCTAssertEqual(coordinator.controlProgress.height, 320)
+        source.index = 2
+        try await waitUntil { coordinator.controlProgress.frames == 2 }
+        XCTAssertEqual(coordinator.controlProgress.height, 352)
+        await coordinator.cancel()
+        XCTAssertEqual(coordinator.resourceCounts.values.reduce(0, +), 0)
+    }
+
     func testPausingReleasesTheStreamAndAdvancedOptionsCanReopenWithoutLosingAcceptedRows() async throws {
         let fixture = try await ScrollFlowFixture.make(), source = ScrollFlowSource(images: fixture.images)
         let selection = SelectionSession()
