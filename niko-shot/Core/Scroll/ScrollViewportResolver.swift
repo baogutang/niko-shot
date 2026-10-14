@@ -74,10 +74,12 @@ enum ScrollViewportResolver {
                 queue.append(contentsOf: children.map { ($0, depth + 1) })
             }
         }
-        return frames
+        return ContinuousClock.now < deadline ? frames : []
     }
 
     private static func attribute(_ element: AXUIElement, _ key: String) -> CFTypeRef? {
+        // AX timeouts belong to each object; setting the application timeout does not propagate to children.
+        AXUIElementSetMessagingTimeout(element, 0.05)
         var value: CFTypeRef?
         return AXUIElementCopyAttributeValue(element, key as CFString, &value) == .success ? value : nil
     }
