@@ -4,7 +4,7 @@ import Foundation
 import os
 
 /// A serial CPU/disk worker. Capture timing and automatic scroll events are supplied by its coordinator.
-public actor ScrollCaptureSession {
+public actor ScrollCaptureSession: ScrollStitchSession {
     private let options: ScrollCaptureOptions
     private let directory: URL
     private let cancellation = OSAllocatedUnfairLock(initialState: false)

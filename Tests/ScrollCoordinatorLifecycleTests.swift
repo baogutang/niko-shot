@@ -14,7 +14,7 @@ final class ScrollCoordinatorLifecycleTests: XCTestCase {
         let content = fixture.context.globalRect
         var prepared: CaptureContext?
         let selection = SelectionSession()
-        let workflow = ScrollCaptureWorkflow(freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
+        let workflow = ScrollCaptureWorkflow(useLegacyEngine: { true }, freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
             prepare: { context in
                 prepared = context
                 return RegionSnapshot(capture: { source.current }, validate: { context }, continuous: true)
@@ -39,7 +39,7 @@ final class ScrollCoordinatorLifecycleTests: XCTestCase {
         let unrelated = try await ScrollImageFixture().frame(width: 220, height: 320, start: 0, seed: 999)
         let source = ScrollFlowSource(images: [fixture.images[0], unrelated, fixture.images[1]])
         let selection = SelectionSession()
-        let workflow = ScrollCaptureWorkflow(freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
+        let workflow = ScrollCaptureWorkflow(useLegacyEngine: { true }, freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
             prepare: { context in RegionSnapshot(capture: { source.current }, validate: { context }, continuous: true) },
             activate: { _ in })
         let coordinator = ScrollCoordinator(engine: CaptureEngine(), selection: selection, windows: WindowList(),
@@ -67,7 +67,7 @@ final class ScrollCoordinatorLifecycleTests: XCTestCase {
         let unrelated = try await ScrollImageFixture().frame(width: 220, height: 320, start: 0, seed: 999)
         let source = ScrollFlowSource(images: [fixture.images[0], unrelated, fixture.images[1]])
         let selection = SelectionSession()
-        let workflow = ScrollCaptureWorkflow(freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
+        let workflow = ScrollCaptureWorkflow(useLegacyEngine: { true }, freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
             prepare: { context in RegionSnapshot(capture: { source.current }, validate: { context }) }, activate: { _ in })
         let coordinator = ScrollCoordinator(engine: CaptureEngine(), selection: selection, windows: WindowList(),
             onCapture: { _, _ in }, workflow: workflow)
@@ -89,7 +89,7 @@ final class ScrollCoordinatorLifecycleTests: XCTestCase {
         let fixture = try await ScrollFlowFixture.make(), source = ScrollFlowSource(images: fixture.images)
         let selection = SelectionSession()
         var prepared = 0, stops = 0
-        let workflow = ScrollCaptureWorkflow(freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
+        let workflow = ScrollCaptureWorkflow(useLegacyEngine: { true }, freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
             prepare: { context in
                 prepared += 1
                 return RegionSnapshot(capture: { source.current }, validate: { context },
@@ -126,7 +126,7 @@ final class ScrollCoordinatorLifecycleTests: XCTestCase {
         let source = ScrollFlowSource(images: fixture.images)
         var motion = false, stops = 0
         let selection = SelectionSession()
-        let workflow = ScrollCaptureWorkflow(freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
+        let workflow = ScrollCaptureWorkflow(useLegacyEngine: { true }, freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
             prepare: { context in
                 RegionSnapshot(capture: {
                     if motion { source.index = source.index == 1 ? 3 : 1 }
@@ -178,7 +178,7 @@ final class ScrollCoordinatorLifecycleTests: XCTestCase {
         let selection = SelectionSession()
         var output: CGImage?
         var prepared: [CaptureContext] = []
-        let workflow = ScrollCaptureWorkflow(freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
+        let workflow = ScrollCaptureWorkflow(useLegacyEngine: { true }, freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
             prepare: { context in
                 XCTAssertEqual(selection.windowCount, 0, "Frozen overlays must close before live capture")
                 prepared.append(context)
@@ -233,7 +233,7 @@ final class ScrollCoordinatorLifecycleTests: XCTestCase {
         let fixture = try await ScrollFlowFixture.make()
         let selection = SelectionSession()
         var prepared: [CaptureContext] = []
-        let workflow = ScrollCaptureWorkflow(freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
+        let workflow = ScrollCaptureWorkflow(useLegacyEngine: { true }, freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
             prepare: { context in
                 prepared.append(context)
                 return RegionSnapshot(capture: { fixture.images[0] }, validate: { context })
@@ -271,7 +271,7 @@ final class ScrollCoordinatorLifecycleTests: XCTestCase {
         let fixture = try await ScrollFlowFixture.make(), source = ScrollFlowSource(images: fixture.images)
         let selection = SelectionSession()
         var output: CGImage?
-        let workflow = ScrollCaptureWorkflow(freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
+        let workflow = ScrollCaptureWorkflow(useLegacyEngine: { true }, freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
             prepare: { context in RegionSnapshot(capture: { source.current }, validate: { context }) }, activate: { _ in })
         let coordinator = ScrollCoordinator(engine: CaptureEngine(), selection: selection, windows: WindowList(),
             onCapture: { image, _ in output = image }, workflow: workflow)
@@ -296,7 +296,7 @@ final class ScrollCoordinatorLifecycleTests: XCTestCase {
         let fixture = try await ScrollFlowFixture.make()
         let unrelated = try await ScrollImageFixture().frame(width: 220, height: 320, start: 0, seed: 999)
         let source = ScrollFlowSource(images: [fixture.images[0], unrelated]), selection = SelectionSession()
-        let workflow = ScrollCaptureWorkflow(freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
+        let workflow = ScrollCaptureWorkflow(useLegacyEngine: { true }, freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
             prepare: { context in RegionSnapshot(capture: { source.current }, validate: { context }) }, activate: { _ in })
         let coordinator = ScrollCoordinator(engine: CaptureEngine(), selection: selection, windows: WindowList(),
             onCapture: { _, _ in XCTFail("An unconfirmed last viewport must not be exported") }, workflow: workflow)
@@ -316,7 +316,7 @@ final class ScrollCoordinatorLifecycleTests: XCTestCase {
     func testHidingPreviewKeepsCaptureRunningAndReopeningShowsLatestAcceptedRows() async throws {
         let fixture = try await ScrollFlowFixture.make(), source = ScrollFlowSource(images: fixture.images)
         let selection = SelectionSession()
-        let workflow = ScrollCaptureWorkflow(freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
+        let workflow = ScrollCaptureWorkflow(useLegacyEngine: { true }, freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
             prepare: { context in RegionSnapshot(capture: { source.current }, validate: { context }) }, activate: { _ in })
         let coordinator = ScrollCoordinator(engine: CaptureEngine(), selection: selection, windows: WindowList(),
             onCapture: { _, _ in }, workflow: workflow)
@@ -366,7 +366,7 @@ final class ScrollCoordinatorLifecycleTests: XCTestCase {
         let target = fixture.context
         let window = ScrollWindowGeometry(id: 42, ownerPID: 123, frame: fixture.candidate.frame, isOnScreen: true)
         let baseline = ScrollTargetGeometry(context: target, window: window)
-        let workflow = ScrollCaptureWorkflow(freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
+        let workflow = ScrollCaptureWorkflow(useLegacyEngine: { true }, freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
             prepare: { _ in
                 RegionSnapshot(capture: { reads += 1; return source.current }, validate: {
                     let frame = source.index == 0 ? window.frame : window.frame.offsetBy(dx: 5, dy: 0)
@@ -401,7 +401,7 @@ final class ScrollCoordinatorLifecycleTests: XCTestCase {
         let failed = ScrollCaptureSession(workingDirectory: invalidDirectory)
         let selection = SelectionSession()
         var workers = 0
-        var workflow = ScrollCaptureWorkflow(freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
+        var workflow = ScrollCaptureWorkflow(useLegacyEngine: { true }, freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
             prepare: { context in RegionSnapshot(capture: { fixture.images[0] }, validate: { context }) }, activate: { _ in })
         workflow.makeWorker = { options in
             workers += 1
@@ -427,7 +427,7 @@ final class ScrollCoordinatorLifecycleTests: XCTestCase {
     func testAutomationCallerCancellationDrainsSelectorAndCompletesOnlyOnce() async throws {
         let fixture = try await ScrollFlowFixture.make()
         let selection = SelectionSession()
-        let workflow = ScrollCaptureWorkflow(freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
+        let workflow = ScrollCaptureWorkflow(useLegacyEngine: { true }, freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
             prepare: { _ in XCTFail("Cancelled selector started capture"); throw CancellationError() }, activate: { _ in })
         let coordinator = ScrollCoordinator(engine: CaptureEngine(), selection: selection, windows: WindowList(),
             onCapture: { _, _ in XCTFail("Cancelled automation produced output") }, workflow: workflow)

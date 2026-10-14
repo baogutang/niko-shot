@@ -6,11 +6,13 @@ import ImageIO
 /// Injectable native boundaries; production and permission-free flow tests use the same state machine.
 @MainActor
 struct ScrollCaptureWorkflow {
+    var useLegacyEngine: () -> Bool = { false }
     var freezeScreens: () async throws -> [FrozenFrame]
     var windows: () async throws -> [WindowCandidate]
     var prepare: (CaptureContext) async throws -> RegionSnapshot
     var resolveViewport: (CaptureContext) async -> CaptureContext = { $0 }
-    var makeWorker: (ScrollCaptureOptions) -> ScrollCaptureSession = { ScrollCaptureSession(options: $0, previewEnabled: true) }
+    var prepareSingleFrame: ((CaptureContext, CGWindowID?) async throws -> RegionSnapshot)?
+    var makeWorker: ((ScrollCaptureOptions) -> any ScrollStitchSession)?
     var activate: (CaptureContext) -> Void = { context in
         guard !context.appBundleID.isEmpty else { return }
         NSRunningApplication.runningApplications(withBundleIdentifier: context.appBundleID).first?.activate(options: [])
@@ -38,7 +40,14 @@ final class ScrollCoordinator {
     private var loopID = UUID()
     private var generation = UUID()
     private var capture: RegionSnapshot?
-    private var session: ScrollCaptureSession?
+    private var session: (any ScrollStitchSession)?
+    private var usesLegacyEngine = false
+    private let eventMonitor = ScrollEventMonitor()
+    private var eventTask: Task<Void, Never>?
+    private var eventOperations: [UUID: Task<Void, Never>] = [:]
+    private var autoScroll: AutoScrollLoop?
+    private var boundaryTask: Task<Void, Never>?
+    private var automaticStepCount = 0
     private var options: ScrollCaptureOptions?
     private var context: CaptureContext?
     private var acceptedSignature: StitchSignature?
@@ -65,6 +74,11 @@ final class ScrollCoordinator {
          "reselectionActions": reselectionActions == nil ? 0 : 1,
          "displayObserver": screenObserver == nil ? 0 : 1,
          "automation": automationCompletion == nil ? 0 : 1]
+            .merging(["localScrollMonitor": eventMonitor.localMonitorCount,
+                      "globalScrollMonitor": eventMonitor.globalMonitorCount,
+                      "finishTimer": eventMonitor.timerCount, "eventFrames": eventOperations.count,
+                      "autoScrollThread": autoScroll?.isRunning == true ? 1 : 0,
+                      "boundaryQuery": boundaryTask == nil ? 0 : 1]) { _, new in new }
     }
 
     init(engine: CaptureEngine, selection: SelectionSession, windows: WindowList,
@@ -74,7 +88,8 @@ final class ScrollCoordinator {
         self.selection = selection; self.onCapture = onCapture
         if let workflow { self.workflow = workflow }
         else {
-            self.workflow = ScrollCaptureWorkflow(freezeScreens: { try await engine.freezeScreens() },
+            self.workflow = ScrollCaptureWorkflow(useLegacyEngine: { AppSettings.shared.useLegacyScrollEngine },
+                freezeScreens: { try await engine.freezeScreens() },
                 windows: { try await windows.windows() }, prepare: { context in
                     if let capturePreview {
                         // Existing handoff fixtures supply one immutable live preview, with no TCC calls.
@@ -82,7 +97,10 @@ final class ScrollCoordinator {
                         return RegionSnapshot(capture: { image }, validate: { context })
                     }
                     return try await engine.scrollCapture(context: context)
-                }, resolveViewport: { await ScrollViewportResolver.resolve($0) })
+                }, resolveViewport: { await ScrollViewportResolver.resolve($0) },
+                prepareSingleFrame: capturePreview == nil ? { context, overlayID in
+                    try await WindowFrameGrabber().prepare(context: context, ownWindowID: overlayID)
+                } : nil)
         }
     }
 
@@ -257,7 +275,11 @@ final class ScrollCoordinator {
             state.mode = .manual
             state.status = "辅助功能未授权，请自行向下滚动。"
         }
-        let worker = workflow.makeWorker(options); session = worker
+        usesLegacyEngine = workflow.useLegacyEngine()
+        let worker: any ScrollStitchSession = workflow.makeWorker?(options) ?? (usesLegacyEngine
+            ? ScrollCaptureSession(options: options, previewEnabled: true) as any ScrollStitchSession
+            : RowHashScrollSession(options: options))
+        session = worker
         if selectionOverlay == nil { selectionOverlay = ScrollSelectionOverlayController() }
         selectionOverlay?.show(context: context)
         if controls == nil {
@@ -275,25 +297,29 @@ final class ScrollCoordinator {
         }
         if state.showsPreview { livePreview?.show(near: context.globalRect, avoiding: controls?.panelFrame) }
         do {
-            let prepared = try await workflow.prepare(context)
+            let prepared = try await prepareCapture(context)
             guard generation == token, !Task.isCancelled else { await prepared.stop(); throw CancellationError() }
             capture = prepared
             try updateValidatedContext()
             workflow.activate(self.context ?? context)
-            try await Task.sleep(for: .milliseconds(50))
-            let provisional = try await prepared.capture()
-            acceptedSignature = try await signature(for: provisional, options: options)
-            guard let image = try await stableFrame(token: token, requireChange: false) else {
-                throw AppError.file("首屏仍在移动，请稳定页面后重试。")
-            }
+            let image: CGImage
+            if usesLegacyEngine {
+                try await Task.sleep(for: .milliseconds(50))
+                let provisional = try await prepared.capture()
+                acceptedSignature = try await signature(for: provisional, options: options)
+                guard let stable = try await stableFrame(token: token, requireChange: false) else {
+                    throw AppError.file("首屏仍在移动，请稳定页面后重试。")
+                }
+                image = stable
+            } else { image = try await prepared.capture() }
             guard image.height - options.ignoredTop - options.ignoredBottom >= 240 else {
                 throw AppError.file("请保留至少 240 像素高的滚动内容。")
             }
             let result = try await worker.append(image)
-            let signature = try await signature(for: image, options: options)
+            if usesLegacyEngine { acceptedSignature = try await signature(for: image, options: options) }
             try Task.checkCancellation()
             guard generation == token else { return }
-            acceptedSignature = signature; apply(result)
+            apply(result)
             await refreshPreview(worker: worker, token: token)
             state.maximumOverlap = image.height - options.ignoredTop - options.ignoredBottom - 1
             state.isWorking = false
@@ -307,10 +333,23 @@ final class ScrollCoordinator {
         }
     }
 
+    private func prepareCapture(_ context: CaptureContext) async throws -> RegionSnapshot {
+        if !usesLegacyEngine, let prepare = workflow.prepareSingleFrame {
+            let overlay = selectionOverlay?.frames.first { $0.screenFrame == context.screen.frame }
+            return try await prepare(context, overlay.map { CGWindowID($0.windowNumber) })
+        }
+        return try await workflow.prepare(context)
+    }
+
     private func updateValidatedContext(forAutomaticScroll: Bool = false) throws {
         if let current = try capture?.validatedContext(forAutomaticScroll: forAutomaticScroll) {
+            if !usesLegacyEngine, let previous = context, previous.screen.id != current.screen.id {
+                // 相同 DPI 的两块屏也可能使用不同色域，不能把两种渲染结果写进同一张长图。
+                throw ScrollTargetError.displayChanged
+            }
             let moved = context?.globalRect != current.globalRect
             context = current
+            eventMonitor.update(viewport: current.globalRect)
             if moved {
                 selectionOverlay?.update(context: current)
                 controls?.show(near: current.globalRect)
@@ -319,7 +358,7 @@ final class ScrollCoordinator {
         }
     }
 
-    private func refreshPreview(worker: ScrollCaptureSession, token: UUID) async {
+    private func refreshPreview(worker: any ScrollStitchSession, token: UUID) async {
         let snapshot = await worker.livePreview
         let bands = await worker.contentBands, viewportHeight = await worker.viewportHeight
         guard generation == token, !Task.isCancelled else { return }
@@ -348,12 +387,15 @@ final class ScrollCoordinator {
         if case .appended(let height, let frames) = result {
             state.height = height; state.frames = frames; state.isBacktracking = false
             if !state.isPaused {
-                state.status = state.mode == .manual ? "向下滚动，可靠画面自动拼接。" : "正在检查下一屏并继续滚动…"
+                state.status = usesLegacyEngine
+                    ? (state.mode == .manual ? "向下滚动，可靠画面自动拼接。" : "正在检查下一屏并继续滚动…")
+                    : (state.mode == .manual ? "向下滚动，停下后自动完成。" : "正在向下滚动…")
             }
         }
     }
 
     private func startLoop(token: UUID, captureCurrentFirst: Bool = false) {
+        if !usesLegacyEngine { startEventCapture(token: token, captureCurrentFirst: captureCurrentFirst); return }
         guard loopTask == nil, !state.requiresRestart, !state.requiresReselection else { return }
         let id = UUID(); loopID = id
         loopTask = Task { [weak self] in
@@ -412,6 +454,7 @@ final class ScrollCoordinator {
                         recoveryStarted = nil; self.clearPendingMatch()
                         self.state.isBacktracking = true
                         self.state.status = "正在向上浏览；请回到已捕获位置后继续向下。"
+                    case .skipped: break
                     case .needsConfirmation(let match):
                         guard self.loopID == id else { return }
                         // Keep the accepted image and keep observing. A transient compositor frame
@@ -428,6 +471,108 @@ final class ScrollCoordinator {
             } catch is CancellationError {}
             catch { await self.handleCaptureError(error, token: token) }
         }
+    }
+
+    private func startEventCapture(token: UUID, captureCurrentFirst: Bool) {
+        guard !state.isPaused, !state.requiresRestart, !state.requiresReselection, let context else { return }
+        eventMonitor.start(viewport: context.globalRect, windowID: context.windowID,
+            onScroll: { [weak self] in self?.handleScrollEvent(resetDebounce: false) },
+            onFinished: { [weak self] in self?.finish() })
+        if captureCurrentFirst { enqueueEventFrame(token: token, scrollEvent: false) }
+        if state.mode == .automatic {
+            autoScroll?.requestStop()
+            autoScroll = AutoScrollLoop(initialStepCount: automaticStepCount) { [weak self] speed in
+                guard let self, self.generation == token, !self.state.isPaused, self.state.mode == .automatic else { return }
+                do {
+                    try self.updateValidatedContext(forAutomaticScroll: true)
+                    guard let current = self.context else { return }
+                    let point = CGPoint(x: current.globalRect.midX,
+                        y: CoordinateSpace.flippedY(current.globalRect.midY, primaryTop: NSScreen.screens.first?.frame.maxY ?? 0))
+                    // 合成事件经 AppKit 的 monitor 回到 handleScrollEvent，不额外轮询抓帧。
+                    try self.workflow.scroll(speed, point)
+                } catch {
+                    self.stopEventSources()
+                    self.state.mode = .manual
+                    self.state.status = "自动滚动不可用，请自行向下滚动。"
+                    self.startEventCapture(token: token, captureCurrentFirst: false)
+                }
+            }
+        }
+    }
+
+    /// 所有 local/global/自动滚轮共用入口；不会由 timer 或显示流自行采样。
+    func handleScrollEvent(resetDebounce: Bool = true) {
+        guard !usesLegacyEngine, isBusy, !state.isPaused, !state.isWorking, capture != nil, session != nil else { return }
+        if resetDebounce { eventMonitor.receiveScrollEvent(); return }
+        enqueueEventFrame(token: generation, scrollEvent: true)
+    }
+
+    private func enqueueEventFrame(token: UUID, scrollEvent: Bool) {
+        let id = UUID(), previous = eventTask
+        let task = Task { [weak self] in
+            guard let self else { return }
+            defer { self.eventOperations.removeValue(forKey: id); if self.eventOperations.isEmpty { self.eventTask = nil } }
+            // local monitor 在事件分发前调用；最多让出一次执行权，让目标视图完成滚轮分发。
+            await Task.yield()
+            guard self.generation == token, !Task.isCancelled, let source = self.capture, let worker = self.session else { return }
+            do {
+                try self.updateValidatedContext()
+                let image = try await source.capture()
+                // 抓帧在事件到达时发起，只有提交按事件顺序串行；不能等前帧的 GPU/拼接后再抓，
+                // 否则惯性滚动会把等待队列中的多个事件都变成同一张迟到的截图。
+                await previous?.value
+                guard self.generation == token, !Task.isCancelled, self.capture === source else { return }
+                let result = try await (scrollEvent ? worker.appendScrollEvent(image) : worker.append(image))
+                guard self.generation == token, !Task.isCancelled else { return }
+                switch result {
+                case .appended:
+                    self.apply(result); await self.refreshPreview(worker: worker, token: token)
+                case .duplicate:
+                    if await worker.isBacktracking { self.state.status = "请回到已截位置继续向下" }
+                    else if await worker.isAtBottom, !self.state.isPaused {
+                        self.state.status = "已到底，正在生成长图…"; self.finish()
+                    } else if self.state.mode == .automatic, await worker.needsBoundaryCheck {
+                        self.checkScrollBoundary(token: token)
+                    } else if self.state.status == "请回到已截位置继续向下" {
+                        self.state.status = "已回到捕获位置，请继续向下滚动。"
+                    }
+                case .skipped: break
+                case .backtracking, .needsConfirmation:
+                    assertionFailure("精确行引擎不能进入 NCC 匹配状态")
+                }
+            } catch is CancellationError {}
+            catch { await self.handleCaptureError(error, token: token) }
+        }
+        eventOperations[id] = task; eventTask = task
+    }
+
+    private func stopEventSources() {
+        eventMonitor.stop(); autoScroll?.requestStop()
+        boundaryTask?.cancel()
+    }
+
+    private func checkScrollBoundary(token: UUID) {
+        guard boundaryTask == nil, let context else { return }
+        boundaryTask = Task { [weak self] in
+            guard let self else { return }
+            let atBottom = await ScrollBoundaryResolver.isAtBottom(context)
+            self.boundaryTask = nil
+            guard self.generation == token, !Task.isCancelled, !self.state.isPaused,
+                  self.state.mode == .automatic, atBottom else { return }
+            self.state.status = "已到底，正在生成长图…"; self.finish()
+        }
+    }
+
+    private func drainEventCapture(cancel: Bool = false) async {
+        stopEventSources()
+        let pending = Array(eventOperations.values), automatic = autoScroll
+        let boundary = boundaryTask
+        if cancel { for task in pending { task.cancel() } }
+        await automatic?.stop()
+        if let automatic { automaticStepCount = automatic.stepCount }
+        await boundary?.value
+        for task in pending { await task.value }
+        autoScroll = nil; eventTask = nil
     }
 
     private func stableFrame(token: UUID, requireChange: Bool = true, loop: UUID? = nil) async throws -> CGImage? {
@@ -470,6 +615,7 @@ final class ScrollCoordinator {
 
     private func handleCaptureError(_ error: Error, token: UUID) async {
         guard generation == token, !Task.isCancelled else { return }
+        stopEventSources()
         let stoppedCapture = capture
         capture = nil
         await stoppedCapture?.stop()
@@ -479,6 +625,7 @@ final class ScrollCoordinator {
         state.isWorking = false; state.isPaused = true
         state.requiresRestart = progress.map { [.failed, .cancelled, .completed, .finishing].contains($0.state) } ?? false
         state.requiresReselection = (error as? ScrollTargetError)?.requiresReselection == true
+        if !usesLegacyEngine, let target = error as? ScrollTargetError, case .windowResized = target { state.requiresRestart = true }
         state.isMatching = false; pendingImage = nil; state.correlation = nil
         if state.requiresRestart {
             state.status = "拼接会话已结束：\(error.localizedDescription) 请重新开始；此前分块不会沿用。"
@@ -494,10 +641,12 @@ final class ScrollCoordinator {
             restart(context: context, mode: state.mode, options: options); return
         }
         let token = generation, activeLoop = loopTask
+        stopEventSources()
         loopID = UUID(); state.isPaused = true
         launchOperation { [weak self] in
             guard let self else { return }
             await activeLoop?.value
+            await self.drainEventCapture(cancel: true)
             guard self.generation == token, !Task.isCancelled, let worker = self.session else { return }
             self.loopTask = nil
             let progress = await worker.progress
@@ -516,7 +665,7 @@ final class ScrollCoordinator {
             self.state.status = "正在重新检查当前页面…"
             if self.capture == nil, let context = self.context {
                 do {
-                    let prepared = try await self.workflow.prepare(context)
+                    let prepared = try await self.prepareCapture(context)
                     guard self.generation == token, !Task.isCancelled else { await prepared.stop(); return }
                     self.capture = prepared
                 } catch { await self.handleCaptureError(error, token: token); return }
@@ -530,9 +679,11 @@ final class ScrollCoordinator {
         guard operationTask == nil, session != nil, !state.isPaused else { return }
         let token = generation, activeLoop = loopTask, source = capture
         loopID = UUID(); state.isPaused = true; state.status = "已暂停，点击继续即可接着捕获。"
+        stopEventSources()
         launchOperation { [weak self] in
             await activeLoop?.value
             guard let self, self.generation == token else { return }
+            await self.drainEventCapture(cancel: true)
             self.loopTask = nil
             self.capture = nil; await source?.stop()
         }
@@ -555,17 +706,19 @@ final class ScrollCoordinator {
     func openAdvanced() {
         guard operationTask == nil, setupWindow == nil, let context else { return }
         let token = generation, activeLoop = loopTask, wasPaused = state.isPaused
+        stopEventSources()
         loopID = UUID(); state.isPaused = true
         launchOperation { [weak self] in
             guard let self else { return }
             await activeLoop?.value
+            await self.drainEventCapture(cancel: true)
             guard self.generation == token, !Task.isCancelled else { return }
             self.loopTask = nil
             do {
                 // Pausing releases the live stream. Advanced options can still reopen a
                 // validated source, take their reference image, and immediately release it.
                 if self.capture == nil {
-                    let prepared = try await self.workflow.prepare(context)
+                    let prepared = try await self.prepareCapture(context)
                     guard self.generation == token, !Task.isCancelled else { await prepared.stop(); return }
                     self.capture = prepared
                 }
@@ -585,9 +738,10 @@ final class ScrollCoordinator {
         guard operationTask == nil, selection.state == .idle else { return }
         let token = UUID(), activeLoop = loopTask, worker = session, source = capture
         generation = token; loopID = UUID(); state.isPaused = true
+        stopEventSources()
         launchOperation { [weak self] in
             guard let self else { return }
-            await activeLoop?.value; await worker?.cancel(); await source?.stop()
+            await activeLoop?.value; await self.drainEventCapture(cancel: true); await worker?.cancel(); await source?.stop()
             guard self.generation == token, !Task.isCancelled else { return }
             self.loopTask = nil; self.session = nil; self.capture = nil; self.pendingImage = nil; self.acceptedSignature = nil
             self.removeScreenObserver()
@@ -608,7 +762,7 @@ final class ScrollCoordinator {
     }
 
     private func confirmOverlap(_ overlap: Int) {
-        guard operationTask == nil, let image = pendingImage, let worker = session, let options,
+        guard usesLegacyEngine, operationTask == nil, let image = pendingImage, let worker = session, let options,
               !state.requiresRestart, !state.requiresReselection,
               overlap >= 0, overlap < image.height - state.ignoredTop - state.ignoredBottom else { return }
         let token = generation
@@ -624,7 +778,7 @@ final class ScrollCoordinator {
                 self.state.isWorking = false; self.state.isPaused = false; self.state.isMatching = false; self.state.correlation = nil; self.apply(result)
                 await self.refreshPreview(worker: worker, token: token)
                 if self.capture == nil, let context = self.context {
-                    let prepared = try await self.workflow.prepare(context)
+                    let prepared = try await self.prepareCapture(context)
                     guard self.generation == token, !Task.isCancelled else { await prepared.stop(); return }
                     self.capture = prepared
                 }
@@ -639,22 +793,31 @@ final class ScrollCoordinator {
         guard isBusy, operationTask == nil, let worker = session, let context, state.frames > 0, !state.requiresRestart else { return }
         let token = generation, activeLoop = loopTask
         let collectLastViewport = !state.isPaused || finalViewportPending
+        stopEventSources()
         loopID = UUID(); state.isPaused = true; state.isMatching = false; state.isWorking = true
         state.status = collectLastViewport ? "正在收取最后一屏…" : "正在生成长图…"
         launchOperation { [weak self] in
             guard let self else { return }
             do {
                 await activeLoop?.value
+                await self.drainEventCapture()
                 try Task.checkCancellation()
                 guard self.generation == token else { return }
                 self.loopTask = nil
                 if collectLastViewport {
                     self.finalViewportPending = true
                     do {
-                        guard let image = try await self.stableFrame(token: token, requireChange: false) else {
-                            self.state.isWorking = false
-                            self.state.status = "最后一屏仍在移动，请停稳后点击完成，或继续捕获。"
-                            return
+                        let image: CGImage
+                        if self.usesLegacyEngine {
+                            guard let stable = try await self.stableFrame(token: token, requireChange: false) else {
+                                self.state.isWorking = false
+                                self.state.status = "最后一屏仍在移动，请停稳后点击完成，或继续捕获。"
+                                return
+                            }
+                            image = stable
+                        } else {
+                            guard let source = self.capture else { throw CancellationError() }
+                            image = try await source.capture()
                         }
                         let result = try await worker.append(image)
                         try Task.checkCancellation()
@@ -686,12 +849,13 @@ final class ScrollCoordinator {
                 let decode = Task.detached(priority: .userInitiated) { () throws -> CGImage in
                     try Task.checkCancellation()
                     guard let source = CGImageSourceCreateWithURL(output as CFURL, nil),
-                          let image = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary) else { throw AppError.imageCreation }
+                          let image = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: false] as CFDictionary) else { throw AppError.imageCreation }
                     return image
                 }
                 let image = try await withTaskCancellationHandler { try await decode.value } onCancel: { decode.cancel() }
                 try Task.checkCancellation()
                 guard self.generation == token else { return }
+                self.state.height = image.height
                 self.controls?.close(); self.controls = nil; self.livePreview?.close(); self.livePreview = nil
                 self.selectionOverlay?.close(); self.selectionOverlay = nil
                 self.state.preview = nil; self.removeScreenObserver()
@@ -719,6 +883,7 @@ final class ScrollCoordinator {
         if let cleanupTask { await cleanupTask.value; return }
         closeReselectionAlert()
         let token = generation, activeLoop = loopTask, pending = Array(operations.values)
+        stopEventSources()
         activeLoop?.cancel(); for task in pending { task.cancel() }
         let cleanup = Task {
             await self.cleanup(token: token, keepBusy: true)
@@ -763,12 +928,14 @@ final class ScrollCoordinator {
         generation = replacement; loopID = UUID()
         let worker = session, activeLoop = loopTask, source = capture
         activeLoop?.cancel()
+        stopEventSources()
         closeReselectionAlert()
         setupWindow?.onClose = nil; setupWindow?.close(); setupWindow = nil
         controls?.close(); controls = nil; livePreview?.close(); livePreview = nil; state.preview = nil; removeScreenObserver()
         selectionOverlay?.close(); selectionOverlay = nil
         selection.finish(); isBusy = true
         await activeLoop?.value
+        await drainEventCapture(cancel: true)
         await worker?.cancel()
         await source?.stop()
         guard generation == replacement else { return }
@@ -789,6 +956,7 @@ final class ScrollCoordinator {
         state.preview = nil
         state.showsPreview = true
         finalViewportPending = false
+        automaticStepCount = 0
     }
 
     private func installScreenObserver() {
@@ -797,6 +965,7 @@ final class ScrollCoordinator {
             object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
+                self.stopEventSources()
                 self.loopID = UUID(); self.state.isPaused = true; self.state.requiresReselection = true
                 self.state.status = ScrollTargetError.displayChanged.localizedDescription
             }

@@ -165,7 +165,7 @@ final class CaptureEngine {
         }
     }
 
-    private static func checkScrollDestination(windowID: UInt32, point: CGPoint) throws {
+    static func checkScrollDestination(windowID: UInt32, point: CGPoint) throws {
         let above = CGWindowListCopyWindowInfo([.optionOnScreenAboveWindow, .excludeDesktopElements], windowID) as? [[String: Any]] ?? []
         let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
         for info in above {

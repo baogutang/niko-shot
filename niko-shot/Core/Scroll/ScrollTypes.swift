@@ -1,5 +1,30 @@
 // Defines immutable scroll-stitching options, confidence decisions, progress and resource diagnostics.
 import Foundation
+import CoreGraphics
+
+/// 两个引擎共享事务边界；NCC 的匹配与稳定门控不会进入精确行引擎。
+protocol ScrollStitchSession: Actor {
+    var progress: ScrollCaptureProgress { get }
+    var livePreview: ScrollPreviewSnapshot? { get }
+    var viewportHeight: Int { get }
+    var contentBands: (top: Int, bottom: Int) { get }
+    var isAtBottom: Bool { get }
+    var isBacktracking: Bool { get }
+    var needsBoundaryCheck: Bool { get }
+    func append(_ image: CGImage) throws -> ScrollAppendResult
+    func appendScrollEvent(_ image: CGImage) throws -> ScrollAppendResult
+    func append(_ image: CGImage, forcedOverlap: Int) throws -> ScrollAppendResult
+    func canAppendReliably(_ image: CGImage) throws -> Bool
+    func finish(to destination: URL) throws -> URL
+    nonisolated func cancel() async
+}
+
+extension ScrollStitchSession {
+    var isAtBottom: Bool { false }
+    var isBacktracking: Bool { false }
+    var needsBoundaryCheck: Bool { false }
+    func appendScrollEvent(_ image: CGImage) throws -> ScrollAppendResult { try append(image) }
+}
 
 /// Fixed bands are measured in source-image pixels and removed from every captured frame.
 public struct ScrollCaptureOptions: Sendable {
@@ -31,6 +56,8 @@ public struct StitchMatch: Sendable, Equatable {
 public enum ScrollAppendResult: Sendable, Equatable {
     case appended(height: Int, frames: Int)
     case duplicate
+    /// 精确匹配没有可证明的重叠；丢弃候选，不改变已经接受的内容。
+    case skipped
     /// The user moved above the accepted boundary; keep that boundary and wait for forward motion.
     case backtracking
     case needsConfirmation(StitchMatch)

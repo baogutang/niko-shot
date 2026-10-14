@@ -62,6 +62,8 @@ final class HotkeyTests: XCTestCase {
         let original = AppSettings(defaults: store)
         XCTAssertTrue(original.autoOCR)
         XCTAssertTrue(original.automaticTranslation)
+        XCTAssertFalse(original.useLegacyScrollEngine)
+        original.useLegacyScrollEngine = true
         original.captureDelay = 3
         original.jpegQuality = 0.72
         original.presetSizes = [CaptureSizePreset(name: "测试", width: 600, height: 400)]
@@ -73,5 +75,6 @@ final class HotkeyTests: XCTestCase {
         XCTAssertEqual(restored.presetSizes, original.presetSizes)
         XCTAssertEqual(restored.recordingFPS, 60)
         XCTAssertTrue(restored.microphone)
+        XCTAssertTrue(restored.useLegacyScrollEngine)
     }
 }

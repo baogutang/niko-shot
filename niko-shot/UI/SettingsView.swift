@@ -280,6 +280,10 @@ public struct SettingsView: View {
             .font(.caption).foregroundStyle(.secondary)
         }
       }
+      SettingsGroup(title: "长截图", caption: "兼容选项在下一次长截图时生效。") {
+        Toggle("使用旧版长截图引擎", isOn: $settings.useLegacyScrollEngine)
+          .toggleStyle(.switch).accessibilityLabel("使用旧版长截图引擎")
+      }
       SettingsGroup(title: "预设尺寸", caption: "框选时可选择预设，尺寸以屏幕点数计算。") {
         ForEach(settings.presetSizes) { preset in
           HStack {
