@@ -50,9 +50,9 @@ public struct SettingsView: View {
           Section(category.title) {
             ForEach(category.sections) { item in
               HStack(spacing: 8) {
-                NikoSymbolBadge(
-                  symbol: item.symbol, tint: currentSection == item ? NikoTheme.accent : .secondary,
-                  size: 22)
+                Image(systemName: item.symbol).font(.system(size: 14, weight: .medium))
+                  .foregroundStyle(currentSection == item ? NikoTheme.accent : .secondary)
+                  .frame(width: 22).accessibilityHidden(true)
                 Text(item.title).font(.system(size: 13))
                 Spacer(minLength: 0)
               }
@@ -71,7 +71,7 @@ public struct SettingsView: View {
         HStack(spacing: 8) {
           Image("NikoMark").resizable().scaledToFit().frame(width: 24, height: 24)
             .accessibilityHidden(true)
-          Text("NIKO SHOT").font(.system(size: 12, weight: .semibold)).tracking(1)
+          Text("niko-shot").font(.system(size: 14, weight: .semibold))
           Spacer(minLength: 0)
         }.padding(.horizontal, 16).padding(.vertical, 12)
       }

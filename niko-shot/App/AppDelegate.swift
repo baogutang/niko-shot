@@ -340,8 +340,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installApplicationMenu()
         if ocrWindow == nil {
             let window = makeUtilityWindow(title: "识别与翻译")
-            window.contentMinSize = CGSize(width: 920, height: 560)
-            window.setContentSize(CGSize(width: 1120, height: 680))
+            window.contentMinSize = CGSize(width: 760, height: 520)
+            window.setContentSize(CGSize(width: 980, height: 620))
             let restoredFrame = window.setFrameUsingName("NikoTextWorkspace")
             window.setFrameAutosaveName("NikoTextWorkspace")
             if !restoredFrame { window.center() }

@@ -35,6 +35,19 @@ extension FileDragView: NSDraggingSource {
 struct FileDragPreview: NSViewRepresentable {
     let url: URL
     let image: NSImage
-    func makeNSView(context: Context) -> FileDragView { let view = FileDragView(); view.imageScaling = .scaleProportionallyUpOrDown; view.setAccessibilityLabel("拖出截图文件"); return view }
+    func makeNSView(context: Context) -> FileDragView {
+        let view = FileDragView()
+        view.imageScaling = .scaleProportionallyUpOrDown
+        view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        view.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        view.setAccessibilityLabel("拖出截图文件")
+        return view
+    }
+    // 原图的 intrinsic size 不能覆盖缩略图的尺寸，否则最近截图只露出放大后的中间一块。
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: FileDragView, context: Context) -> CGSize? {
+        guard let width = proposal.width, let height = proposal.height,
+              width.isFinite, height.isFinite, width > 0, height > 0 else { return nil }
+        return CGSize(width: width, height: height)
+    }
     func updateNSView(_ view: FileDragView, context: Context) { view.source = url; view.image = image }
 }

@@ -6,13 +6,13 @@ import SwiftUI
 @MainActor
 enum NikoTheme {
   static var canvas: Color {
-    adaptive(light: (0.965, 0.960, 0.949), dark: (0.095, 0.099, 0.108))
+    Color(nsColor: .windowBackgroundColor)
   }
   static var surface: Color {
-    adaptive(light: (1.000, 0.997, 0.987), dark: (0.135, 0.140, 0.150))
+    Color(nsColor: .controlBackgroundColor)
   }
   static var raisedSurface: Color {
-    adaptive(light: (0.945, 0.937, 0.923), dark: (0.175, 0.180, 0.190))
+    Color(nsColor: .controlColor)
   }
   static var accent: Color {
     adaptive(light: (0.620, 0.380, 0.105), dark: (0.955, 0.705, 0.365))
@@ -224,6 +224,6 @@ struct NikoActionButtonStyle: ButtonStyle {
 
   private func background(pressed: Bool) -> Color {
     if prominent { return NikoTheme.accent.opacity(pressed ? 0.21 : hovering ? 0.17 : 0.1) }
-    return Color.primary.opacity(pressed ? 0.09 : hovering ? 0.055 : 0.025)
+    return Color.primary.opacity(pressed ? 0.09 : hovering ? 0.055 : 0)
   }
 }

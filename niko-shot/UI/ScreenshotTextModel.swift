@@ -16,6 +16,7 @@ struct ScreenshotTextResourceCounts: Equatable, Sendable {
 final class ScreenshotTextModel {
     typealias RecognitionOperation = @Sendable (CGImage, [String], Bool) async throws -> [OCRBlock]
     typealias TranslationOperation = @MainActor (TranslationViewModel, String, AppSettings) -> Void
+    typealias ConfigurationCheck = @MainActor (AppSettings) -> Bool
 
     enum Section: String, CaseIterable, Identifiable {
         case original = "原文", translation = "译文"
@@ -32,10 +33,12 @@ final class ScreenshotTextModel {
     private(set) var isActive = true
     private(set) var isAwaitingSnapshot = false
     private(set) var isAwaitingTranslation = false
+    private(set) var isTranslationConfigured: Bool
 
     @ObservationIgnored var onRecognizedText: ((String) -> Void)?
     @ObservationIgnored private let recognizeOperation: RecognitionOperation
     @ObservationIgnored private let translateOperation: TranslationOperation
+    @ObservationIgnored private let configurationCheck: ConfigurationCheck
     @ObservationIgnored private var image: CGImage?
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var translateWhenReady = false
@@ -59,8 +62,11 @@ final class ScreenshotTextModel {
 
     /// Injects recognition for deterministic cancellation tests; production uses the existing Vision actor.
     init(settings: AppSettings, recognition: RecognitionOperation? = nil,
-         translationOperation: TranslationOperation? = nil) {
+         translationOperation: TranslationOperation? = nil, configurationCheck: ConfigurationCheck? = nil) {
         self.settings = settings
+        let check = configurationCheck ?? { TranslationConfiguration.isConfigured($0) }
+        self.configurationCheck = check
+        isTranslationConfigured = check(settings)
         providerConfiguration = ProviderConfiguration(settings)
         let engine = OCREngine()
         recognizeOperation = recognition ?? { image, languages, accurate in
@@ -101,6 +107,7 @@ final class ScreenshotTextModel {
     /// Displays pending work before the selection has finished exporting its pixels.
     func prepareSnapshot(translateAfterRecognition: Bool) {
         guard isActive else { return }
+        refreshConfiguration()
         cancelScheduledTranslation()
         invalidateRecognition()
         image = nil
@@ -113,12 +120,13 @@ final class ScreenshotTextModel {
         translateWhenReady = translateAfterRecognition
         feedback = nil
         translation.invalidate()
-        section = translateAfterRecognition || settings.automaticTranslation ? .translation : .original
+        section = isTranslationConfigured && (translateAfterRecognition || settings.automaticTranslation) ? .translation : .original
     }
 
     /// Starts one OCR operation, retaining older cancelled workers solely for eventual draining.
     func recognize(_ image: CGImage, translateAfterRecognition: Bool) {
         guard isActive else { return }
+        refreshConfiguration()
         cancelScheduledTranslation()
         let pendingTranslation = isAwaitingSnapshot && translateWhenReady
         invalidateRecognition()
@@ -132,7 +140,7 @@ final class ScreenshotTextModel {
         ocr.isRecognizing = true
         feedback = nil
         translation.invalidate()
-        section = translateWhenReady || settings.automaticTranslation ? .translation : .original
+        section = isTranslationConfigured && (translateWhenReady || settings.automaticTranslation) ? .translation : .original
 
         let token = generation
         let operation = recognizeOperation
@@ -171,6 +179,12 @@ final class ScreenshotTextModel {
     func requestTranslation() {
         guard isActive else { return }
         cancelScheduledTranslation()
+        refreshConfiguration()
+        guard isTranslationConfigured else {
+            section = .original
+            translateWhenReady = false
+            return
+        }
         section = .translation
         feedback = nil
         if ocr.isRecognizing || isAwaitingSnapshot {
@@ -229,15 +243,17 @@ final class ScreenshotTextModel {
         translation.invalidate()
         translation.target = language
         feedback = nil
-        if settings.automaticTranslation { section = .translation }
+        if settings.automaticTranslation && isTranslationConfigured { section = .translation }
         scheduleTranslation(after: .milliseconds(150))
     }
 
     /// Clears a result when preferences are edited in another application window.
-    func providerConfigurationChanged() {
+    func providerConfigurationChanged(credentialsChanged: Bool = false) {
         guard isActive else { return }
         let current = ProviderConfiguration(settings)
-        guard current != providerConfiguration else { return }
+        let wasConfigured = isTranslationConfigured
+        refreshConfiguration()
+        guard current != providerConfiguration || credentialsChanged || wasConfigured != isTranslationConfigured else { return }
         providerConfiguration = current
         translation.invalidate()
         feedback = nil
@@ -248,7 +264,8 @@ final class ScreenshotTextModel {
     func automaticTranslationChanged() {
         guard isActive else { return }
         cancelScheduledTranslation()
-        if settings.automaticTranslation {
+        refreshConfiguration()
+        if settings.automaticTranslation && isTranslationConfigured {
             section = .translation
             if !translation.isTranslating && translation.translatedText.isEmpty && translation.errorMessage == nil {
                 scheduleTranslation(after: .zero)
@@ -266,7 +283,8 @@ final class ScreenshotTextModel {
 
     private func scheduleTranslation(after delay: Duration) {
         cancelScheduledTranslation()
-        guard isActive, settings.automaticTranslation, !ocr.isRecognizing, !isAwaitingSnapshot,
+        refreshConfiguration()
+        guard isActive, settings.automaticTranslation, isTranslationConfigured, !ocr.isRecognizing, !isAwaitingSnapshot,
               !originalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let token = UUID()
         automaticToken = token
@@ -282,6 +300,8 @@ final class ScreenshotTextModel {
             do { try await Task.sleep(for: delay) } catch { return }
             guard let self, !Task.isCancelled, self.isActive, self.automaticToken == token,
                   self.settings.automaticTranslation, !self.ocr.isRecognizing else { return }
+            self.refreshConfiguration()
+            guard self.isTranslationConfigured else { return }
             self.feedback = nil
             self.translateOperation(self.translation, self.originalText, self.settings)
         }
@@ -291,6 +311,15 @@ final class ScreenshotTextModel {
         automaticToken = nil
         isAwaitingTranslation = false
         for task in automaticTasks.values { task.cancel() }
+    }
+
+    private func refreshConfiguration() {
+        isTranslationConfigured = configurationCheck(settings)
+        if !isTranslationConfigured {
+            cancelScheduledTranslation()
+            translation.invalidate()
+            section = .original
+        }
     }
 
     func supportsTarget(_ language: Language) -> Bool {

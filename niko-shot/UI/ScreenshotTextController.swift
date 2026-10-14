@@ -18,9 +18,10 @@ final class ScreenshotTextController: NSViewController {
 
     /// Uses the same preferences and native recognition/translation models as the expanded workspace.
     init(settings: AppSettings = .shared, recognition: ScreenshotTextModel.RecognitionOperation? = nil,
-         translationOperation: ScreenshotTextModel.TranslationOperation? = nil) {
+         translationOperation: ScreenshotTextModel.TranslationOperation? = nil,
+         configurationCheck: ScreenshotTextModel.ConfigurationCheck? = nil) {
         model = ScreenshotTextModel(settings: settings, recognition: recognition,
-            translationOperation: translationOperation)
+            translationOperation: translationOperation, configurationCheck: configurationCheck)
         super.init(nibName: nil, bundle: nil)
         model.onRecognizedText = { [weak self] text in self?.onRecognizedText?(text) }
     }
@@ -81,21 +82,28 @@ private struct ScreenshotTextView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Text("识别与翻译").font(.system(size: 13, weight: .semibold))
+                Image(systemName: model.section == .translation ? "character.bubble" : "text.viewfinder")
+                    .foregroundStyle(NikoTheme.accent).accessibilityHidden(true)
+                Text(model.isTranslationConfigured ? "识别与翻译" : "识别文字").font(.system(size: 13, weight: .semibold))
                     .accessibilityAddTraits(.isHeader)
                 Spacer(minLength: 4)
-                Picker("显示文字", selection: $model.section) {
+                if model.isTranslationConfigured {
+                  Picker("显示文字", selection: $model.section) {
                     ForEach(ScreenshotTextModel.Section.allCases) { section in
                         Text(section.rawValue).tag(section)
                     }
-                }.pickerStyle(.segmented).labelsHidden().frame(width: 132)
+                  }.pickerStyle(.segmented).labelsHidden().frame(width: 132)
+                } else {
+                    Text("\(model.originalText.count) 字").font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
+                }
                 Button(action: dismiss) {
                     Label("关闭文字结果", systemImage: "xmark").labelStyle(.iconOnly)
                         .frame(width: 26, height: 26)
                 }.buttonStyle(.borderless).help("关闭文字结果，继续标注截图")
             }.padding(.horizontal, 12).frame(height: 38)
 
-            HStack(spacing: 8) {
+            if model.isTranslationConfigured && model.section == .translation {
+              HStack(spacing: 8) {
                 Image(systemName: "globe").foregroundStyle(.secondary).accessibilityHidden(true)
                 Picker("翻译服务", selection: Binding(get: { model.providerSelection }, set: { model.selectProvider($0) })) {
                     ForEach(TranslationProviderID.allCases, id: \.rawValue) { provider in
@@ -115,7 +123,8 @@ private struct ScreenshotTextView: View {
                 Spacer(minLength: 0)
                 Text("\(model.originalText.count) 字").font(.system(size: 11)).monospacedDigit()
                     .foregroundStyle(.secondary)
-            }.controlSize(.small).padding(.horizontal, 12).frame(height: 30)
+              }.controlSize(.small).padding(.horizontal, 12).frame(height: 32)
+            }
             Divider()
             textArea.frame(maxWidth: .infinity, maxHeight: .infinity)
             statusArea
@@ -136,6 +145,9 @@ private struct ScreenshotTextView: View {
         .onChange(of: model.settings.selectedCustomTranslationID) { _, _ in model.providerConfigurationChanged() }
         .onChange(of: model.settings.customTranslationServices) { _, _ in model.providerConfigurationChanged() }
         .onChange(of: model.settings.automaticTranslation) { _, _ in model.automaticTranslationChanged() }
+        .onReceive(NotificationCenter.default.publisher(for: .translationCredentialsChanged).receive(on: RunLoop.main)) { _ in
+            model.providerConfigurationChanged(credentialsChanged: true)
+        }
     }
 
     @ViewBuilder private var textArea: some View {
@@ -172,7 +184,7 @@ private struct ScreenshotTextView: View {
                 }.frame(maxHeight: 44)
                 if model.canRetryRecognition { Button("重试", action: retry).buttonStyle(.borderless) }
             }.padding(.horizontal, 12).padding(.vertical, 5)
-        } else if let reason = model.translation.unsupportedReason(settings: model.settings) {
+        } else if model.isTranslationConfigured, let reason = model.translation.unsupportedReason(settings: model.settings) {
             Text(reason).font(.system(size: 11)).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 5)
         } else if let feedback = model.feedback ?? model.translation.statusMessage {
@@ -182,7 +194,12 @@ private struct ScreenshotTextView: View {
     }
 
     @ViewBuilder private var mainActions: some View {
-        if model.translation.isTranslating || model.isAwaitingTranslation {
+        if !model.isTranslationConfigured {
+            Button("配置翻译", systemImage: "character.bubble") {
+                (NSApp.delegate as? AppDelegate)?.showTranslationSettings()
+            }.buttonStyle(.borderless).foregroundStyle(.secondary)
+                .help("当前服务尚未配置；原文仍可编辑、复制，不会自动发送翻译请求")
+        } else if model.translation.isTranslating || model.isAwaitingTranslation {
             Button("取消翻译") { model.cancelTranslation() }
         } else if !model.settings.automaticTranslation || model.translation.errorMessage != nil ||
                     model.translation.translatedText.isEmpty && !model.ocr.isRecognizing && !model.originalText.isEmpty {

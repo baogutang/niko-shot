@@ -14,7 +14,7 @@ public struct GoogleProvider: TranslationService {
         self.session = session; self.credentials = credentials
     }
     /// Checks whether the API key is configured.
-    public func credentialsStatus() -> CredentialsStatus { !(credentials.get("google.key") ?? "").isEmpty ? .ready : .unconfigured }
+    public func credentialsStatus() -> CredentialsStatus { credentials.contains("google.key") ? .ready : .unconfigured }
     /// Builds a JSON request; absent source enables Google's detection.
     public static func makeRequest(_ request: TranslationRequest, key: String) throws -> URLRequest {
         guard !key.isEmpty else { throw TranslationError.unconfigured }

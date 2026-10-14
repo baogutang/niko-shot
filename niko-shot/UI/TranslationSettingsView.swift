@@ -65,7 +65,7 @@ struct TranslationSettingsView: View {
         Toggle("识别完成后自动翻译", isOn: $settings.automaticTranslation)
           .toggleStyle(.switch).controlSize(.small)
           .accessibilityLabel("文字识别完成后自动翻译")
-          .help("截图文字卡片与完整工作区共用；识别完成后自动翻译，编辑停止后更新译文")
+          .help("当前服务配置完成后生效；未配置时保留原文。截图文字卡片与完整工作区共用，编辑停止后更新译文")
         VStack(alignment: .leading, spacing: 8) {
           Text("配置服务").font(.system(size: 13, weight: .medium))
             .accessibilityAddTraits(.isHeader)
@@ -265,7 +265,7 @@ struct TranslationSettingsView: View {
     let accounts =
       TranslationProviderID.allCases.flatMap(CredentialField.fields).map(\.account)
       + settings.customTranslationServices.map(\.keyAccount)
-    drafts.configuredAccounts = Set(accounts.filter { !(keychain.get($0) ?? "").isEmpty })
+    drafts.configuredAccounts = Set(accounts.filter { keychain.contains($0) })
   }
 }
 
@@ -441,7 +441,7 @@ private struct ProviderCredentialEditor: View {
   private func refreshStatus() {
     let keychain = KeychainStore()
     for field in fields {
-      if !(keychain.get(field.account) ?? "").isEmpty {
+      if keychain.contains(field.account) {
         drafts.configuredAccounts.insert(field.account)
       } else {
         drafts.configuredAccounts.remove(field.account)

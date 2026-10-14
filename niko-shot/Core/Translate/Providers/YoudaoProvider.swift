@@ -16,7 +16,7 @@ public struct YoudaoProvider: TranslationService {
     }
     /// Checks both required Youdao Keychain accounts.
     public func credentialsStatus() -> CredentialsStatus {
-        ["youdao.appKey", "youdao.appSecret"].allSatisfy { !(credentials.get($0) ?? "").isEmpty } ? .ready : .unconfigured
+        ["youdao.appKey", "youdao.appSecret"].allSatisfy { credentials.contains($0) } ? .ready : .unconfigured
     }
     /// Applies the official Python3 demo's first-ten code points, code-point count and last-ten rule.
     ///

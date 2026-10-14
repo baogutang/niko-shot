@@ -23,7 +23,7 @@ struct OCRView: View {
                     recognitionPane.frame(minWidth: 240, idealWidth: 260, maxWidth: 340)
                 }
                 TranslationPane(text: model.selectedText, isRecognizing: model.isRecognizing, settings: settings, model: translationModel)
-                    .frame(minWidth: 580)
+                    .frame(minWidth: 480)
             }
             .navigationTitle("识别与翻译")
             .toolbar {
@@ -47,7 +47,7 @@ struct OCRView: View {
         }
         .background(NikoTheme.canvas)
         .tint(NikoTheme.accent)
-        .frame(minWidth: 920, minHeight: 560)
+        .frame(minWidth: 760, minHeight: 520)
     }
 
     private var selectedCount: Int { model.blocks.filter(\.selected).count }

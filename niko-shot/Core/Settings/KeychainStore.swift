@@ -26,8 +26,24 @@ public struct KeychainStore: Sendable {
         return String(data: data, encoding: .utf8)
     }
 
+    /// 配置检查只读取条目属性，不解密密码；传统登录钥匙串也不会因此弹出访问验证。
+    public func contains(_ account: String) -> Bool {
+        if let testValues { return !(testValues[account] ?? "").isEmpty }
+        var query = identity(account)
+        query[kSecReturnAttributes as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        return SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess
+    }
+
     /// Atomically adds or updates a credential; an empty value deletes the item.
     public func set(_ value: String, account: String) throws {
+        try write(value, account: account)
+        // 只通知配置已变化；原文、账号与密钥均不进入通知。
+        NotificationCenter.default.post(name: .translationCredentialsChanged, object: nil)
+    }
+
+    private func write(_ value: String, account: String) throws {
         guard testValues == nil else { throw KeychainError.status(errSecReadOnly) }
         let query = identity(account)
         if value.isEmpty {
@@ -54,6 +70,10 @@ public struct KeychainStore: Sendable {
          kSecAttrService as String: Self.service,
          kSecAttrAccount as String: account]
     }
+}
+
+extension Notification.Name {
+    static let translationCredentialsChanged = Notification.Name("niko-shot.translationCredentialsChanged")
 }
 
 /// A Keychain status translated into a user-readable system error.

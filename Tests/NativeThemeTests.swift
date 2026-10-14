@@ -9,11 +9,11 @@ final class NativeThemeTests: XCTestCase {
   func testEntirePaletteResolvesOffMainWithLightDarkAndIncreasedContrast() async {
     let swatches: [ThemeSwatch] = [
       ThemeSwatch(name: "canvas", color: NikoTheme.canvas,
-        light: [0.965, 0.960, 0.949, 1], dark: [0.095, 0.099, 0.108, 1]),
+        light: nil, dark: nil, systemReference: .window),
       ThemeSwatch(name: "surface", color: NikoTheme.surface,
-        light: [1.000, 0.997, 0.987, 1], dark: [0.135, 0.140, 0.150, 1]),
+        light: nil, dark: nil, systemReference: .controlBackground),
       ThemeSwatch(name: "raisedSurface", color: NikoTheme.raisedSurface,
-        light: [0.945, 0.937, 0.923, 1], dark: [0.175, 0.180, 0.190, 1]),
+        light: nil, dark: nil, systemReference: .control),
       ThemeSwatch(name: "accent", color: NikoTheme.accent,
         light: [0.620, 0.380, 0.105, 1], dark: [0.955, 0.705, 0.365, 1]),
       ThemeSwatch(name: "onAccent", color: NikoTheme.onAccent,
@@ -30,7 +30,7 @@ final class NativeThemeTests: XCTestCase {
       XCTAssertEqual(sample.components.count, 4, context)
       XCTAssertTrue(sample.components.allSatisfy { $0.isFinite && (0...1).contains($0) }, context)
       if let swatch = swatches.first(where: { $0.name == sample.name }),
-        let expected = sample.dark ? swatch.dark : swatch.light
+        let expected = sample.systemComponents ?? (sample.dark ? swatch.dark : swatch.light)
       {
         for (actual, expectedComponent) in zip(sample.components, expected) {
           XCTAssertEqual(actual, expectedComponent, accuracy: 0.00001, context)
@@ -48,9 +48,11 @@ final class NativeThemeTests: XCTestCase {
       for swatch in swatches {
         // SwiftUI's public resolver invokes the underlying AppKit provider on this drawing thread.
         let value = swatch.color.resolve(in: environment)
+        let expected = swatch.systemReference.map { Color(nsColor: $0.color).resolve(in: environment) }
         results.append(ThemeResolution(name: swatch.name, dark: dark,
           increasedContrast: false, isBackgroundThread: isBackgroundThread,
-          components: [Double(value.red), Double(value.green), Double(value.blue), Double(value.opacity)]))
+          components: [Double(value.red), Double(value.green), Double(value.blue), Double(value.opacity)],
+          systemComponents: expected.map { [Double($0.red), Double($0.green), Double($0.blue), Double($0.opacity)] }))
       }
       for increased in [false, true] {
         let name: NSAppearance.Name = dark
@@ -60,9 +62,11 @@ final class NativeThemeTests: XCTestCase {
         appearance.performAsCurrentDrawingAppearance {
           for swatch in swatches {
             guard let value = NSColor(swatch.color).usingColorSpace(.sRGB) else { continue }
+            let expected = swatch.systemReference?.color.usingColorSpace(.sRGB)
             results.append(ThemeResolution(name: swatch.name, dark: dark,
               increasedContrast: increased, isBackgroundThread: isBackgroundThread,
-              components: [value.redComponent, value.greenComponent, value.blueComponent, value.alphaComponent]))
+              components: [value.redComponent, value.greenComponent, value.blueComponent, value.alphaComponent],
+              systemComponents: expected.map { [$0.redComponent, $0.greenComponent, $0.blueComponent, $0.alphaComponent] }))
           }
         }
       }
@@ -76,6 +80,18 @@ private struct ThemeSwatch: Sendable {
   let color: Color
   let light: [Double]?
   let dark: [Double]?
+  var systemReference: SystemThemeColor? = nil
+}
+
+private enum SystemThemeColor: Sendable {
+  case window, controlBackground, control
+  var color: NSColor {
+    switch self {
+    case .window: .windowBackgroundColor
+    case .controlBackground: .controlBackgroundColor
+    case .control: .controlColor
+    }
+  }
 }
 
 private struct ThemeResolution: Sendable {
@@ -84,4 +100,5 @@ private struct ThemeResolution: Sendable {
   let increasedContrast: Bool
   let isBackgroundThread: Bool
   let components: [Double]
+  let systemComponents: [Double]?
 }

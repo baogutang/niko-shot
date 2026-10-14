@@ -119,7 +119,7 @@ public struct CustomRESTProvider: TranslationService {
     }
     /// Accepts key-free self-hosted services, otherwise requires the instance's Keychain value.
     public func credentialsStatus() -> CredentialsStatus {
-        !configuration.requiresAPIKey || !(credentials.get(configuration.keyAccount) ?? "").isEmpty ? .ready : .unconfigured
+        !configuration.requiresAPIKey || credentials.contains(configuration.keyAccount) ? .ready : .unconfigured
     }
     /// Builds JSON structurally before substitutions, so quotes and newlines cannot corrupt or inject its body.
     public static func makeRequest(_ request: TranslationRequest, configuration: CustomRESTConfiguration, key: String) throws -> URLRequest {

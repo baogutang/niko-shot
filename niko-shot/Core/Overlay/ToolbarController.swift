@@ -357,12 +357,12 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
         state = .active
         appearance = NSAppearance(named: .darkAqua)
         wantsLayer = true
-        layer?.cornerRadius = 14
+        layer?.cornerRadius = 12
         layer?.masksToBounds = true
         layer?.borderWidth = 0.5
         column.orientation = .vertical
-        column.alignment = .trailing
-        column.spacing = 2
+        column.alignment = .leading
+        column.spacing = 6
         column.translatesAutoresizingMaskIntoConstraints = false
         addSubview(column)
         NSLayoutConstraint.activate([
@@ -410,7 +410,7 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
             styleGroups = [[color, width]]
         }
         let groups: [[ToolbarAction]] = confirmationTitle == nil
-            ? [[.undo, .redo], [.selection], [.ocr, .translate, .pin, .scroll], [.save], [.close, .copy]]
+            ? [[.undo, .redo], [.selection], [.ocr, .translate], [.scroll], [.pin, .save], [.close, .copy]]
             : [[.close, .copy]]
         for group in groups {
             var views: [NSView] = []
@@ -420,7 +420,7 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
                                            tint: action == .copy ? HUDPalette.accent : nil,
                                            prominent: action == .copy,
                                            visibleTitle: [.undo, .redo, .ocr, .translate, .scroll].contains(action) ? title
-                                                : action == .copy && confirmationTitle != nil ? title : nil)
+                                                : action == .copy ? (confirmationTitle ?? "完成") : nil)
                 if action == .undo || action == .redo { button.isEnabled = false }
                 button.toolTip = action.keyHint.map { "\(title) · \($0)" } ?? title
                 if action == .ocr { button.toolTip = "识别文字 · 提取截图原文，可编辑、复制与查看译文" }
@@ -514,6 +514,7 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
         annotationButton?.constrainWidth(to: limit)
         var largest: CGFloat = 32
         var rowCount = 0
+        var flexibleRows: [NSLayoutConstraint] = []
         // Keep drawing/history together and text/output together instead of spilling
         // whichever actions happen to exceed one long row onto an accidental extra row.
         var rows = confirmationOnly ? [commandGroups] : [commonToolGroups + styleGroups + editingGroups, commandGroups]
@@ -523,12 +524,27 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
             var rowWidth: CGFloat = 0
             func finishRow() {
                 guard !rowViews.isEmpty else { return }
+                var hasFlexibleSpace = false
+                // 输出入口从左开始；完成动作固定在右边，避免短的一排整体向右漂移。
+                if let completion = actionButtons[.copy], let last = rowViews.last,
+                   completion.isDescendant(of: last), rowWidth + 4 <= limit {
+                    let space = NSView()
+                    space.translatesAutoresizingMaskIntoConstraints = false
+                    space.setContentHuggingPriority(.defaultLow, for: .horizontal)
+                    space.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+                    space.widthAnchor.constraint(greaterThanOrEqualToConstant: 0).isActive = true
+                    rowViews.insert(space, at: rowViews.count - 1)
+                    rowWidth += 4
+                    hasFlexibleSpace = true
+                }
                 let row = NSStackView(views: rowViews)
                 row.orientation = .horizontal
                 row.alignment = .centerY
                 row.spacing = 4
                 row.setHuggingPriority(.required, for: .horizontal)
-                row.widthAnchor.constraint(equalToConstant: rowWidth).isActive = true
+                let width = row.widthAnchor.constraint(equalToConstant: rowWidth)
+                width.isActive = true
+                if hasFlexibleSpace { flexibleRows.append(width) }
                 column.insertArrangedSubview(row, at: rowCount)
                 largest = max(largest, rowWidth)
                 rowCount += 1
@@ -565,13 +581,15 @@ final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
             }
             finishRow()
         }
-        let buttonHeight = CGFloat(rowCount) * 32 + CGFloat(max(0, rowCount - 1)) * 2 + 14
+        for width in flexibleRows { width.constant = largest }
+        let buttonHeight = CGFloat(rowCount) * 32 + CGFloat(max(0, rowCount - 1)) * 6 + 14
         var resultHeight: CGFloat = 0
         if textResultView != nil {
-            let availableHeight = max(0, maximumHeight - buttonHeight - 10)
-            resultHeight = min(preferredTextResultHeight, availableHeight) + 10
+            let attachmentSpacing = 8 + column.spacing
+            let availableHeight = max(0, maximumHeight - buttonHeight - attachmentSpacing)
+            resultHeight = min(preferredTextResultHeight, availableHeight) + attachmentSpacing
             resultWidthConstraint?.constant = largest
-            resultHeightConstraint?.constant = resultHeight - 2
+            resultHeightConstraint?.constant = resultHeight - column.spacing
             if !column.arrangedSubviews.contains(where: { $0 === resultContainer }) { column.addArrangedSubview(resultContainer) }
         }
         configuredSize = CGSize(width: min(maximumWidth, largest + 18), height: buttonHeight + resultHeight)

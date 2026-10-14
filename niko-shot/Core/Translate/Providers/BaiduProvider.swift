@@ -16,7 +16,7 @@ public struct BaiduProvider: TranslationService {
     }
     /// Checks the two required Baidu Keychain accounts.
     public func credentialsStatus() -> CredentialsStatus {
-        ["baidu.appid", "baidu.secret"].allSatisfy { !(credentials.get($0) ?? "").isEmpty } ? .ready : .unconfigured
+        ["baidu.appid", "baidu.secret"].allSatisfy { credentials.contains($0) } ? .ready : .unconfigured
     }
     /// Computes the documented MD5 signing string from raw source text.
     public static func signature(appid: String, text: String, salt: String, secret: String) -> String {

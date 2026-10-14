@@ -51,14 +51,6 @@ public actor TranslationRouter {
         return result
     }
     private func service(provider: TranslationProviderID, custom: CustomRESTConfiguration?) -> (any TranslationService)? {
-        switch provider {
-        case .baidu: return BaiduProvider(session: session, credentials: credentials)
-        case .google: return GoogleProvider(session: session, credentials: credentials)
-        case .youdao: return YoudaoProvider(session: session, credentials: credentials)
-        case .deepl: return DeepLProvider(session: session, credentials: credentials)
-        case .custom:
-            guard let custom else { return nil }
-            return CustomRESTProvider(configuration: custom, session: session, credentials: credentials)
-        }
+        TranslationConfiguration.service(provider: provider, custom: custom, session: session, credentials: credentials)
     }
 }

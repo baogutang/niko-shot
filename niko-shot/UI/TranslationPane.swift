@@ -10,6 +10,8 @@ struct TranslationPane: View {
     @Bindable private var settings: AppSettings
     @State private var model: TranslationViewModel
     @State private var showsSetupGuide = false
+    @State private var isTranslationConfigured = false
+    @State private var credentialRevision = 0
 
     /// Shows a snapshot-aware translation pane sharing persisted provider preferences.
     init(text: String, isRecognizing: Bool, settings: AppSettings = .shared, model: TranslationViewModel? = nil) {
@@ -22,16 +24,26 @@ struct TranslationPane: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Image(systemName: "globe").foregroundStyle(NikoTheme.accent).accessibilityHidden(true)
-                TranslationServicePicker(settings: settings).labelsHidden().frame(maxWidth: 210)
-                Button(action: openTranslationSettings) { Label("配置当前翻译服务", systemImage: "slider.horizontal.3").labelStyle(.iconOnly).frame(width: 26, height: 26) }
-                    .buttonStyle(.borderless).help("配置翻译服务")
+                Image(systemName: isTranslationConfigured ? "character.bubble" : "text.viewfinder")
+                    .foregroundStyle(NikoTheme.accent).accessibilityHidden(true)
+                if isTranslationConfigured {
+                    TranslationServicePicker(settings: settings).labelsHidden().frame(maxWidth: 210)
+                    Button(action: openTranslationSettings) { Label("配置当前翻译服务", systemImage: "slider.horizontal.3").labelStyle(.iconOnly).frame(width: 26, height: 26) }
+                        .buttonStyle(.borderless).help("配置翻译服务")
+                } else {
+                    Text("识别结果").font(.system(size: 13, weight: .semibold))
+                }
                 Spacer(minLength: 10)
-                Toggle("自动翻译", isOn: $settings.automaticTranslation)
+                if isTranslationConfigured {
+                  Toggle("自动翻译", isOn: $settings.automaticTranslation)
                     .toggleStyle(.switch).controlSize(.small).font(.system(size: 12)).fixedSize()
                     .help("文字识别完成后自动翻译")
-                Button { showsSetupGuide = true } label: { Label("打开申请与接入指南", systemImage: "questionmark.circle").labelStyle(.iconOnly).frame(width: 26, height: 26) }
-                    .buttonStyle(.borderless).help("当前服务的申请步骤与官方入口")
+                  Button { showsSetupGuide = true } label: { Label("打开申请与接入指南", systemImage: "questionmark.circle").labelStyle(.iconOnly).frame(width: 26, height: 26) }
+                      .buttonStyle(.borderless).help("当前服务的申请步骤与官方入口")
+                } else {
+                    Button("配置翻译服务", systemImage: "character.bubble", action: openTranslationSettings)
+                        .buttonStyle(.borderless).font(.system(size: 12))
+                }
             }
             .padding(.horizontal, 16).frame(height: 46).background(NikoTheme.raisedSurface.opacity(0.45))
             Divider()
@@ -39,17 +51,19 @@ struct TranslationPane: View {
                 textPanel(title: "原文", content: text,
                     placeholder: isRecognizing ? "正在识别…" : "勾选左侧文字区块", isResult: false)
                     .frame(minWidth: 235)
-                textPanel(title: "译文", content: model.translatedText,
+                if isTranslationConfigured {
+                  textPanel(title: "译文", content: model.translatedText,
                     placeholder: model.isTranslating ? "正在翻译…" : "等待翻译", isResult: true)
-                    .frame(minWidth: 235)
+                      .frame(minWidth: 235)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
             VStack(alignment: .leading, spacing: 8) {
-                if let reason = model.unsupportedReason(settings: settings) {
+                if isTranslationConfigured, let reason = model.unsupportedReason(settings: settings) {
                     Label(reason, systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
                 }
-                if let error = model.errorMessage {
+                if isTranslationConfigured, let error = model.errorMessage {
                     HStack(alignment: .top, spacing: 12) {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             Image(systemName: "exclamationmark.circle").accessibilityHidden(true)
@@ -63,7 +77,10 @@ struct TranslationPane: View {
                     Text(message).font(.caption).foregroundStyle(.secondary)
                 }
                 HStack(spacing: 8) {
-                    if model.isTranslating {
+                    if !isTranslationConfigured {
+                        Text("原文可直接复制；配置当前服务后自动翻译。")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                    } else if model.isTranslating {
                         ProgressView().controlSize(.small)
                         Text("正在翻译…").font(.system(size: 11)).foregroundStyle(.secondary)
                     } else if let detected = model.detectedSource {
@@ -72,9 +89,9 @@ struct TranslationPane: View {
                         Text("\(text.count) 字").font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
                     }
                     Spacer()
-                    if model.isTranslating {
+                    if isTranslationConfigured && model.isTranslating {
                         Button("取消翻译") { model.cancel() }
-                    } else if !settings.automaticTranslation || model.errorMessage != nil || model.translatedText.isEmpty && !isRecognizing {
+                    } else if isTranslationConfigured && (!settings.automaticTranslation || model.errorMessage != nil || model.translatedText.isEmpty && !isRecognizing) {
                         Button(model.errorMessage == nil ? (settings.automaticTranslation ? "重新翻译" : "翻译") : "重试翻译", systemImage: "character.bubble") {
                             model.translate(text: text, settings: settings)
                         }
@@ -88,11 +105,14 @@ struct TranslationPane: View {
         .tint(NikoTheme.accent)
         .sheet(isPresented: $showsSetupGuide) { ProviderSetupGuideView(provider: settings.translationProvider) }
         .task(id: automaticInput) {
+            isTranslationConfigured = TranslationConfiguration.isConfigured(settings)
+            guard isTranslationConfigured else { model.invalidate(); return }
             guard settings.automaticTranslation, !isRecognizing,
                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   !model.hasRequested(text: text, settings: settings) else { return }
             do { try await Task.sleep(for: .milliseconds(400)) } catch { return }
             guard !Task.isCancelled, settings.automaticTranslation, !isRecognizing,
+                  TranslationConfiguration.isConfigured(settings),
                   !model.hasRequested(text: text, settings: settings) else { return }
             model.translate(text: text, settings: settings)
         }
@@ -112,6 +132,10 @@ struct TranslationPane: View {
         }
         .onChange(of: model.source) { _, _ in model.invalidate() }
         .onChange(of: model.target) { _, _ in model.invalidate() }
+        .onReceive(NotificationCenter.default.publisher(for: .translationCredentialsChanged).receive(on: RunLoop.main)) { _ in
+            model.invalidate()
+            credentialRevision &+= 1
+        }
         .onDisappear { model.cancel() }
     }
 
@@ -119,11 +143,12 @@ struct TranslationPane: View {
         let request: TranslationViewModel.Input
         let isRecognizing: Bool
         let enabled: Bool
+        let credentialRevision: Int
     }
 
     private var automaticInput: AutomaticInput {
         AutomaticInput(request: .init(text: text, source: model.source, target: model.target, settings: settings),
-            isRecognizing: isRecognizing, enabled: settings.automaticTranslation)
+            isRecognizing: isRecognizing, enabled: settings.automaticTranslation, credentialRevision: credentialRevision)
     }
 
     private func supports(_ language: Language, asSource: Bool) -> Bool {
@@ -165,8 +190,10 @@ struct TranslationPane: View {
                 Text(title).font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(isResult ? NikoTheme.accent : .secondary)
                     .accessibilityAddTraits(.isHeader)
-                if isResult { targetPicker.frame(maxWidth: 160) }
-                else { sourcePicker.frame(maxWidth: 160) }
+                if isTranslationConfigured {
+                    if isResult { targetPicker.frame(maxWidth: 160) }
+                    else { sourcePicker.frame(maxWidth: 160) }
+                }
                 Spacer(minLength: 0)
                 if isResult {
                     Button {

@@ -21,7 +21,7 @@ final class SelectionTextSessionTests: XCTestCase {
             [OCRBlock(text: "Capture a thought. Keep your flow.", boundingBox: .zero, confidence: 1)]
         }, translationOperation: { model, text, settings in
             model.translate(text: text, settings: settings, router: router)
-        })
+        }, configurationCheck: { _ in true })
         let session = SelectionSession(makeTextController: { controller })
         defer { session.finish() }
         try start(session) { _ in XCTFail("Translation must retain the screenshot") }
@@ -84,7 +84,7 @@ final class SelectionTextSessionTests: XCTestCase {
         var translated: [String] = []
         let controller = ScreenshotTextController(settings: settings, recognition: { image, _, _ in
             await probe.recognize(image)
-        }, translationOperation: { _, text, _ in translated.append(text) })
+        }, translationOperation: { _, text, _ in translated.append(text) }, configurationCheck: { _ in true })
         let session = SelectionSession(makeTextController: { controller })
         defer { session.finish() }
         try start(session) { _ in XCTFail("Translation must keep the screenshot open") }

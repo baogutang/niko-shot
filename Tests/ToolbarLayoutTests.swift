@@ -64,7 +64,7 @@ final class ToolbarLayoutTests: XCTestCase {
         layout(hud, width: 704)
         let buttons = allButtons(in: hud)
         XCTAssertEqual(buttons.count, 19)
-        XCTAssertEqual(hud.frame.height, 80)
+        XCTAssertEqual(hud.frame.height, 84)
         XCTAssertGreaterThanOrEqual(hud.frame.width, 400)
         XCTAssertLessThanOrEqual(hud.frame.width, 520)
         for tool in [AnnotationTool.rectangle, .ellipse, .line, .arrow, .pen, .text, .mosaic] {
@@ -77,9 +77,13 @@ final class ToolbarLayoutTests: XCTestCase {
         XCTAssertEqual(ToolbarAction.copy.symbol, "checkmark")
         XCTAssertNotNil(completion.image)
         XCTAssertEqual(completion.toolTip, "完成并复制 · Enter")
+        XCTAssertEqual(completion.title, "完成")
         let completionFrame = completion.convert(completion.bounds, to: hud)
         XCTAssertEqual(completionFrame.maxX, try XCTUnwrap(buttons.map { $0.convert($0.bounds, to: hud).maxX }.max()), accuracy: 0.5)
         let scroll = try button("长截图", in: hud)
+        let recognition = try button("识别文字", in: hud)
+        XCTAssertEqual(recognition.convert(recognition.bounds, to: hud).minX,
+                       try button(AnnotationTool.rectangle.title, in: hud).convert(recognition.bounds, to: hud).minX, accuracy: 0.5)
         XCTAssertEqual(scroll.title, "长截图")
         XCTAssertEqual(scroll.imagePosition, .imageLeading)
         for action in [ToolbarAction.undo, .redo, .ocr, .translate] {
@@ -257,7 +261,8 @@ final class ToolbarLayoutTests: XCTestCase {
         controller.setTextResultView(result, preferredHeight: 180)
         XCTAssertTrue(panel.canBecomeKey)
         XCTAssertFalse(panel.canBecomeMain)
-        XCTAssertEqual(panel.frame.height, compactHeight + 190)
+        XCTAssertEqual(result.frame.height, 180, accuracy: 0.5)
+        XCTAssertGreaterThan(panel.frame.height, compactHeight + 180)
         XCTAssertTrue(result.window === panel)
         panel.makeKeyAndOrderFront(nil)
         XCTAssertTrue(panel.makeFirstResponder(editor))

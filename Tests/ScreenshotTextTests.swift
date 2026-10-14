@@ -214,36 +214,76 @@ final class ScreenshotTextTests: XCTestCase {
         store.remove()
     }
 
-    func testUnconfiguredServiceErrorsStayInlineAndEditsLanguagesAndProvidersInvalidateThem() async throws {
+    func testUnconfiguredServiceKeepsOriginalEditableAndNeverStartsAutomaticOrExplicitRequests() async throws {
         let store = try settings()
+        store.settings.automaticTranslation = true
         store.settings.translationProvider = .custom
         let controller = ScreenshotTextController(settings: store.settings,
-            recognition: { _, _, _ in [Self.block("original")] })
+            recognition: { _, _, _ in [Self.block("original")] },
+            translationOperation: { _, _, _ in XCTFail("An unconfigured service must not receive text") },
+            configurationCheck: { TranslationConfiguration.isConfigured($0, credentials: KeychainStore(testValues: [:])) })
+        controller.prepareSnapshot(translateAfterRecognition: true)
+        XCTAssertEqual(controller.model.section, .original)
         controller.recognize(try image(width: 8), translateAfterRecognition: false)
         try await waitUntil { !controller.model.ocr.isRecognizing }
         controller.requestTranslation()
-        XCTAssertEqual(controller.translationModel.errorMessage, "请在设置中创建并选择一个自定义翻译服务。")
+        XCTAssertNil(controller.translationModel.errorMessage)
+        XCTAssertEqual(controller.model.section, .original)
+        XCTAssertTrue(store.settings.automaticTranslation, "The preference remains enabled for a later configured service")
         XCTAssertEqual(controller.translationModel.pendingRequestCount, 0)
         controller.model.editOriginal("edited 原文")
         XCTAssertNil(controller.translationModel.errorMessage)
         XCTAssertEqual(controller.model.ocr.selectedText, "edited 原文")
         controller.requestTranslation()
-        XCTAssertEqual(controller.translationModel.requestedText, "edited 原文")
+        XCTAssertEqual(controller.translationModel.requestedText, "")
         controller.model.selectTarget(.english)
         XCTAssertNil(controller.translationModel.errorMessage)
         XCTAssertEqual(controller.translationModel.target, .english)
         controller.requestTranslation()
-        XCTAssertNotNil(controller.translationModel.errorMessage)
+        XCTAssertNil(controller.translationModel.errorMessage)
         controller.model.selectProvider(TranslationProviderID.google.rawValue)
         XCTAssertNil(controller.translationModel.errorMessage)
         XCTAssertEqual(store.settings.translationProvider, .google)
         XCTAssertEqual(controller.translationModel.pendingRequestCount, 0)
+        XCTAssertEqual(controller.resourceCounts.scheduledTranslations, 0)
+        XCTAssertFalse(controller.model.isTranslationConfigured)
         controller.model.editOriginal("")
         XCTAssertTrue(controller.model.hasRecognizedResult, "Deleting all text must leave the original editor usable")
         controller.model.editOriginal("new entry")
         XCTAssertEqual(controller.model.ocr.selectedText, "new entry")
         await controller.finishAndDrain()
         store.remove()
+    }
+
+    func testSavingThenRemovingCredentialsRefreshesAnOpenCardAndCancelsQueuedText() async throws {
+        let store = try settings()
+        defer { store.remove() }
+        store.settings.automaticTranslation = true
+        let readiness = ReadinessProbe()
+        let log = TranslationLog()
+        let controller = ScreenshotTextController(settings: store.settings,
+            recognition: { _, _, _ in [Self.block("source")] },
+            translationOperation: { _, text, _ in log.texts.append(text) }, configurationCheck: { _ in readiness.ready })
+        controller.recognize(try image(width: 8), translateAfterRecognition: false)
+        try await waitUntil { !controller.model.ocr.isRecognizing }
+        XCTAssertEqual(controller.model.section, .original)
+        XCTAssertEqual(log.texts, [])
+        readiness.ready = true
+        controller.model.providerConfigurationChanged(credentialsChanged: true)
+        try await waitUntil { log.texts == ["source"] }
+        controller.model.section = .translation
+        controller.model.editOriginal("pending edit")
+        XCTAssertTrue(controller.model.isAwaitingTranslation)
+        readiness.ready = false
+        controller.model.providerConfigurationChanged(credentialsChanged: true)
+        XCTAssertEqual(controller.model.section, .original)
+        XCTAssertFalse(controller.model.isAwaitingTranslation)
+        XCTAssertNil(controller.translationModel.errorMessage)
+        try await Task.sleep(for: .milliseconds(450))
+        XCTAssertEqual(log.texts, ["source"])
+        await controller.finishAndDrain()
+        XCTAssertEqual(controller.resourceCounts.scheduledTranslations, 0)
+        XCTAssertEqual(controller.resourceCounts.translationRequests, 0)
     }
 
     func testExpandTransfersTheSameEditedOCRAndTranslationModelBeforeDeferredCleanup() async throws {
@@ -340,7 +380,7 @@ final class ScreenshotTextTests: XCTestCase {
                 log.texts.append(text)
                 log.providers.append(settings.translationProvider)
                 log.targets.append(model.target)
-            })
+            }, configurationCheck: { _ in true })
     }
 
     private func settings() throws -> SettingsStore {
@@ -408,6 +448,8 @@ final class ScreenshotTextTests: XCTestCase {
         var providers: [TranslationProviderID] = []
         var targets: [Language] = []
     }
+
+    @MainActor private final class ReadinessProbe { var ready = false }
 }
 
 /// Deliberately ignores cancellation until released, like an already executing native Vision request.

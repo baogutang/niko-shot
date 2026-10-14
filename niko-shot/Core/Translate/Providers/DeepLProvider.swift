@@ -14,7 +14,7 @@ public struct DeepLProvider: TranslationService {
         self.session = session; self.credentials = credentials
     }
     /// Checks whether a DeepL key is configured.
-    public func credentialsStatus() -> CredentialsStatus { !(credentials.get("deepl.key") ?? "").isEmpty ? .ready : .unconfigured }
+    public func credentialsStatus() -> CredentialsStatus { credentials.contains("deepl.key") ? .ready : .unconfigured }
     /// Resolves the documented Free or Pro endpoint, without inspecting or logging the key.
     public static func endpoint(for key: String) -> String {
         key.hasSuffix(":fx") ? "https://api-free.deepl.com/v2/translate" : "https://api.deepl.com/v2/translate"
