@@ -9,6 +9,24 @@ import zlib
 
 @MainActor
 final class StitcherTests: XCTestCase {
+    func testRepeatedHeadingsWithDistinctSmallMarkersKeepTheActualScrollDirection() async throws {
+        let fixture = ScrollImageFixture()
+        let document = try await fixture.sectionDocument()
+        for start in [0, 488, 976, 1_464, 1_952, 2_440, 2_928, 3_416] {
+            let previous = try await fixture.viewport(document, start: start, height: 1_084)
+            let next = try await fixture.viewport(document, start: start + 488, height: 1_084)
+            let forward = try await fixture.match(previous, next)
+            XCTAssertEqual(forward.overlap, 596)
+            XCTAssertGreaterThan(forward.correlation, 0.99)
+            XCTAssertFalse(forward.isAmbiguous)
+            XCTAssertFalse(forward.isBacktracking)
+            let backward = try await fixture.match(next, previous)
+            XCTAssertEqual(backward.overlap, 596)
+            XCTAssertGreaterThan(backward.correlation, 0.99)
+            XCTAssertFalse(backward.isAmbiguous)
+            XCTAssertTrue(backward.isBacktracking)
+        }
+    }
     func testNoiseAndTextTranslationsResolveEveryBoundaryAtOnePixel() async throws {
         let fixture = ScrollImageFixture()
         for overlap in [80, 81, 137, 199, 200] {
@@ -209,6 +227,30 @@ struct ScrollPNGInspection: Sendable {
 
 /// Rasterizes and decodes fixture images away from MainActor; no fixture pixel arrays cross actors.
 actor ScrollImageFixture {
+    /// Repeated large headings and fine unique markers mirror a real scrolling native text window.
+    func sectionDocument() throws -> CGImage {
+        let width = 1_200, height = 5_320
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: width * 4, space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { throw ScrollCaptureError.image }
+        context.setFillColor(CGColor(gray: 0.985, alpha: 1)); context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        for index in 0..<28 {
+            let top = index * 188 + 48
+            for (label, offset, size, shade) in [
+                (String(format: "%02d  NIKO - Capture the complete context", index + 1), 0, 42, 0.15),
+                ("Native scrolling test - Section \(index + 1) - Unique marker \(index * 7919 + 123)", 66, 28, 0.45)
+            ] {
+                let attributes: [NSAttributedString.Key: Any] = [
+                    NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName("Helvetica" as CFString, CGFloat(size), nil),
+                    NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: CGFloat(shade), alpha: 1)]
+                context.textPosition = CGPoint(x: 52, y: height - top - offset - size)
+                CTLineDraw(CTLineCreateWithAttributedString(NSAttributedString(string: label, attributes: attributes)), context)
+            }
+            context.setFillColor(CGColor(gray: 0.7, alpha: 1))
+            context.fill(CGRect(x: 52, y: height - top - 132, width: width - 104, height: 2))
+        }
+        guard let image = context.makeImage() else { throw ScrollCaptureError.image }; return image
+    }
     func separatorOnly(start: Int) throws -> CGImage {
         let width = 640, height = 1_000
         guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
@@ -268,7 +310,7 @@ actor ScrollImageFixture {
     }
 
     func frame(width: Int, height: Int, start: Int, seed: UInt64 = 1, top: Int = 0, bottom: Int = 0,
-               chrome: UInt8 = 70, chromeDetail: Bool = false, alpha: Bool = false, periodic: Bool = false,
+               chrome: UInt8 = 70, chromeDetail: Bool = false, chromeBorder: Int = 1, alpha: Bool = false, periodic: Bool = false,
                blankDocumentRows: Range<Int>? = nil, screenDither: Bool = false) throws -> CGImage {
         var pixels = Data(count: width * height * 4)
         pixels.withUnsafeMutableBytes { raw in
@@ -276,7 +318,8 @@ actor ScrollImageFixture {
             for row in 0..<height { for column in 0..<width {
                 let value: [UInt8]
                 if row < top || row >= height - bottom {
-                    if chromeDetail, row == top - 1 || row == height - bottom {
+                    if chromeDetail, (row >= top - chromeBorder && row < top) ||
+                        (row >= height - bottom && row < height - bottom + chromeBorder) {
                         value = [30, 30, 30, 255]
                     } else if chromeDetail, column >= 12, column < width - 12,
                               (row >= 6 && row < top - 6) || (row >= height - bottom + 6 && row < height - 6) {

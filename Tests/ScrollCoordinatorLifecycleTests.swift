@@ -5,6 +5,35 @@ import XCTest
 
 @MainActor
 final class ScrollCoordinatorLifecycleTests: XCTestCase {
+    func testResolvedScrollContentIsUsedByTheStreamOverlayAndFinishedContext() async throws {
+        let fixture = try await ScrollFlowFixture.make()
+        let source = ScrollFlowSource(images: fixture.images)
+        let fullWindow = CGRect(x: 20, y: 140, width: 240, height: 420)
+        let original = CaptureContext(screen: fixture.frame.screen, localRect: CGRect(x: 20, y: 40, width: 240, height: 420),
+            kind: "window", appBundleID: fixture.candidate.appBundleID, windowID: fixture.candidate.id, targetWindowFrame: fullWindow)
+        let content = fixture.context.globalRect
+        var prepared: CaptureContext?
+        let selection = SelectionSession()
+        let workflow = ScrollCaptureWorkflow(freezeScreens: { [fixture.frame] }, windows: { [fixture.candidate] },
+            prepare: { context in
+                prepared = context
+                return RegionSnapshot(capture: { source.current }, validate: { context }, continuous: true)
+            }, resolveViewport: { ScrollViewportResolver.refined($0, scrollAreas: [content]) }, activate: { _ in })
+        let coordinator = ScrollCoordinator(engine: CaptureEngine(), selection: selection, windows: WindowList(),
+            onCapture: { _, _ in }, workflow: workflow)
+        coordinator.continueFromSelection(context: original)
+        try await waitUntil { coordinator.controlProgress.frames == 1 && !coordinator.controlProgress.isWorking }
+        XCTAssertEqual(prepared?.globalRect, content)
+        XCTAssertEqual(coordinator.selectedViewport?.globalRect, content)
+        XCTAssertEqual(coordinator.selectedViewport?.targetWindowFrame, fullWindow)
+        source.index = 1
+        try await waitUntil { coordinator.controlProgress.frames == 2 }
+        XCTAssertEqual(coordinator.controlProgress.height, 352)
+        XCTAssertFalse(coordinator.controlProgress.isBacktracking)
+        XCTAssertFalse(coordinator.controlProgress.isMatching)
+        await coordinator.cancel()
+        XCTAssertEqual(coordinator.resourceCounts.values.reduce(0, +), 0)
+    }
     func testUnalignedFramesKeepObservingAndRecoverWithoutPausingOrOpeningAdvancedSettings() async throws {
         let fixture = try await ScrollFlowFixture.make()
         let unrelated = try await ScrollImageFixture().frame(width: 220, height: 320, start: 0, seed: 999)

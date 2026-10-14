@@ -83,13 +83,20 @@ public actor ScrollCaptureSession {
         guard previous.width == next.width else { throw ScrollCaptureError.changedWidth }
         if let firstImage, options.ignoredTop == 0, options.ignoredBottom == 0 {
             let bands = Stitcher.stationaryBands(previous: previous, current: next)
-            if bands.top + bands.bottom > 0, image.height - bands.top - bands.bottom >= 240 {
-                let reference = try Stitcher.analyze(firstImage, top: bands.top, bottom: bands.bottom)
-                let content = try Stitcher.analyze(image, top: bands.top, bottom: bands.bottom)
-                let match = try Stitcher.match(previous: reference, current: content, currentImage: image, ignoringTop: bands.top)
+            let complete = Stitcher.stationaryBands(previous: previous, current: next, completingEdge: true)
+            // A Retina divider can occupy several equal rows after its last vertical edge.
+            // Test the conservative boundary first so short blank document margins survive.
+            var tested: [(top: Int, bottom: Int)] = []
+            for trim in [bands, (bands.top, complete.bottom), (complete.top, bands.bottom), complete] {
+                guard trim.0 + trim.1 > 0, image.height - trim.0 - trim.1 >= 240,
+                      !tested.contains(where: { $0.top == trim.0 && $0.bottom == trim.1 }) else { continue }
+                tested.append((trim.0, trim.1))
+                let reference = try Stitcher.analyze(firstImage, top: trim.0, bottom: trim.1)
+                let content = try Stitcher.analyze(image, top: trim.0, bottom: trim.1)
+                let match = try Stitcher.match(previous: reference, current: content, currentImage: image, ignoringTop: trim.0)
                 // Stationarity alone never authorizes trimming; independently translated body detail must agree.
                 if !match.isAmbiguous, match.correlation >= max(0.99, options.minimumCorrelation) {
-                    return Candidate(next: content, match: match, trimmedPrevious: reference, top: bands.top, bottom: bands.bottom)
+                    return Candidate(next: content, match: match, trimmedPrevious: reference, top: trim.0, bottom: trim.1)
                 }
             }
         }

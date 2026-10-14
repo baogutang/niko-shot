@@ -9,6 +9,7 @@ struct ScrollCaptureWorkflow {
     var freezeScreens: () async throws -> [FrozenFrame]
     var windows: () async throws -> [WindowCandidate]
     var prepare: (CaptureContext) async throws -> RegionSnapshot
+    var resolveViewport: (CaptureContext) async -> CaptureContext = { $0 }
     var makeWorker: (ScrollCaptureOptions) -> ScrollCaptureSession = { ScrollCaptureSession(options: $0, previewEnabled: true) }
     var activate: (CaptureContext) -> Void = { context in
         guard !context.appBundleID.isEmpty else { return }
@@ -81,7 +82,7 @@ final class ScrollCoordinator {
                         return RegionSnapshot(capture: { image }, validate: { context })
                     }
                     return try await engine.scrollCapture(context: context)
-                })
+                }, resolveViewport: { await ScrollViewportResolver.resolve($0) })
         }
     }
 
@@ -243,6 +244,8 @@ final class ScrollCoordinator {
     }
 
     private func beginCapture(context: CaptureContext, mode: ScrollCaptureMode, options: ScrollCaptureOptions, token: UUID) async {
+        let context = await workflow.resolveViewport(context)
+        guard generation == token, !Task.isCancelled else { return }
         self.context = context; self.options = options; isBusy = true
         state.preview = nil
         finalViewportPending = false

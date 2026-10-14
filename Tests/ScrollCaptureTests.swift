@@ -6,6 +6,33 @@ import XCTest
 
 @MainActor
 final class ScrollCaptureTests: XCTestCase {
+    func testRetinaChromeDividersDoNotLeaveStationaryPixelsInTheBody() async throws {
+        let fixture = ScrollImageFixture(), session = ScrollCaptureSession(previewEnabled: true)
+        for (index, offset) in [0, 488, 976, 1_464].enumerated() {
+            let image = try await fixture.frame(width: 193, height: 1_056, start: offset,
+                                               top: 32, bottom: 24, chromeDetail: true, chromeBorder: 2)
+            let result = try await session.append(image)
+            XCTAssertEqual(result, .appended(height: index == 0 ? 1_056 : 1_000 + offset, frames: index + 1))
+        }
+        await session.cancel()
+    }
+
+    func testShortBlankDocumentMarginsSurviveCompletedChromeEdges() async throws {
+        let fixture = ScrollImageFixture()
+        for blankHeight in 1...7 {
+            for blank in [0..<blankHeight, (1_000 - blankHeight)..<1_300] {
+                let session = ScrollCaptureSession()
+                let first = try await fixture.frame(width: 193, height: 1_056, start: 0,
+                    top: 32, bottom: 24, chromeDetail: true, blankDocumentRows: blank)
+                let next = try await fixture.frame(width: 193, height: 1_056, start: 21,
+                    top: 32, bottom: 24, chromeDetail: true, blankDocumentRows: blank)
+                _ = try await session.append(first)
+                let result = try await session.append(next)
+                XCTAssertEqual(result, .appended(height: 1_021, frames: 2), "Keep all \(blankHeight) blank body rows")
+                await session.cancel()
+            }
+        }
+    }
     func testWindowChromeIsDetectedWithoutSetupAndTheDocumentIsReconstructedExactly() async throws {
         let directory = try makeDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
         let fixture = ScrollImageFixture(), session = ScrollCaptureSession(workingDirectory: directory, previewEnabled: true)

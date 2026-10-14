@@ -83,7 +83,8 @@ public enum Stitcher {
 
     /// Detects stationary edge chrome before committing a second viewport. Blank page margins
     /// are deliberately insufficient: an edge must contain stationary detail and moving body rows.
-    static func stationaryBands(previous: StitchFrameAnalysis, current: StitchFrameAnalysis) -> (top: Int, bottom: Int) {
+    static func stationaryBands(previous: StitchFrameAnalysis, current: StitchFrameAnalysis,
+                                completingEdge: Bool = false) -> (top: Int, bottom: Int) {
         guard previous.width == current.width, previous.height == current.height,
               previous.profileHeight == previous.height, current.profileHeight == current.height,
               previous.profileWidth == current.profileWidth else { return (0, 0) }
@@ -116,7 +117,9 @@ public enum Stitcher {
             }
             // A vertical window border also crosses blank paper. Only changing rows establish
             // chrome, and a long uniform suffix belongs to the page from its first row onward.
-            if stationaryRows - lastDetail >= 8 { lastDetail = max(0, lastDetail - 1) }
+            let quietRows = stationaryRows - lastDetail
+            if completingEdge, quietRows < 8 { lastDetail = stationaryRows }
+            else { lastDetail = max(0, lastDetail - 1) }
             return detailedRows >= 4 && lastDetail >= 8 ? lastDetail : 0
         }
         return (edge(backward: false), edge(backward: true))
