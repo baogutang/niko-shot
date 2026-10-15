@@ -24,10 +24,35 @@ final class AnnotationKeyboardTests: XCTestCase {
         try send("9", code: 25, to: canvas)
         XCTAssertEqual(canvas.tool, .highlight)
         try send("]", code: 30, to: canvas)
-        XCTAssertEqual(canvas.tool, .mosaic)
+        XCTAssertEqual(canvas.tool, .magnifier, "Brackets step through the toolbar exactly as it is laid out")
         XCTAssertEqual(canvas.accessibilityRole(), .group)
         XCTAssertTrue((canvas.accessibilityHelp() ?? "").contains("原图像素"))
-        XCTAssertTrue((canvas.accessibilityValue() as? String ?? "").contains("马赛克"))
+        XCTAssertTrue((canvas.accessibilityValue() as? String ?? "").contains("放大镜"))
+    }
+
+    func testEachNumberKeySelectsTheToolbarButtonAtThatPosition() {
+        for number in 1...9 {
+            let tool = AnnotationTool.toolbarTools[number - 1]
+            XCTAssertEqual(AnnotationTool.forNumberKey(number), tool)
+            XCTAssertEqual(tool.shortcutHint, String(number))
+        }
+        XCTAssertNil(AnnotationTool.toolbarTools.last?.shortcutHint)
+    }
+
+    func testHeldArrowKeysAndWheelStepsUndoAsOneChange() async throws {
+        let canvas = try await makeCanvas()
+        defer { canvas.prepareForFinish() }
+        try send(" ", code: 49, to: canvas)
+        try send("", code: 124, modifiers: .shift, to: canvas)
+        try send("", code: 125, modifiers: .shift, to: canvas)
+        try send(" ", code: 49, to: canvas)
+        let drawn = try XCTUnwrap(canvas.document.commands.first)
+        for _ in 0..<12 { try send("", code: 124, to: canvas) }
+        XCTAssertEqual(try XCTUnwrap(canvas.document.commands.first).rect.minX, drawn.rect.minX + 12)
+        canvas.undo()
+        XCTAssertEqual(canvas.document.commands.first?.rect, drawn.rect, "One undo reverts the whole held-key move")
+        canvas.undo()
+        XCTAssertTrue(canvas.document.commands.isEmpty)
     }
 
     func testKeyboardGestureMovesOneOriginalPixelAndExportsAtRetinaResolution() async throws {

@@ -1,4 +1,5 @@
 // Implements pure selection resizing math so keyboard and mouse behavior share testable rules.
+import AppKit
 import CoreGraphics
 
 enum SelectionGeometry {
@@ -42,5 +43,23 @@ enum SelectionGeometry {
             }
         }
         return result
+    }
+}
+
+/// Resize cursors that point the way each handle moves; macOS 14 falls back to the nearest classic cursor.
+@MainActor
+enum SelectionCursors {
+    /// `handle` follows `SelectionGeometry.handles` in a flipped view: 0 is top-left, clockwise to 7 (left edge).
+    static func cursor(forHandle handle: Int) -> NSCursor {
+        if #available(macOS 15.0, *) {
+            let positions: [NSCursor.FrameResizePosition] = [.topLeft, .top, .topRight, .right, .bottomRight, .bottom, .bottomLeft, .left]
+            guard positions.indices.contains(handle) else { return .crosshair }
+            return NSCursor.frameResize(position: positions[handle], directions: .all)
+        }
+        switch handle {
+        case 1, 5: return .resizeUpDown
+        case 3, 7: return .resizeLeftRight
+        default: return .crosshair
+        }
     }
 }

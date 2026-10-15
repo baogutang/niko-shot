@@ -277,6 +277,14 @@ public struct SettingsView: View {
             .font(.caption).foregroundStyle(.secondary)
         }
       }
+      SettingsGroup(title: "完成后", caption: "复制完成后剪贴板立即可用；缩略图可拖出文件，单击编辑，悬停可贴图或另存。") {
+        Toggle("播放截图提示音", isOn: $settings.playsCaptureSound)
+          .toggleStyle(.switch).frame(minHeight: 30)
+          .accessibilityLabel("截图完成时播放系统截图提示音")
+        Toggle("在屏幕右下角显示缩略图", isOn: $settings.showsCapturePreview)
+          .toggleStyle(.switch).frame(minHeight: 30)
+          .accessibilityLabel("复制截图后在屏幕右下角显示浮动缩略图")
+      }
       SettingsGroup(title: "预设尺寸", caption: "框选时可选择预设，尺寸以屏幕点数计算。") {
         ForEach(settings.presetSizes) { preset in
           HStack {

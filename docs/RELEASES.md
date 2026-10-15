@@ -54,9 +54,24 @@ PR 不导入签名凭据、不发布、不部署。版本发布任务串行，�
 
 ## 签名与 Apple 公证
 
-GitHub 正式 Release 的发布状态与 Apple 的签名、公证状态分别记录。当前未配置 Developer ID 凭据，安装包使用 ad hoc 签名，`notarized: false`。发布元数据和 DMG 内的安装说明保留实际状态；不会把 Release 标签视为 Apple 已公证。
+GitHub 正式 Release 的发布状态与 Apple 的签名、公证状态分别记录。当前未配置 Developer ID 凭据，正式版使用固定的自签名身份 **NIKO Code Signing** 签名（`signing: self-signed`，`notarized: false`）。发布元数据和 DMG 内的安装说明保留实际状态；不会把 Release 标签视为 Apple 已公证。
 
-维护者可使用现有 Developer ID Application 证书及公证账户配置以下 Actions secrets：
+### 固定签名身份（无 Developer ID 时）
+
+macOS 把「屏幕录制」「辅助功能」等授权记在应用的指定要求（designated requirement）上。ad hoc 签名的指定要求是每次构建的哈希，所以每次升级都会让授权失效；固定证书签名后，指定要求变为 `identifier "com.n1ko.niko-shot" and certificate root = H"…"`，只要证书不变，升级后授权继续有效。
+
+| Secret | 用途 |
+|---|---|
+| `NIKO_SIGNING_P12_BASE64` | 含私钥的 NIKO Code Signing P12 的 Base64 |
+| `NIKO_SIGNING_P12_PASSWORD` | P12 导出密码 |
+
+证书 SHA-1 固定在 `scripts/signing-identity.sha1`；Secret 里换成别的证书时任务失败，防止误换证书让所有用户重新授权。版本标签缺少这两项也会失败，不再回退到 ad hoc。`scripts/sign-app.sh` 是唯一的签名入口，签名后核对指定要求确实包含这张证书。私钥备份由维护者离线保管（维护者机器上的 `~/.niko-signing/`），丢失后只能换新证书，代价是所有用户再授权一次。
+
+自签名不等于 Apple 公证：首次打开下载的应用时，Gatekeeper 仍会询问一次。
+
+### Developer ID 与公证
+
+维护者可使用现有 Developer ID Application 证书及公证账户配置以下 Actions secrets（配置后优先于固定自签名身份）：
 
 | Secret | 用途 |
 |---|---|

@@ -69,22 +69,7 @@ if [[ -n "$(find "$app" -type d \( -name XCTest.framework -o -name Testing.frame
 fi
 
 signing_identity="${CI_SIGNING_IDENTITY:--}"
-sign_args=(--force --options runtime --entitlements niko-shot/Resources/niko-shot.entitlements --sign "$signing_identity")
-if [[ "$signing_identity" == - ]]; then
-  sign_args+=(--timestamp=none)
-  signing=ad-hoc
-else
-  sign_args+=(--timestamp)
-  signing=developer-id
-fi
-codesign "${sign_args[@]}" "$app"
-codesign --verify --deep --strict --verbose=2 "$app"
-codesign --display --verbose=4 "$app" 2> "$package_stage/signature.txt"
-if [[ "$signing" == developer-id ]]; then
-  grep -q '^Authority=Developer ID Application:' "$package_stage/signature.txt"
-else
-  grep -q '^Signature=adhoc$' "$package_stage/signature.txt"
-fi
+signing="$(scripts/sign-app.sh "$app" "$package_stage/signature.txt")"
 
 notarized=false
 notarize() {
@@ -114,6 +99,8 @@ if [[ "$notarized" == true ]]; then
   signing_description='Developer ID signed; Apple notarization accepted and stapled.'
 elif [[ "$signing" == developer-id ]]; then
   signing_description='Developer ID signed; NOT notarized. Gatekeeper may block the first open.'
+elif [[ "$signing" == self-signed ]]; then
+  signing_description='Signed with the stable NIKO identity (not Apple notarized): macOS keeps permissions across updates; Gatekeeper asks once on first open.'
 else
   signing_description='Signature: ad hoc. Apple notarization: not configured. Gatekeeper may require first-open approval.'
 fi

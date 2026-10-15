@@ -81,7 +81,7 @@ def read_variant(directory, architecture):
                 f"Invalid {architecture} build URL")
     require(result["sourceProvenance"] != "github-actions" or run_url is not None,
             f"GitHub Actions provenance requires a {architecture} run URL")
-    require(result["signing"] in ("ad-hoc", "developer-id"), f"Invalid {architecture} signing status")
+    require(result["signing"] in ("ad-hoc", "self-signed", "developer-id"), f"Invalid {architecture} signing status")
     require(isinstance(result["notarized"], bool), f"Invalid {architecture} notarization status")
     require(not result["notarized"] or result["signing"] == "developer-id",
             f"An ad hoc {architecture} application cannot claim notarization")

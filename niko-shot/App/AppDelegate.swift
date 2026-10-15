@@ -60,6 +60,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.scrolling.continueFromSelection(context: context)
         }
         selectionSession.onRecognizedText = { [weak self] in self?.rememberOCRText($0) }
+        CapturePreviewController.shared.onEdit = { [weak self] record in self?.openHistoryImage(record, pin: false) }
+        CapturePreviewController.shared.onPin = { [weak self] record in self?.openHistoryImage(record, pin: true) }
+        CapturePreviewController.shared.onSave = { [weak self] record in self?.saveHistoryImage(record) }
         selectionSession.onTextWorkspace = { [weak self] model, translation in
             self?.presentOCR(model, translationModel: translation)
         }
@@ -140,6 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if action == .pins { showPins(); return }
         if action == .togglePins { pinManager.toggleVisibility(); return }
         guard captureTask == nil, automationTask == nil, selectionSession.state == .idle, !recording.isBusy, !scrolling.isBusy else { return }
+        CapturePreviewController.shared.dismiss(animated: false)
         installApplicationMenu()
         if action == .record { recording.showSetup(); return }
         if action == .scroll { scrolling.select(); return }
@@ -198,12 +202,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             UserDefaults.standard.set(["screen": Double(context.screen.id), "x": context.localRect.minX, "y": context.localRect.minY, "width": context.localRect.width, "height": context.localRect.height], forKey: "lastRegion")
         }
         let action = selectionSession.outputAction
+        let id = UUID(), date = Date.now
+        let archive = AppPaths.captures.appendingPathComponent("\(id.uuidString).png")
+        // Copies claim the clipboard before any encoding, so a paste right after the click already works.
+        let clipboard = action == .pin || action == .save ? nil : DeferredCapturePayload(image: image, date: date, file: archive)
+        if let clipboard { ClipboardWriter.write(clipboard) }
+        CaptureFeedback.playShutter()
+        let previewScreen = context.screen.id != 0 ? context.screen.frame : (NSScreen.main?.frame ?? .zero)
+        let previewScale = NSScreen.screens.first { $0.frame == previewScreen }?.backingScaleFactor ?? 2
         let taskID = UUID()
         outputTasks[taskID] = Task {
             defer { outputTasks[taskID] = nil }
             do {
-                let saved = try await storeCapture(image, context: context)
-                let record = saved.record, payload = saved.payload, date = record.createdAt
+                let saved = try await storeCapture(image, context: context, id: id, date: date) { clipboard?.fulfill(png: $0) }
+                let record = saved.record
                 let file = URL(fileURLWithPath: record.path)
                 try Task.checkCancellation()
                 guard !isTerminating else { return }
@@ -211,7 +223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if AppSettings.shared.autoOCR || interactiveOCR || context.kind == "ocr" {
                     recognizeCapture(image, record: record, show: interactiveOCR)
                 }
-                if action == .pin { pinManager.pin(image: image, url: file, thumbnail: payload.2); return }
+                if action == .pin { pinManager.pin(image: image, url: file, thumbnail: record.thumbnail); return }
                 if action == .save {
                     let router = SavePanelRouter()
                     outputPanels[taskID] = router
@@ -226,39 +238,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     UserDefaults.standard.set(UserDefaults.standard.integer(forKey: "filenameSequence") + 1, forKey: "filenameSequence")
                     return
                 }
-                ClipboardWriter.write(png: payload.0, tiff: payload.1, file: file)
-            } catch is CancellationError {}
-            catch { if !isTerminating, !Task.isCancelled { ErrorPresenter.show(error) } }
+                guard action == .copy, AppSettings.shared.showsCapturePreview, selectionSession.state == .idle else { return }
+                let thumbnail = try await Self.imageWork { CapturePreviewController.makeThumbnail(image, backingScale: previewScale) }
+                guard let thumbnail, !isTerminating, selectionSession.state == .idle, captureTask == nil else { return }
+                CapturePreviewController.shared.show(record: record, thumbnail: thumbnail, screenFrame: previewScreen, status: "已复制")
+            } catch is CancellationError { clipboard?.fail() }
+            catch { clipboard?.fail(); if !isTerminating, !Task.isCancelled { ErrorPresenter.show(error) } }
         }
     }
 
     private struct SavedCapture: Sendable {
         let record: HistoryRecord
-        let payload: (Data, Data, Data)
+        let png: Data
     }
 
-    private func storeCapture(_ image: CGImage, context: CaptureContext) async throws -> SavedCapture {
-        let id = UUID(), date = Date.now
+    /// Archives a capture: the PNG first (reported through `onArchived`), then its thumbnail and history row.
+    private func storeCapture(_ image: CGImage, context: CaptureContext, id: UUID = UUID(), date: Date = .now,
+                              onArchived: @MainActor (Data) -> Void = { _ in }) async throws -> SavedCapture {
         let file = AppPaths.captures.appendingPathComponent("\(id.uuidString).png")
-        let payload = try await Self.imageWork { () -> (Data, Data, Data) in
+        let png = try await Self.imageWork { () -> Data in
             let png = try Exporters.encode(image, format: .png, date: date)
-            let tiff = try Exporters.encode(image, format: .tiff, date: date)
-            let thumbnail = try Exporters.thumbnail(from: png)
             try Task.checkCancellation()
             try FileManager.default.createDirectory(at: AppPaths.captures, withIntermediateDirectories: true)
             try png.write(to: file, options: .atomic)
-            return (png, tiff, thumbnail)
+            return png
         }
         do { try Task.checkCancellation() }
         catch { try? FileManager.default.removeItem(at: file); throw error }
+        onArchived(png)
+        let thumbnail = try await Self.imageWork { try Exporters.thumbnail(from: png) }
         let store = try getHistoryStore()
-        let record = HistoryRecord(id: id, createdAt: date, path: file.path, thumbnail: payload.2,
+        let record = HistoryRecord(id: id, createdAt: date, path: file.path, thumbnail: thumbnail,
             width: image.width, height: image.height, appBundleID: context.appBundleID, captureKind: context.kind)
         do { try await store.insert(record) }
         catch { try? FileManager.default.removeItem(at: file); throw error }
         try await store.prune(days: AppSettings.shared.historyRetention)
         menuModel.recents = try await store.list(limit: 3)
-        return SavedCapture(record: record, payload: payload)
+        return SavedCapture(record: record, png: png)
+    }
+
+    /// Saves an archived capture through the native save panel, keeping the chosen format and quality.
+    private func saveHistoryImage(_ record: HistoryRecord) {
+        guard !isTerminating else { return }
+        let taskID = UUID()
+        outputTasks[taskID] = Task {
+            defer { outputTasks[taskID] = nil }
+            do {
+                let image = try await Self.imageWork { () -> CGImage in
+                    guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: record.path) as CFURL, nil),
+                          let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { throw AppError.imageCreation }
+                    return image
+                }
+                guard !isTerminating else { return }
+                NSApp.activate(ignoringOtherApps: true)
+                let router = SavePanelRouter()
+                outputPanels[taskID] = router
+                defer { outputPanels[taskID] = nil }
+                guard let (url, format, quality) = withExtendedLifetime(router, { router.destination() }) else { return }
+                let date = record.createdAt
+                try await Self.imageWork {
+                    let encoded = try Exporters.encode(image, format: format, quality: quality, date: date)
+                    try encoded.write(to: url, options: .atomic)
+                }
+                UserDefaults.standard.set(UserDefaults.standard.integer(forKey: "filenameSequence") + 1, forKey: "filenameSequence")
+            } catch is CancellationError {}
+            catch { if !isTerminating, !Task.isCancelled { ErrorPresenter.show(error) } }
+        }
     }
 
     private func getHistoryStore() throws -> HistoryStore {
@@ -565,7 +610,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         try Task.checkCancellation()
         if command.action == .ocr {
             NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text ?? "", forType: .string)
-        } else { ClipboardWriter.write(png: saved.payload.0, tiff: saved.payload.1, file: file) }
+        } else {
+            let payload = DeferredCapturePayload(image: captured.0, date: saved.record.createdAt, file: file)
+            payload.fulfill(png: saved.png)
+            ClipboardWriter.write(payload)
+        }
         return AutomationResponse(outputPath: file.path, text: text,
             message: command.action == .ocr ? "识别文字已复制。" : "截图已保存并复制。")
     }

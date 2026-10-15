@@ -23,7 +23,8 @@ enum AnnotationTool: String, Codable, CaseIterable, Sendable {
     }
 
     /// Tools shown on the toolbar; blur and note are variants chosen in the property bar.
-    static let toolbarTools: [AnnotationTool] = [.rectangle, .ellipse, .line, .arrow, .pen, .highlight, .mosaic, .text, .step, .magnifier]
+    /// Left to right in the number-key order (1…9), so a key's tool is always the button at that position.
+    static let toolbarTools: [AnnotationTool] = [.rectangle, .ellipse, .line, .arrow, .pen, .mosaic, .text, .step, .highlight, .magnifier]
 
     /// Spec key map: 1 rect, 2 ellipse, 3 line, 4 arrow, 5 pen, 6 mosaic, 7 text, 8 step, 9 highlight.
     static func forNumberKey(_ number: Int) -> AnnotationTool? {
@@ -48,6 +49,8 @@ enum AnnotationTool: String, Codable, CaseIterable, Sendable {
     }
 
     var supportsFill: Bool { self == .rectangle || self == .ellipse }
+    /// Marks that sample the image beneath them, so their preview comes from the background renderer.
+    var needsRenderedPreview: Bool { isEffect || self == .highlight || self == .magnifier }
     var isTextual: Bool { self == .text || self == .note }
     var isEffect: Bool { self == .mosaic || self == .blur }
     var isFreehand: Bool { self == .pen }
@@ -188,6 +191,12 @@ struct AnnotationDocument: Codable, Equatable, Sendable {
     mutating func replace(_ command: AnnotationItem) {
         guard let index = commands.firstIndex(where: { $0.id == command.id }), commands[index] != command else { return }
         checkpoint(); commands[index] = command
+    }
+    /// Updates an item inside the undo step that last changed it (held arrow keys, wheel resizing).
+    mutating func amend(_ command: AnnotationItem) {
+        guard let index = commands.firstIndex(where: { $0.id == command.id }) else { return }
+        commands[index] = command
+        redoStack.removeAll()
     }
     mutating func remove(id: UUID) {
         guard let index = commands.firstIndex(where: { $0.id == id }) else { return }

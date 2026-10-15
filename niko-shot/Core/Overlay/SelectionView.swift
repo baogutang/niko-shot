@@ -4,6 +4,8 @@ import QuartzCore
 
 @MainActor
 final class SelectionView: NSView {
+    /// Darkening outside the selection; the annotation stage reuses it so the screen never changes tone.
+    static let dimAlpha: CGFloat = 0.36
     let frameInfo: FrozenFrame
     var onSelection: ((CGRect) -> Void)?
     var onConfirm: (() -> Void)?
@@ -23,8 +25,16 @@ final class SelectionView: NSView {
     private let badge = CATextLayer()
     private let handlesLayer = CAShapeLayer()
     private let hoverLayer = CAShapeLayer()
+    /// Magnifier: a pixel-exact zoom with a grid and the centre pixel outlined, then coordinates and colour.
     private let loupe = CALayer()
+    private let loupeImage = CALayer()
+    private let loupeGrid = CAShapeLayer()
+    private let loupeCenter = CAShapeLayer()
     private let loupeLabel = CATextLayer()
+    private static let loupePixels = 15
+    private static let loupeSide: CGFloat = 135
+    private static let loupeInfoHeight: CGFloat = 36
+    private var dragging = false
     private var tracking: NSTrackingArea?
     private var hitWindows: [WindowCandidate] = []
     private var hoverIndex = 0
@@ -53,7 +63,7 @@ final class SelectionView: NSView {
         wantsLayer = true
         layer?.contents = frameInfo.image
         layer?.contentsGravity = .resize
-        dim.fillColor = NSColor.black.withAlphaComponent(0.36).cgColor
+        dim.fillColor = NSColor.black.withAlphaComponent(Self.dimAlpha).cgColor
         dim.fillRule = .evenOdd
         border.strokeColor = NSColor.controlAccentColor.cgColor
         border.fillColor = NSColor.clear.cgColor
@@ -73,15 +83,39 @@ final class SelectionView: NSView {
         hoverLayer.shadowColor = NSColor.controlAccentColor.cgColor
         hoverLayer.shadowOpacity = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.7
         hoverLayer.shadowRadius = 5
-        loupe.bounds = CGRect(x: 0, y: 0, width: 112, height: 112)
-        loupe.cornerRadius = 12; loupe.masksToBounds = true
-        loupe.contents = frameInfo.image
-        loupe.magnificationFilter = .nearest
-        loupeLabel.fontSize = 12; loupeLabel.foregroundColor = NSColor.white.cgColor
-        loupeLabel.backgroundColor = NSColor.black.withAlphaComponent(0.85).cgColor
+        let side = Self.loupeSide, cell = side / CGFloat(Self.loupePixels)
+        loupe.bounds = CGRect(x: 0, y: 0, width: side, height: side + Self.loupeInfoHeight)
+        loupe.anchorPoint = .zero
+        loupe.cornerRadius = 12; loupe.cornerCurve = .continuous; loupe.masksToBounds = true
+        loupe.backgroundColor = NSColor.black.withAlphaComponent(0.86).cgColor
+        loupe.borderColor = NSColor.white.withAlphaComponent(0.28).cgColor
+        loupe.borderWidth = 1 / frameInfo.screen.scale
+        loupeImage.frame = CGRect(x: 0, y: 0, width: side, height: side)
+        loupeImage.contents = frameInfo.image
+        loupeImage.magnificationFilter = .nearest
+        let grid = CGMutablePath()
+        for index in 1..<Self.loupePixels {
+            let offset = CGFloat(index) * cell
+            grid.move(to: CGPoint(x: offset, y: 0)); grid.addLine(to: CGPoint(x: offset, y: side))
+            grid.move(to: CGPoint(x: 0, y: offset)); grid.addLine(to: CGPoint(x: side, y: offset))
+        }
+        loupeGrid.frame = loupeImage.frame
+        loupeGrid.path = grid
+        loupeGrid.strokeColor = NSColor.black.withAlphaComponent(0.16).cgColor
+        loupeGrid.lineWidth = 1 / frameInfo.screen.scale
+        let middle = CGFloat(Self.loupePixels / 2) * cell
+        loupeCenter.frame = loupeImage.frame
+        loupeCenter.path = CGPath(rect: CGRect(x: middle, y: middle, width: cell, height: cell), transform: nil)
+        loupeCenter.fillColor = NSColor.clear.cgColor
+        loupeCenter.strokeColor = NSColor.white.cgColor
+        loupeCenter.lineWidth = 1.5
+        loupeCenter.shadowColor = NSColor.black.cgColor; loupeCenter.shadowOpacity = 0.8
+        loupeCenter.shadowRadius = 1; loupeCenter.shadowOffset = .zero
+        loupeLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        loupeLabel.fontSize = 11; loupeLabel.foregroundColor = NSColor.white.cgColor
         loupeLabel.alignmentMode = .center; loupeLabel.contentsScale = frameInfo.screen.scale
-        loupeLabel.frame = CGRect(x: 0, y: 88, width: 112, height: 24)
-        loupe.addSublayer(loupeLabel)
+        loupeLabel.frame = CGRect(x: 4, y: side + 3, width: side - 8, height: Self.loupeInfoHeight - 6)
+        [loupeImage, loupeGrid, loupeCenter, loupeLabel].forEach { loupe.addSublayer($0) }
         [hoverLayer, handlesLayer, loupe].forEach { layer?.addSublayer($0) }
         loupe.isHidden = true
         setAccessibilityElement(true)
@@ -175,9 +209,13 @@ final class SelectionView: NSView {
         if loupeVisible {
             let scale = frameInfo.screen.scale
             let image = frameInfo.image
-            loupe.frame.origin = CGPoint(x: min(lastPoint.x + 22, bounds.width - 120), y: max(frameInfo.screen.safeTop + 4, min(lastPoint.y + 22, bounds.height - 120)))
-            loupe.contentsRect = CGRect(x: (lastPoint.x * scale - 7) / CGFloat(image.width), y: (lastPoint.y * scale - 7) / CGFloat(image.height), width: 14 / CGFloat(image.width), height: 14 / CGFloat(image.height))
-            loupeLabel.string = hexColor
+            loupe.position = Self.loupeOrigin(for: lastPoint, size: loupe.bounds.size, in: bounds, safeTop: frameInfo.screen.safeTop)
+            let pixels = CGFloat(Self.loupePixels), half = CGFloat(Self.loupePixels / 2)
+            let pixelX = min(CGFloat(image.width - 1), max(0, (lastPoint.x * scale).rounded(.down)))
+            let pixelY = min(CGFloat(image.height - 1), max(0, (lastPoint.y * scale).rounded(.down)))
+            loupeImage.contentsRect = CGRect(x: (pixelX - half) / CGFloat(image.width), y: (pixelY - half) / CGFloat(image.height),
+                                             width: pixels / CGFloat(image.width), height: pixels / CGFloat(image.height))
+            loupeLabel.string = "\(Int(pixelX)), \(Int(pixelY))\n\(hexColor)"
         }
         updateAccessibilitySize()
         CATransaction.commit()
@@ -193,7 +231,7 @@ final class SelectionView: NSView {
         addCursorRect(bounds, cursor: .crosshair)
         if !selection.isEmpty {
             for (index, point) in SelectionGeometry.handles(selection).enumerated() {
-                addCursorRect(CGRect(x: point.x - 6, y: point.y - 6, width: 12, height: 12), cursor: index == 1 || index == 5 ? .resizeUpDown : .resizeLeftRight)
+                addCursorRect(CGRect(x: point.x - 6, y: point.y - 6, width: 12, height: 12), cursor: SelectionCursors.cursor(forHandle: index))
             }
         }
     }
@@ -203,36 +241,71 @@ final class SelectionView: NSView {
         updatePointer(at: point)
     }
 
+    /// Beside the pointer (down and right), flipped to the other side near a screen edge so it never covers the target.
+    static func loupeOrigin(for point: CGPoint, size: CGSize, in bounds: CGRect, safeTop: CGFloat) -> CGPoint {
+        let gap: CGFloat = 20, margin: CGFloat = 6
+        var x = point.x + gap, y = point.y + gap
+        if x + size.width > bounds.maxX - margin { x = point.x - gap - size.width }
+        if y + size.height > bounds.maxY - margin { y = point.y - gap - size.height }
+        x = min(max(bounds.minX + margin, x), bounds.maxX - size.width - margin)
+        y = min(max(safeTop + margin, y), bounds.maxY - size.height - margin)
+        return CGPoint(x: x, y: y)
+    }
+
+    /// The magnifier helps while choosing or adjusting an edge, not while the pointer rests inside a finished selection.
+    private func wantsLoupe(at point: CGPoint) -> Bool {
+        guard scrollModeControl == nil else { return false }
+        if dragging || selection.isEmpty { return true }
+        return !selection.insetBy(dx: 14, dy: 14).contains(point) && selection.insetBy(dx: -14, dy: -14).contains(point)
+    }
+
     private func updatePointer(at point: CGPoint) {
         lastPoint = point
-        if selection.isEmpty {
+        if selection.isEmpty, !dragging {
             let global = CGPoint(x: frameInfo.screen.frame.minX + point.x, y: frameInfo.screen.frame.maxY - point.y)
             let hits = WindowList.hits(at: global, in: candidates)
             if hits != hitWindows { hitWindows = hits; hoverIndex = 0 }
             highlightWindow()
         }
-        if scrollModeControl != nil {
+        guard wantsLoupe(at: point) else {
             loupeVisible = false; displayUpdates?.markDirty()
             return
         }
-        let image = frameInfo.image
-        let scale = frameInfo.screen.scale
         loupeVisible = true
         displayUpdates?.markDirty()
+        sampleColor()
+    }
+
+    /// Reads the pixel under the pointer as sRGB hex; when the pointer has moved on, the latest point is read next.
+    private func sampleColor() {
         guard colorTask == nil else { return }
+        let image = frameInfo.image, scale = frameInfo.screen.scale, point = lastPoint
         colorTask = Task { [weak self] in
-            let value = await Task.detached(priority: .userInitiated) { () -> String in
-                guard let pixel = image.cropping(to: CGRect(x: min(CGFloat(image.width - 1), max(0, point.x * scale)), y: min(CGFloat(image.height - 1), max(0, point.y * scale)), width: 1, height: 1)), let context = try? ImageUtilities.context(width: 1, height: 1) else { return "#000000" }
-                context.draw(pixel, in: CGRect(x: 0, y: 0, width: 1, height: 1))
-                guard let bytes = context.data?.assumingMemoryBound(to: UInt8.self) else { return "#000000" }
-                return String(format: "#%02X%02X%02X", bytes[0], bytes[1], bytes[2])
+            let value = await Task.detached(priority: .userInitiated) {
+                Self.hex(of: image, atPixel: CGPoint(x: point.x * scale, y: point.y * scale))
             }.value
             guard !Task.isCancelled, let self else { return }
             self.colorTask = nil
-            guard self.lastPoint == point else { return }
             self.hexColor = value
             self.displayUpdates?.markDirty()
+            if self.lastPoint != point, self.loupeVisible { self.sampleColor() }
         }
+    }
+
+    /// The sRGB colour of one image pixel (top-left origin), as designers and web code expect it.
+    nonisolated static func hex(of image: CGImage, atPixel pixel: CGPoint) -> String {
+        let x = min(CGFloat(image.width - 1), max(0, pixel.x.rounded(.down)))
+        let y = min(CGFloat(image.height - 1), max(0, pixel.y.rounded(.down)))
+        guard let crop = image.cropping(to: CGRect(x: x, y: y, width: 1, height: 1)),
+              let space = CGColorSpace(name: CGColorSpace.sRGB) else { return "#000000" }
+        var bytes: [UInt8] = [0, 0, 0, 0]
+        let drawn = bytes.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(data: buffer.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                          space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            context.draw(crop, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            return true
+        }
+        return drawn ? String(format: "#%02X%02X%02X", bytes[0], bytes[1], bytes[2]) : "#000000"
     }
     private func highlightWindow() {
         defer { displayUpdates?.markDirty() }
@@ -258,7 +331,8 @@ final class SelectionView: NSView {
         }
         moving = resizeHandle == nil && selection.contains(point)
         if !moving, resizeHandle == nil { selection = .zero }
-        loupeVisible = false
+        // Moving the whole selection needs no pixel aim; drawing and edge resizing do.
+        loupeVisible = !moving && scrollModeControl == nil && !windowMode
         displayUpdates?.markDirty()
     }
     override func mouseDragged(with event: NSEvent) {
@@ -267,11 +341,13 @@ final class SelectionView: NSView {
         guard let anchor else { return }
         selectedWindow = nil; hoverRect = nil
         let point = bounded(convert(event.locationInWindow, from: nil))
+        dragging = !moving
         let aspect: CGFloat? = event.modifierFlags.contains(.shift) ? (originalRect.isEmpty ? 1 : originalRect.width / max(1, originalRect.height)) : nil
         if moving { selection = SelectionGeometry.clamp(originalRect.offsetBy(dx: point.x - anchor.x, dy: point.y - anchor.y), bounds: bounds) }
         else if let resizeHandle {
             selection = SelectionGeometry.resize(originalRect, handle: resizeHandle, to: point, aspect: aspect, centered: event.modifierFlags.contains(.option)).intersection(bounds)
         } else { selection = SelectionGeometry.drag(anchor: anchor, point: point, aspect: aspect, centered: event.modifierFlags.contains(.option)).intersection(bounds) }
+        if dragging { updatePointer(at: point) } else { loupeVisible = false }
         onSelection?(selection)
     }
     override func mouseUp(with event: NSEvent) {
@@ -280,7 +356,8 @@ final class SelectionView: NSView {
             let origin = CoordinateSpace.globalPointToScreenLocal(CGPoint(x: selectedWindow.frame.minX, y: selectedWindow.frame.maxY), screen: frameInfo.screen)
             selection = CGRect(origin: origin, size: selectedWindow.frame.size).intersection(bounds)
         }
-        anchor = nil; moving = false; resizeHandle = nil
+        anchor = nil; moving = false; resizeHandle = nil; dragging = false
+        updatePointer(at: bounded(convert(event.locationInWindow, from: nil)))
         onSelection?(selection)
         window?.invalidateCursorRects(for: self)
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)

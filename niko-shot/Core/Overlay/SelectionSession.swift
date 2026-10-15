@@ -291,8 +291,8 @@ final class SelectionSession {
                 }
                 guard !Task.isCancelled, let self, self.generation == token, self.state == .annotating else { try? FileManager.default.removeItem(at: result.1.url); return }
                 self.archive = result.1; self.editorContext = context
-                let stage = AnnotationStageView(frame: frame.screen.localBounds)
-                stage.wantsLayer = true; stage.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.5).cgColor
+                let stage = AnnotationStageView(frame: frame.screen.localBounds, backdrop: frame.image,
+                                                selection: rect, scale: frame.screen.scale)
                 let canvas = AnnotationCanvasView(image: result.0, size: rect.size)
                 if var restored = self.resumedDocument, let previous = self.resumedContext {
                     restored.rebase(by: CGPoint(x: previous.localRect.minX - rect.minX, y: previous.localRect.minY - rect.minY), canvasSize: rect.size)

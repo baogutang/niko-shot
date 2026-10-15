@@ -78,6 +78,10 @@ public final class AppSettings {
     public var showsCursor: Bool { didSet { defaults.set(showsCursor, forKey: "showsCursor") } }
     /// History retention in days; zero keeps captures until deleted.
     public var historyRetention: Int { didSet { defaults.set(historyRetention, forKey: "historyRetention") } }
+    /// Plays the system shutter sound when a capture completes.
+    public var playsCaptureSound: Bool { didSet { defaults.set(playsCaptureSound, forKey: "playsCaptureSound") } }
+    /// Shows a floating thumbnail after copying a capture, to drag out, edit, pin or save it.
+    public var showsCapturePreview: Bool { didSet { defaults.set(showsCapturePreview, forKey: "showsCapturePreview") } }
 
     /// Loads preferences from an injectable defaults store without storing any credentials.
     public init(defaults: UserDefaults = .standard) {
@@ -86,7 +90,8 @@ public final class AppSettings {
             "captureDelay": 0, "showsPixels": true, "exportFormat": "png", "jpegQuality": 0.9,
             "filenameTemplate": "niko-shot {date} {time}", "autoOCR": true, "automaticTranslation": true,
             "recordingFPS": 30, "recordingCodec": "hevc", "systemAudio": true,
-            "microphone": false, "showsCursor": true, "historyRetention": 30, "accurateOCR": true
+            "microphone": false, "showsCursor": true, "historyRetention": 30, "accurateOCR": true,
+            "playsCaptureSound": true, "showsCapturePreview": true
         ])
         captureDelay = min(10, max(0, defaults.integer(forKey: "captureDelay")))
         showsPixels = defaults.bool(forKey: "showsPixels")
@@ -123,5 +128,7 @@ public final class AppSettings {
         microphone = defaults.bool(forKey: "microphone")
         showsCursor = defaults.bool(forKey: "showsCursor")
         historyRetention = max(0, defaults.integer(forKey: "historyRetention"))
+        playsCaptureSound = defaults.bool(forKey: "playsCaptureSound")
+        showsCapturePreview = defaults.bool(forKey: "showsCapturePreview")
     }
 }

@@ -62,6 +62,8 @@ final class AnnotationCanvasView: NSView {
     fileprivate private(set) var renderedPreview: CGImage?
     private var textEditor: AnnotationTextEditor?
     private var hiddenItemID: UUID?
+    /// The item last changed by a repeatable gesture; repeats within a second extend that undo step.
+    private var amendable: (id: UUID, at: Date)?
     private let overlay = AnnotationOverlayView()
     private var tracking: NSTrackingArea?
 
@@ -103,12 +105,12 @@ final class AnnotationCanvasView: NSView {
     func refresh() {
         overlay.needsDisplay = true
         guard !isFinishing else { return }
-        let items = visibleItems
+        let items = renderSplit.rendered
         guard items != requestedPreview else { return }
         requestedPreview = items
         previewGeneration = UUID()
         for job in previewJobs.values { job.cancel() }
-        guard items.contains(where: { $0.tool.isEffect || $0.tool == .highlight || $0.tool == .magnifier }) else {
+        guard !items.isEmpty else {
             renderedPreview = nil
             return
         }
@@ -128,8 +130,8 @@ final class AnnotationCanvasView: NSView {
             self.overlay.needsDisplay = true
         }
     }
-    func undo() { guard !isFinishing else { return }; commitTextEditing(); clearPending(); document.undo(); refresh() }
-    func redo() { guard !isFinishing else { return }; commitTextEditing(); clearPending(); document.redo(); refresh() }
+    func undo() { guard !isFinishing else { return }; amendable = nil; commitTextEditing(); clearPending(); document.undo(); refresh() }
+    func redo() { guard !isFinishing else { return }; amendable = nil; commitTextEditing(); clearPending(); document.redo(); refresh() }
     func clearAll() { guard !isFinishing else { return }; commitTextEditing(); clearPending(); select(nil); document.removeAll() }
 
     /// Commits inline text and in-flight gestures before export or OCR.
@@ -158,6 +160,14 @@ final class AnnotationCanvasView: NSView {
     }
 
     // MARK: - Drawing support for the overlay
+
+    /// Marks up to the last filter-like one (which samples what lies below it) need the background renderer;
+    /// everything after it, including the mark being drawn, is drawn live so dragging never waits for a render.
+    fileprivate var renderSplit: (rendered: [AnnotationItem], live: [AnnotationItem]) {
+        let items = visibleItems
+        guard let last = items.lastIndex(where: { $0.tool.needsRenderedPreview }) else { return ([], items) }
+        return (Array(items[...last]), Array(items[(last + 1)...]))
+    }
 
     fileprivate var visibleItems: [AnnotationItem] {
         var items = document.commands.filter { $0.id != hiddenItemID }
@@ -205,6 +215,7 @@ final class AnnotationCanvasView: NSView {
         }
         window?.makeFirstResponder(self)
         keyboardEndpoint = nil
+        amendable = nil
         if let selectedID, let item = document.item(id: selectedID), let handle = Self.handleIndex(at: point, for: item) {
             drag = .resizing(handle: handle, original: item); editing = item; return
         }
@@ -271,7 +282,7 @@ final class AnnotationCanvasView: NSView {
         } else {
             item.width = min(24, max(1, item.width + step))
         }
-        commit(item)
+        commitCoalescing(item)
         syncStyle(from: item)
     }
 
@@ -299,7 +310,19 @@ final class AnnotationCanvasView: NSView {
 
     private func commit(_ item: AnnotationItem) {
         guard document.item(id: item.id) != nil else { return }
+        amendable = nil
         document.replace(item)
+    }
+
+    private func commitCoalescing(_ item: AnnotationItem) {
+        guard document.item(id: item.id) != nil else { return }
+        let now = Date()
+        if let amendable, amendable.id == item.id, now.timeIntervalSince(amendable.at) < 1, document.canUndo {
+            document.amend(item)
+        } else {
+            document.replace(item)
+        }
+        amendable = (item.id, now)
     }
 
     private func clearPending() {
@@ -408,12 +431,7 @@ final class AnnotationCanvasView: NSView {
     }
 
     private static func cursor(forHandle handle: Int, item: AnnotationItem) -> NSCursor {
-        if item.tool.isLinear { return .crosshair }
-        switch handle {
-        case 1, 5: return .resizeUpDown
-        case 3, 7: return .resizeLeftRight
-        default: return .crosshair
-        }
+        item.tool.isLinear ? .crosshair : SelectionCursors.cursor(forHandle: handle)
     }
 
     // MARK: - Geometry
@@ -554,7 +572,7 @@ final class AnnotationCanvasView: NSView {
         case 126: item.translate(by: CGPoint(x: 0, y: -step))
         default: return false
         }
-        commit(item)
+        commitCoalescing(item)
         return true
     }
 
@@ -617,14 +635,18 @@ private final class AnnotationOverlayView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let canvas, let context = NSGraphicsContext.current?.cgContext else { return }
-        if let image = canvas.renderedPreview {
-            AnnotationRenderer.drawImage(image, in: canvas.bounds, context: context)
-        } else {
-            // Expensive filters are prepared by a cancellable worker, never inside AppKit drawing.
-            for item in canvas.visibleItems where !item.tool.isEffect {
-                AnnotationRenderer.draw(item, in: context, effects: canvas.effects)
+        let split = canvas.renderSplit
+        if !split.rendered.isEmpty {
+            if let image = canvas.renderedPreview {
+                AnnotationRenderer.drawImage(image, in: canvas.bounds, context: context)
+            } else {
+                // Expensive filters are prepared by a cancellable worker, never inside AppKit drawing.
+                for item in split.rendered where !item.tool.isEffect {
+                    AnnotationRenderer.draw(item, in: context, effects: canvas.effects)
+                }
             }
         }
+        for item in split.live { AnnotationRenderer.draw(item, in: context, effects: canvas.effects) }
         guard let chrome = canvas.selectionChrome else { return }
         context.saveGState()
         let accent = NSColor.controlAccentColor.cgColor
@@ -718,12 +740,41 @@ final class AnnotationTextEditor: NSView, NSTextViewDelegate {
 final class AnnotationInlineTextView: NSTextView {
     var onCommit: (() -> Void)?
     override func keyDown(with event: NSEvent) {
+        // While an input method is composing, Escape and Return belong to its candidate window.
+        guard !hasMarkedText() else { super.keyDown(with: event); return }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if event.keyCode == 53 || ((event.keyCode == 36 || event.keyCode == 76) && flags.contains(.command)) { onCommit?(); return }
         super.keyDown(with: event)
     }
 }
 
+/// The frozen screen behind the canvas, dimmed exactly like the selector so annotating starts without a jump.
+@MainActor
 final class AnnotationStageView: NSView {
     override var isFlipped: Bool { true }
+
+    init(frame: CGRect, backdrop: CGImage, selection: CGRect, scale: CGFloat) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.contents = backdrop
+        layer?.contentsGravity = .resize
+        let dim = CAShapeLayer()
+        let path = CGMutablePath()
+        path.addRect(CGRect(origin: .zero, size: frame.size))
+        path.addRect(selection)
+        dim.path = path
+        dim.fillRule = .evenOdd
+        dim.fillColor = NSColor.black.withAlphaComponent(SelectionView.dimAlpha).cgColor
+        dim.frame = CGRect(origin: .zero, size: frame.size)
+        let border = CAShapeLayer()
+        border.path = CGPath(rect: selection.insetBy(dx: -0.5 / max(1, scale), dy: -0.5 / max(1, scale)), transform: nil)
+        border.strokeColor = NSColor.controlAccentColor.cgColor
+        border.fillColor = NSColor.clear.cgColor
+        border.lineWidth = 1 / max(1, scale)
+        border.frame = dim.frame
+        layer?.addSublayer(dim)
+        layer?.addSublayer(border)
+    }
+
+    required init?(coder: NSCoder) { nil }
 }

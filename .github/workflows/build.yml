@@ -72,8 +72,8 @@ jobs:
             CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= \
             clean build test 2>&1 | tee build/evidence/ci-tests.log
 
-      - name: Prepare optional Developer ID and notarization credentials
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Prepare release signing (Developer ID, else the stable NIKO identity)
+        if: github.event_name != 'pull_request'
         env:
           CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
           CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -81,6 +81,8 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          NIKO_SIGNING_P12_BASE64: ${{ secrets.NIKO_SIGNING_P12_BASE64 }}
+          NIKO_SIGNING_P12_PASSWORD: ${{ secrets.NIKO_SIGNING_P12_PASSWORD }}
         run: |
           set -euo pipefail
           if [[ -z "$CERTIFICATE_P12_BASE64" ]]; then
@@ -88,9 +90,41 @@ jobs:
               echo 'Signing credentials are incomplete: configure the P12 certificate or remove the partial configuration.' >&2
               exit 1
             fi
-            echo 'Signing metadata: ad-hoc; notarized=false.'
+            if [[ -z "$NIKO_SIGNING_P12_BASE64" ]]; then
+              if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+                echo 'Releases must be signed with the stable NIKO identity; ad-hoc builds reset macOS permissions on every update.' >&2
+                exit 1
+              fi
+              echo 'Signing metadata: ad-hoc; notarized=false.'
+              exit 0
+            fi
+            # A fixed self-signed identity: macOS keeps privacy grants across updates because the
+            # designated requirement names this certificate instead of each build's hash.
+            signing_dir="$(mktemp -d "$RUNNER_TEMP/niko-shot-signing.XXXXXX")"
+            signing_keychain="$signing_dir/signing.keychain-db"
+            printf 'CI_SIGNING_DIR=%s\nCI_SIGNING_KEYCHAIN=%s\n' "$signing_dir" "$signing_keychain" >> "$GITHUB_ENV"
+            keychain_password="$(openssl rand -hex 32)"
+            echo "::add-mask::$keychain_password"
+            printf '%s' "$NIKO_SIGNING_P12_BASE64" | base64 -D > "$signing_dir/certificate.p12"
+            chmod 600 "$signing_dir/certificate.p12"
+            security create-keychain -p "$keychain_password" "$signing_keychain"
+            security set-keychain-settings -lut 21600 "$signing_keychain"
+            security unlock-keychain -p "$keychain_password" "$signing_keychain"
+            security import "$signing_dir/certificate.p12" -P "$NIKO_SIGNING_P12_PASSWORD" -f pkcs12 \
+              -k "$signing_keychain" -T /usr/bin/codesign -T /usr/bin/security
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$signing_keychain" >/dev/null
+            security list-keychains -d user -s "$signing_keychain" "$HOME/Library/Keychains/login.keychain-db"
+            rm "$signing_dir/certificate.p12"
+            identity="$(security find-identity -p codesigning "$signing_keychain" | awk '/"NIKO Code Signing"/ { print $2; exit }')"
+            [[ "$identity" == "$(tr -d ' \n' < scripts/signing-identity.sha1)" ]] || {
+              echo "The signing secret holds certificate $identity, not the pinned NIKO identity." >&2
+              exit 1
+            }
+            printf 'CI_PACKAGE_SIGNING_IDENTITY=%s\nCI_SIGNING_KIND=self-signed\n' "$identity" >> "$GITHUB_ENV"
+            echo "Signing metadata: stable self-signed identity $identity; notarized=false."
             exit 0
           fi
+          [[ "$GITHUB_REF" == refs/tags/v* ]] || { echo 'Developer ID signing runs for release tags only.'; exit 0; }
           [[ "$DEVELOPER_ID_APPLICATION" == 'Developer ID Application:'* ]]
           signing_team="${DEVELOPER_ID_APPLICATION##*\(}"
           signing_team="${signing_team%\)}"
@@ -110,13 +144,23 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$signing_keychain" >/dev/null
           security list-keychains -d user -s "$signing_keychain" "$HOME/Library/Keychains/login.keychain-db"
           rm "$signing_dir/certificate.p12"
-          printf 'CI_SIGNING_IDENTITY=%s\nCI_SIGNING_TEAM=%s\n' "$DEVELOPER_ID_APPLICATION" "$signing_team" >> "$GITHUB_ENV"
+          printf 'CI_SIGNING_IDENTITY=%s\nCI_SIGNING_TEAM=%s\nCI_SIGNING_KIND=developer-id\n' "$DEVELOPER_ID_APPLICATION" "$signing_team" >> "$GITHUB_ENV"
           if [[ -n "${APPLE_ID}${APPLE_APP_PASSWORD}${APPLE_TEAM_ID}" ]]; then
             : "${APPLE_ID:?Missing APPLE_ID}" "${APPLE_APP_PASSWORD:?Missing APPLE_APP_PASSWORD}" "${APPLE_TEAM_ID:?Missing APPLE_TEAM_ID}"
             xcrun notarytool store-credentials niko-shot-ci --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
               --password "$APPLE_APP_PASSWORD" --keychain "$signing_keychain" >/dev/null
             echo 'NOTARY_PROFILE=niko-shot-ci' >> "$GITHUB_ENV"
           fi
+
+      - name: Check that the stable identity signs a real build
+        if: github.event_name != 'pull_request' && env.CI_SIGNING_KIND == 'self-signed'
+        run: |
+          set -euo pipefail
+          probe="$RUNNER_TEMP/signing-probe/niko-shot.app"
+          mkdir -p "$(dirname "$probe")"
+          ditto build/CI-Debug/Build/Products/Debug/niko-shot.app "$probe"
+          scripts/sign-app.sh "$probe"
+          rm -rf "$(dirname "$probe")"
 
       - name: Build independent optimized arm64 and x86_64 applications
         if: startsWith(github.ref, 'refs/tags/v')
