@@ -23,6 +23,15 @@ enum AppError: LocalizedError, Sendable {
 enum ErrorPresenter {
     /// Presents an error on the main actor, preserving its original message.
     static func show(_ error: any Error) {
+        // 屏幕录制与辅助功能可以把应用拖进系统列表授权：直接打开引导，而不是再弹一层警告。
+        let deniedName: String?
+        if let native = error as? AppError, case .permission(let name) = native { deniedName = name }
+        else if let recording = error as? RecordingError, case .permission(let name) = recording { deniedName = name }
+        else { deniedName = nil }
+        if let deniedName, let kind = PermissionKind.matching(deniedName) {
+            PermissionGuide.shared.present(kind)
+            return
+        }
         let alert = NSAlert()
         alert.messageText = "niko-shot"
         alert.informativeText = error.localizedDescription

@@ -8,9 +8,9 @@ import os
 final class CaptureEngine {
     private let log = OSLog(subsystem: "com.n1ko.niko-shot", category: "Capture")
 
-    /// Requests screen recording only when capture is first invoked.
+    /// Checks screen recording consent; a missing grant opens the drag-to-authorize guide instead of a system alert.
     func requirePermission() throws {
-        guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else { throw AppError.permission("屏幕录制") }
+        guard CGPreflightScreenCaptureAccess() else { throw AppError.permission("屏幕录制") }
     }
 
     /// Captures every physical screen once, retaining per-screen scale and position.
@@ -73,89 +73,6 @@ final class CaptureEngine {
         return image
     }
 
-    /// Prepares one cropped display filter for the active scrolling session instead of enumerating every frame.
-    func regionCapture(screen: ScreenGeometry, rect: CGRect) async throws -> RegionSnapshot {
-        try Task.checkCancellation()
-        try requirePermission()
-        let clipped = rect.standardized.intersection(screen.localBounds)
-        let pixels = CoordinateSpace.imagePixelRect(fromSelection: clipped, screen: screen)
-        guard !clipped.isNull, pixels.width >= 2, pixels.height >= 2 else { throw AppError.imageCreation }
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        try Task.checkCancellation()
-        guard let display = content.displays.first(where: { $0.displayID == screen.id }) else {
-            throw AppError.file("目标显示器已断开。")
-        }
-        let own = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
-        let filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
-        let configuration = SCStreamConfiguration()
-        configuration.width = Int(pixels.width); configuration.height = Int(pixels.height)
-        configuration.sourceRect = CGRect(x: pixels.minX / screen.scale, y: pixels.minY / screen.scale,
-                                          width: pixels.width / screen.scale, height: pixels.height / screen.scale)
-        configuration.showsCursor = false; configuration.captureResolution = .best
-        configuration.colorSpaceName = CGColorSpace.sRGB
-        let source = try await ScrollFrameSource.start(filter: filter, configuration: configuration)
-        return RegionSnapshot(capture: { try await source.capture() }, stop: { await source.stop() }, continuous: true)
-    }
-
-    /// Prepares a fixed window identity or a geometry-checked display viewport for scrolling.
-    func scrollCapture(context: CaptureContext) async throws -> RegionSnapshot {
-        try Task.checkCancellation()
-        try requirePermission()
-        let originalWindow = try context.windowID.flatMap { try Self.windowGeometry(id: $0) }
-        if context.windowID != nil, originalWindow == nil { throw ScrollTargetError.windowUnavailable }
-        if let originalWindow, !context.appBundleID.isEmpty,
-           NSRunningApplication(processIdentifier: originalWindow.ownerPID)?.bundleIdentifier != context.appBundleID {
-            throw ScrollTargetError.windowIdentityChanged
-        }
-        let baseline = ScrollTargetGeometry(context: context, window: originalWindow)
-        let validation: @MainActor () throws -> CaptureContext? = {
-            let window = try context.windowID.flatMap { try Self.windowGeometry(id: $0) }
-            return try baseline.validate(window: window, screens: Self.screenGeometries())
-        }
-        let scrollValidation: @MainActor (CGPoint) throws -> Void = { point in
-            guard let id = context.windowID else { throw ScrollTargetError.unsafeScroll }
-            try Self.checkScrollDestination(windowID: id, point: point)
-        }
-        _ = try validation()
-        guard context.kind == "window", let id = context.windowID, let originalWindow else {
-            let prepared = try await regionCapture(screen: context.screen, rect: context.localRect)
-            return RegionSnapshot(capture: { try await prepared.capture() },
-                                  validate: validation, validateScroll: scrollValidation,
-                                  stop: { await prepared.stop() }, continuous: true)
-        }
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        try Task.checkCancellation()
-        guard let window = content.windows.first(where: {
-            $0.windowID == id && $0.owningApplication?.processID == originalWindow.ownerPID
-        }) else { throw ScrollTargetError.windowUnavailable }
-        let filter = SCContentFilter(desktopIndependentWindow: window)
-        let configuration = SCStreamConfiguration()
-        let scale = CGFloat(filter.pointPixelScale)
-        configuration.width = Int((window.frame.width * scale).rounded())
-        configuration.height = Int((window.frame.height * scale).rounded())
-        configuration.showsCursor = false
-        configuration.ignoreShadowsSingleWindow = true
-        configuration.captureResolution = .best
-        configuration.colorSpaceName = CGColorSpace.sRGB
-        // Preserve a screenshot's exact viewport relative to its window, even after the window moves.
-        let originalFrame = context.targetWindowFrame ?? originalWindow.frame
-        let relative = CGRect(x: context.globalRect.minX - originalFrame.minX,
-                              y: originalFrame.maxY - context.globalRect.maxY,
-                              width: context.globalRect.width, height: context.globalRect.height)
-        let crop = CGRect(x: (relative.minX * scale).rounded(), y: (relative.minY * scale).rounded(),
-                          width: (relative.width * scale).rounded(), height: (relative.height * scale).rounded())
-        let source = try await ScrollFrameSource.start(filter: filter, configuration: configuration, crop: crop)
-        return RegionSnapshot(capture: { try await source.capture() }, validate: validation,
-                              validateScroll: scrollValidation, stop: { await source.stop() }, continuous: true)
-    }
-
-    private static func screenGeometries() -> [ScreenGeometry] {
-        NSScreen.screens.compactMap { screen in
-            guard let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value else { return nil }
-            return ScreenGeometry(id: id, frame: screen.frame, scale: screen.backingScaleFactor, safeTop: screen.safeAreaInsets.top)
-        }
-    }
-
     /// Reads compositor metadata without confusing unavailable query data with a closed window.
     static func windowGeometry(id: UInt32) throws -> ScrollWindowGeometry? {
         switch ScrollWindowServer.lookup(id: id) {
@@ -166,46 +83,30 @@ final class CaptureEngine {
     }
 
     static func checkScrollDestination(windowID: UInt32, point: CGPoint) throws {
-        let above = CGWindowListCopyWindowInfo([.optionOnScreenAboveWindow, .excludeDesktopElements], windowID) as? [[String: Any]] ?? []
-        let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
-        for info in above {
-            if let owner = info[kCGWindowOwnerPID as String] as? NSNumber,
-               owner.int32Value == ProcessInfo.processInfo.processIdentifier,
-               let number = info[kCGWindowNumber as String] as? NSNumber,
-               NSApp.windows.contains(where: { $0.windowNumber == number.intValue && $0.ignoresMouseEvents }) { continue }
-            guard (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1 > 0,
-                  let bounds = info[kCGWindowBounds as String] as? NSDictionary,
-                  let rect = CGRect(dictionaryRepresentation: bounds) else { continue }
-            if CoordinateSpace.windowToAppKit(rect, primaryTop: primaryTop).contains(point) {
-                throw ScrollTargetError.unsafeScroll
-            }
+        // Ask AppKit which window would receive input. Compositor rectangles also include
+        // transparent Dock surfaces and our click-through overlay, which do not intercept it.
+        guard NSWindow.windowNumber(at: point, belowWindowWithWindowNumber: 0) == Int(windowID) else {
+            throw ScrollTargetError.unsafeScroll
         }
     }
 }
 
-/// A session-owned ScreenCaptureKit request; native configuration never crosses actors.
+/// A session-owned single-frame source with target validation; native configuration never crosses actors.
 @MainActor
 final class RegionSnapshot {
     private let request: @MainActor () async throws -> CGImage
     private let validation: @MainActor () throws -> CaptureContext?
     private let scrollValidation: @MainActor (CGPoint) throws -> Void
     private let stopRequest: @MainActor () async -> Void
-    private let continuous: Bool
     private var stopped = false
-    var isStreaming: Bool { continuous && !stopped }
-    init(filter: SCContentFilter, configuration: SCStreamConfiguration) {
-        request = { try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration) }
-        validation = { nil }; scrollValidation = { _ in }
-        stopRequest = {}; continuous = false
-    }
 
     /// Injects a real image source and geometry check without requiring capture consent in flow tests.
     init(capture: @escaping @MainActor () async throws -> CGImage,
          validate: @escaping @MainActor () throws -> CaptureContext? = { nil },
          validateScroll: @escaping @MainActor (CGPoint) throws -> Void = { _ in },
-         stop: @escaping @MainActor () async -> Void = {}, continuous: Bool = false) {
+         stop: @escaping @MainActor () async -> Void = {}) {
         request = capture; validation = validate; scrollValidation = validateScroll
-        stopRequest = stop; self.continuous = continuous
+        stopRequest = stop
     }
 
     /// Validates identity and geometry before dispatching any event to the native target.

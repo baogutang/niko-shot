@@ -22,7 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var automationRequestID: UUID?
     private var automationSelectionID: UUID?
     private var automationServer: AutomationServer?
-    private var wizard: PermissionWizardController?
+    private var wizard: WelcomeWindowController?
     private var resumesWizardAfterDemo = false
     private var isTerminating = false
     private var isApplicationMenuInstalled = false
@@ -96,7 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UNUserNotificationCenter.current().delegate = self
         LaunchDiagnostics.record("notifications")
         // Opt-in first-run replay makes the same native flow testable without resetting preferences.
-        if !PermissionWizardController.isCompleted || ProcessInfo.processInfo.environment["NIKO_REPLAY_ONBOARDING"] == "1" { showWizard() }
+        if !WelcomeWindowController.isCompleted || ProcessInfo.processInfo.environment["NIKO_REPLAY_ONBOARDING"] == "1" { showWizard() }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -378,11 +378,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !isTerminating else { return }
         installApplicationMenu()
         if wizard == nil {
-            wizard = PermissionWizardController(onDemo: { [weak self] in
+            let essentials: [CaptureAction] = [.region, .window, .scroll, .ocr, .record, .repeatRegion]
+            let shortcuts = essentials.map { action in
+                (action.title, (hotkeys?.shortcut(for: action) ?? action.defaultShortcut).displayString)
+            }
+            wizard = WelcomeWindowController(onDemo: { [weak self] in
                 guard let self, self.captureTask == nil, self.automationTask == nil,
                       self.selectionSession.state == .idle, !self.recording.isBusy, !self.scrolling.isBusy else { return }
                 self.resumesWizardAfterDemo = true; self.wizard?.close(); self.perform(.region)
-            }, onComplete: { [weak self] in self?.wizard = nil })
+            }, onComplete: { [weak self] in self?.wizard = nil }, shortcuts: shortcuts)
         }
         wizard?.show()
     }

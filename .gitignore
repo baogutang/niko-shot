@@ -8,3 +8,6 @@ DerivedData/
 *.app/
 *.profraw
 __pycache__/
+
+# Local product research; not part of the application or public docs.
+docs/research/

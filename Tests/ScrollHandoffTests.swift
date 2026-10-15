@@ -32,36 +32,30 @@ final class ScrollHandoffTests: XCTestCase {
         try mouse(.leftMouseUp, point: CGPoint(x: 400, y: 330), to: view)
         XCTAssertEqual(selection.state, .selected)
         XCTAssertEqual(selection.windowCount, 2)
-        let panel = try XCTUnwrap(NSApp.windows.first { $0.isVisible && $0.accessibilityLabel() == "截图标注工具条" })
-        let hud = try XCTUnwrap(panel.contentView as? HUDContentView)
+        let panel = try XCTUnwrap(NSApp.windows.first { $0.isVisible && $0.accessibilityLabel() == "截图工具栏" })
+        let hud = try XCTUnwrap(panel.contentView as? ToolbarStackView)
         hud.layoutSubtreeIfNeeded()
         XCTAssertGreaterThan(panel.level.rawValue, try XCTUnwrap(view.window).level.rawValue)
         XCTAssertFalse(panel.canBecomeKey, "Pointer use must keep the selection's keyboard responder")
         try await waitUntil { panel.alphaValue >= 0.95 }
-        let compactButtons = allButtons(in: hud)
-        XCTAssertFalse(hud.isAnnotationExpanded)
-        XCTAssertEqual(compactButtons.count, 19, "Selection must begin with directly available common tools")
-        XCTAssertEqual(compactButtons.filter { $0.accessibilityLabel() == ToolbarAction.copy.title }.count, 1)
-        XCTAssertFalse(compactButtons.contains { $0.accessibilityLabel() == "复制" })
-        for tool in [AnnotationTool.rectangle, .ellipse, .arrow, .pen, .text, .mosaic] {
-            XCTAssertTrue(compactButtons.contains { $0.accessibilityLabel() == tool.title })
-        }
-        XCTAssertFalse(compactButtons.contains { $0.accessibilityLabel() == AnnotationTool.blur.title })
-        let completion = try XCTUnwrap(compactButtons.first { $0.accessibilityLabel() == ToolbarAction.copy.title })
-        let cancel = try XCTUnwrap(compactButtons.first { $0.accessibilityLabel() == ToolbarAction.close.title })
-        XCTAssertGreaterThan(completion.convert(completion.bounds, to: hud).minX,
-                             cancel.convert(cancel.bounds, to: hud).minX)
-        try XCTUnwrap(compactButtons.first { $0.accessibilityLabel() == "更多标注工具" }).performClick(nil)
-        XCTAssertTrue(hud.isAnnotationExpanded)
-        hud.layoutSubtreeIfNeeded()
         let buttons = allButtons(in: hud)
-        for title in AnnotationTool.allCases.map(\.title) + ToolbarAction.allCases.map(\.title) {
+        XCTAssertEqual(buttons.count, 19, "Every tool and action is directly available in one row")
+        XCTAssertEqual(buttons.filter { $0.accessibilityLabel() == ToolbarAction.copy.title }.count, 1)
+        for title in AnnotationTool.toolbarTools.map(\.title) + ToolbarAction.allCases.filter({ $0 != .selection }).map(\.title) {
             let button = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == title }, title)
-            XCTAssertFalse(button.isHiddenOrHasHiddenAncestor, title)
             let frame = button.convert(button.bounds, to: hud)
-            XCTAssertGreaterThanOrEqual(frame.width, 32, title)
-            XCTAssertGreaterThanOrEqual(frame.height, 32, title)
+            XCTAssertGreaterThanOrEqual(frame.width, 28, title)
+            XCTAssertGreaterThanOrEqual(frame.height, 28, title)
             XCTAssertTrue(hud.bounds.contains(frame), "\(title) must be fully inside the visible panel: \(frame)")
+        }
+        XCTAssertFalse(buttons.contains { $0.accessibilityLabel() == AnnotationTool.blur.title })
+        let completion = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == ToolbarAction.copy.title })
+        let cancel = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == ToolbarAction.close.title })
+        let completionFrame = completion.convert(completion.bounds, to: hud), cancelFrame = cancel.convert(cancel.bounds, to: hud)
+        if abs(completionFrame.midY - cancelFrame.midY) < 1 {
+            XCTAssertGreaterThan(completionFrame.minX, cancelFrame.minX)
+        } else {
+            XCTAssertGreaterThan(completionFrame.minY, cancelFrame.minY, "On narrow screens completion follows cancel on the next row")
         }
         let ocr = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == ToolbarAction.ocr.title })
         XCTAssertTrue(ocr.isEnabled)
@@ -99,20 +93,18 @@ final class ScrollHandoffTests: XCTestCase {
         try mouse(.leftMouseDown, point: CGPoint(x: 60, y: 50), to: view)
         try mouse(.leftMouseDragged, point: CGPoint(x: 400, y: 330), to: view)
         try mouse(.leftMouseUp, point: CGPoint(x: 400, y: 330), to: view)
-        let panel = try XCTUnwrap(NSApp.windows.first { $0.isVisible && $0.accessibilityLabel() == "截图标注工具条" })
-        let hud = try XCTUnwrap(panel.contentView as? HUDContentView)
-        XCTAssertFalse(hud.isAnnotationExpanded)
+        let panel = try XCTUnwrap(NSApp.windows.first { $0.isVisible && $0.accessibilityLabel() == "截图工具栏" })
+        let hud = try XCTUnwrap(panel.contentView as? ToolbarStackView)
         let rectangle = try XCTUnwrap(allButtons(in: hud).first { $0.accessibilityLabel() == AnnotationTool.rectangle.title })
         rectangle.performClick(nil)
-        XCTAssertFalse(hud.isAnnotationExpanded, "A directly available tool must not expand the advanced row")
+        XCTAssertNotNil(hud.properties, "Choosing a tool reveals its style bar")
         try await waitUntil {
             selection.windows.contains { $0.contentView?.subviews.contains { $0 is AnnotationCanvasView } == true }
         }
         let canvas = try XCTUnwrap(selection.windows.flatMap { $0.contentView?.subviews ?? [] }.compactMap { $0 as? AnnotationCanvasView }.first)
-        try key(" ", code: 49, to: canvas)
-        try key("", code: 124, to: canvas)
-        try key("", code: 125, to: canvas)
-        try key(" ", code: 49, to: canvas)
+        try mouse(.leftMouseDown, point: CGPoint(x: 20, y: 20), to: canvas)
+        try mouse(.leftMouseDragged, point: CGPoint(x: 120, y: 90), to: canvas)
+        try mouse(.leftMouseUp, point: CGPoint(x: 120, y: 90), to: canvas)
         XCTAssertEqual(canvas.document.commands.count, 1)
         let scroll = try XCTUnwrap(allButtons(in: hud).first { $0.accessibilityLabel() == ToolbarAction.scroll.title })
         XCTAssertTrue(scroll.isEnabled)
@@ -128,44 +120,21 @@ final class ScrollHandoffTests: XCTestCase {
         XCTAssertEqual(selection.resourceCounts.values.reduce(0, +), 0)
     }
 
-    func testToolbarShowsLongCaptureTextAndExplainsDisabledAction() throws {
+    func testToolbarShowsLongCaptureAndExplainsDisabledAction() throws {
         var actions: [ToolbarAction] = []
-        let hud = HUDContentView(onTool: { _ in }, onAction: { actions.append($0) }, onColor: { _ in }, onWidth: { _ in })
-        defer { hud.closeAuxiliaryControls() }
-        hud.frame.size = hud.configure(maximumWidth: 704)
-        hud.layoutSubtreeIfNeeded()
-        let compactButtons = allButtons(in: hud)
-        XCTAssertEqual(compactButtons.count, 19)
-        let button = try XCTUnwrap(compactButtons.first { $0.accessibilityLabel() == "长截图" })
-        XCTAssertEqual(button.title, "长截图", "The primary action must be discoverable without hovering")
-        XCTAssertNotNil(button.image)
-        XCTAssertGreaterThanOrEqual(button.frame.width, 32)
-        XCTAssertGreaterThanOrEqual(button.frame.height, 32)
-        try XCTUnwrap(compactButtons.first { $0.accessibilityLabel() == "更多标注工具" }).performClick(nil)
-        hud.frame.size = hud.configure(maximumWidth: 704)
-        hud.layoutSubtreeIfNeeded()
-        let buttons = allButtons(in: hud)
-        for tool in AnnotationTool.allCases {
-            XCTAssertNotNil(buttons.first { $0.accessibilityLabel() == tool.title })
-        }
-        let width = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "标注线宽：3 pt" })
-        let undo = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == ToolbarAction.undo.title })
-        let widthFrame = width.convert(width.bounds, to: hud)
-        let undoFrame = undo.convert(undo.bounds, to: hud)
-        XCTAssertEqual(undoFrame.minX - widthFrame.maxX, 9, accuracy: 1,
-                       "The output row must not stretch groups into empty space")
+        let controller = ToolbarController(onTool: { _ in }, onAction: { actions.append($0) })
+        defer { controller.close() }
+        controller.show(near: CGRect(x: 200, y: 300, width: 600, height: 300), screenFrame: CGRect(x: 0, y: 0, width: 1_440, height: 900))
+        let button = try XCTUnwrap(controller.button(for: .scroll))
+        XCTAssertEqual(button.accessibilityLabel(), "长截图")
+        XCTAssertGreaterThanOrEqual(button.frame.width, 28)
         button.performClick(nil)
         XCTAssertEqual(actions, [.scroll])
         let reason = "选区高度不足 240 像素，请增大选区。"
-        hud.setScrollAvailability(enabled: false, explanation: reason)
+        controller.setScrollAvailability(enabled: false, explanation: reason)
         XCTAssertFalse(button.isEnabled)
         XCTAssertEqual(button.accessibilityHelp(), reason)
         XCTAssertTrue((button.toolTip ?? "").contains(reason))
-        hud.frame.size = hud.configure(maximumWidth: 100)
-        hud.layoutSubtreeIfNeeded()
-        XCTAssertEqual(button.title, "长截图")
-        XCTAssertGreaterThanOrEqual(button.frame.width, 32)
-        XCTAssertGreaterThanOrEqual(button.frame.height, 32)
     }
 
     func testDirectRectanglePenAndArrowDrawAndReturnCopiesAnnotatedPixels() async throws {
@@ -178,21 +147,21 @@ final class ScrollHandoffTests: XCTestCase {
         var output: CGImage?
         selection.start(frames: [FrozenFrame(screen: screen, image: image)], initial: target,
                         autoConfirm: false) { output = $0; _ = $1 }
-        let panel = try XCTUnwrap(NSApp.windows.first { $0.isVisible && $0.accessibilityLabel() == "截图标注工具条" })
-        let hud = try XCTUnwrap(panel.contentView as? HUDContentView)
+        let panel = try XCTUnwrap(NSApp.windows.first { $0.isVisible && $0.accessibilityLabel() == "截图工具栏" })
+        let hud = try XCTUnwrap(panel.contentView as? ToolbarStackView)
         var canvas: AnnotationCanvasView?
-        for tool in [AnnotationTool.rectangle, .pen, .arrow] {
+        for (index, tool) in [AnnotationTool.rectangle, .pen, .arrow].enumerated() {
             try XCTUnwrap(allButtons(in: hud).first { $0.accessibilityLabel() == tool.title }).performClick(nil)
             try await waitUntil {
                 selection.windows.contains { $0.contentView?.subviews.contains { $0 is AnnotationCanvasView } == true }
             }
             canvas = selection.windows.flatMap { $0.contentView?.subviews ?? [] }.compactMap { $0 as? AnnotationCanvasView }.first
             let editor = try XCTUnwrap(canvas)
-            try mouse(.leftMouseDown, point: CGPoint(x: 30, y: 40), to: editor)
-            try mouse(.leftMouseDragged, point: CGPoint(x: 150, y: 130), to: editor)
-            try mouse(.leftMouseUp, point: CGPoint(x: 210, y: 160), to: editor)
+            let offset = CGFloat(index) * 80
+            try mouse(.leftMouseDown, point: CGPoint(x: 20 + offset, y: 30), to: editor)
+            try mouse(.leftMouseDragged, point: CGPoint(x: 60 + offset, y: 120), to: editor)
+            try mouse(.leftMouseUp, point: CGPoint(x: 80 + offset, y: 200), to: editor)
             XCTAssertEqual(editor.document.commands.last?.tool, tool)
-            XCTAssertFalse(hud.isAnnotationExpanded)
         }
         let editor = try XCTUnwrap(canvas)
         XCTAssertEqual(editor.document.commands.count, 3)
@@ -231,9 +200,8 @@ final class ScrollHandoffTests: XCTestCase {
             var captured: (CGImage, CaptureContext)?
             selection.start(frames: [FrozenFrame(screen: screen, image: image)], initial: target,
                             autoConfirm: false) { captured = ($0, $1) }
-            let panel = try XCTUnwrap(NSApp.windows.first { $0.isVisible && $0.accessibilityLabel() == "截图标注工具条" })
-            let hud = try XCTUnwrap(panel.contentView as? HUDContentView)
-            XCTAssertFalse(hud.isAnnotationExpanded)
+            let panel = try XCTUnwrap(NSApp.windows.first { $0.isVisible && $0.accessibilityLabel() == "截图工具栏" })
+            let hud = try XCTUnwrap(panel.contentView as? ToolbarStackView)
             if keyboard {
                 let selector = try XCTUnwrap(selection.windows.first?.contentView as? SelectionView)
                 try key("\r", code: 36, to: selector)
@@ -322,97 +290,6 @@ final class ScrollHandoffTests: XCTestCase {
         XCTAssertEqual(selection.windowCount, 0)
         XCTAssertEqual(selection.monitorCount, 0)
         XCTAssertEqual(selection.resourceCounts.values.reduce(0, +), 0)
-    }
-
-    func testLivePreviewWaitsForCancelledArchiveWorkerAndReusesViewportWithoutReselection() async throws {
-        let image = try await fixture(width: 640, height: 480)
-        let fresh = try await fixture(width: 400, height: 300)
-        let target = viewport(), gate = ScrollHandoffGate()
-        let selection = SelectionSession(afterImageOperation: { await gate.pause() })
-        var previews: [CaptureContext] = []
-        let coordinator = ScrollCoordinator(engine: CaptureEngine(), selection: selection, windows: WindowList(),
-            onCapture: { _, _ in XCTFail("Starting the follow controls must wait for an explicit finish before output") }, capturePreview: { context in
-                XCTAssertEqual(selection.windowCount, 0)
-                XCTAssertEqual(selection.monitorCount, 0)
-                XCTAssertEqual(selection.resourceCounts.values.reduce(0, +), 0)
-                previews.append(context)
-                return fresh
-            })
-        selection.onScrollCapture = { [weak coordinator] in coordinator?.continueFromSelection(context: $0) }
-        defer { selection.onScrollCapture = nil; selection.finish() }
-        selection.start(frames: [FrozenFrame(screen: target.screen, image: image)], initial: target, autoConfirm: false) { _, _ in XCTFail("Scroll exported frozen pixels") }
-        selection.beginAnnotation(tool: .arrow)
-        await gate.waitUntilEntered()
-        selection.requestScrollCapture()
-        await Task.yield()
-        XCTAssertTrue(coordinator.isBusy)
-        XCTAssertEqual(coordinator.resourceCounts["operation"], 1)
-        XCTAssertTrue(previews.isEmpty, "The live request must await the old archive/render worker")
-        await gate.release()
-        try await waitUntil {
-            coordinator.resourceCounts["controls"] == 1 && coordinator.controlProgress.frames == 1 &&
-            !coordinator.controlProgress.isWorking
-        }
-        XCTAssertEqual(coordinator.resourceCounts["setup"], 0, "A selected viewport starts following without another confirmation window")
-        XCTAssertEqual(coordinator.controlProgress.mode, .manual)
-        XCTAssertEqual(coordinator.controlProgress.height, fresh.height)
-        XCTAssertFalse(coordinator.controlProgress.isPaused)
-        XCTAssertFalse(coordinator.controlProgress.isMatching)
-        XCTAssertEqual(previews.count, 1)
-        assertViewport(try XCTUnwrap(previews.first), equals: target)
-        assertViewport(try XCTUnwrap(coordinator.selectedViewport), equals: target)
-        try await Task.sleep(for: .milliseconds(180))
-        XCTAssertEqual(coordinator.resourceCounts["controls"], 1, "A stationary page must remain ready for the user to scroll")
-        XCTAssertEqual(coordinator.controlProgress.frames, 1)
-        XCTAssertTrue(coordinator.isBusy)
-        await coordinator.cancel()
-        XCTAssertEqual(coordinator.resourceCounts.values.reduce(0, +), 0)
-        XCTAssertEqual(selection.resourceCounts.values.reduce(0, +), 0)
-    }
-
-    func testCancellingHandoffBeforeArchiveDrainNeverStartsLiveCaptureOrLateSetup() async throws {
-        let image = try await fixture(width: 640, height: 480)
-        let target = viewport(), gate = ScrollHandoffGate()
-        let selection = SelectionSession(afterImageOperation: { await gate.pause() })
-        var previews = 0
-        let coordinator = ScrollCoordinator(engine: CaptureEngine(), selection: selection, windows: WindowList(),
-            onCapture: { _, _ in XCTFail("Cancelled handoff produced output") }, capturePreview: { _ in
-                previews += 1; return image
-            })
-        selection.onScrollCapture = { [weak coordinator] in coordinator?.continueFromSelection(context: $0) }
-        defer { selection.onScrollCapture = nil; selection.finish() }
-        selection.start(frames: [FrozenFrame(screen: target.screen, image: image)], initial: target, autoConfirm: false) { _, _ in XCTFail("Scroll exported frozen pixels") }
-        selection.beginAnnotation(tool: .arrow)
-        await gate.waitUntilEntered()
-        selection.requestScrollCapture()
-        let cancellation = Task { await coordinator.cancel() }
-        try await waitUntil { coordinator.resourceCounts["cleanup"] == 1 }
-        XCTAssertEqual(previews, 0)
-        XCTAssertEqual(coordinator.resourceCounts["controls"], 0)
-        XCTAssertEqual(coordinator.resourceCounts["setup"], 0)
-        XCTAssertEqual(coordinator.controlProgress.frames, 0)
-        await gate.release()
-        await cancellation.value
-        XCTAssertEqual(previews, 0)
-        XCTAssertEqual(coordinator.resourceCounts.values.reduce(0, +), 0)
-        XCTAssertEqual(selection.resourceCounts.values.reduce(0, +), 0)
-        XCTAssertEqual(selection.windowCount, 0)
-    }
-
-    func testReselectionPromptCancellationReleasesNativeAlertWithoutScreenCapture() async throws {
-        let selection = SelectionSession()
-        let coordinator = ScrollCoordinator(engine: CaptureEngine(), selection: selection, windows: WindowList(),
-                                            onCapture: { _, _ in XCTFail("Cancelled reselection produced output") })
-        coordinator.continueFromSelection(context: nil)
-        XCTAssertEqual(coordinator.resourceCounts["reselectionAlert"], 1)
-        XCTAssertEqual(coordinator.resourceCounts["reselectionActions"], 1)
-        XCTAssertNil(NSApp.modalWindow, "Reselection must return to the main run loop for async cancellation")
-        let cancellation = Task { await coordinator.cancel() }
-        await cancellation.value
-        await coordinator.cancel()
-        XCTAssertFalse(coordinator.isBusy)
-        XCTAssertEqual(coordinator.resourceCounts.values.reduce(0, +), 0)
-        XCTAssertEqual(selection.windowCount, 0)
     }
 
     private func viewport() -> CaptureContext {

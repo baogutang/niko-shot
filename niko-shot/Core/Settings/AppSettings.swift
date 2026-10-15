@@ -78,8 +78,6 @@ public final class AppSettings {
     public var showsCursor: Bool { didSet { defaults.set(showsCursor, forKey: "showsCursor") } }
     /// History retention in days; zero keeps captures until deleted.
     public var historyRetention: Int { didSet { defaults.set(historyRetention, forKey: "historyRetention") } }
-    /// 仅用于长截图兼容对照，下次会话生效；默认使用单帧精确行引擎。
-    public var useLegacyScrollEngine: Bool { didSet { defaults.set(useLegacyScrollEngine, forKey: "useLegacyScrollEngine") } }
 
     /// Loads preferences from an injectable defaults store without storing any credentials.
     public init(defaults: UserDefaults = .standard) {
@@ -88,8 +86,7 @@ public final class AppSettings {
             "captureDelay": 0, "showsPixels": true, "exportFormat": "png", "jpegQuality": 0.9,
             "filenameTemplate": "niko-shot {date} {time}", "autoOCR": true, "automaticTranslation": true,
             "recordingFPS": 30, "recordingCodec": "hevc", "systemAudio": true,
-            "microphone": false, "showsCursor": true, "historyRetention": 30, "accurateOCR": true,
-            "useLegacyScrollEngine": false
+            "microphone": false, "showsCursor": true, "historyRetention": 30, "accurateOCR": true
         ])
         captureDelay = min(10, max(0, defaults.integer(forKey: "captureDelay")))
         showsPixels = defaults.bool(forKey: "showsPixels")
@@ -126,6 +123,5 @@ public final class AppSettings {
         microphone = defaults.bool(forKey: "microphone")
         showsCursor = defaults.bool(forKey: "showsCursor")
         historyRetention = max(0, defaults.integer(forKey: "historyRetention"))
-        useLegacyScrollEngine = defaults.bool(forKey: "useLegacyScrollEngine")
     }
 }

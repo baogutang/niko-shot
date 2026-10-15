@@ -1,4 +1,4 @@
-// Presents the native annotation HUD above frozen-frame overlays and releases it synchronously.
+// The capture toolbar: one row of tools and actions, a contextual style bar, and an optional text card.
 import AppKit
 import QuartzCore
 
@@ -6,31 +6,29 @@ import QuartzCore
 enum ToolbarAction: String, CaseIterable, Sendable {
     case copy, save, pin, ocr, translate, scroll, undo, redo, selection, close
 
-    /// VoiceOver and tooltip name for this command.
     var title: String {
         switch self {
         case .copy: "完成并复制"
         case .save: "保存"
-        case .pin: "贴图"
+        case .pin: "贴到屏幕"
         case .ocr: "识别文字"
         case .translate: "翻译"
         case .scroll: "长截图"
         case .undo: "撤销"
         case .redo: "重做"
         case .selection: "调整选区"
-        case .close: "取消截图"
+        case .close: "取消"
         }
     }
 
-    /// Native SF Symbol for the command.
     var symbol: String {
         switch self {
         case .copy: "checkmark"
         case .save: "square.and.arrow.down"
         case .pin: "pin"
         case .ocr: "text.viewfinder"
-        case .translate: "character.bubble"
-        case .scroll: "rectangle.expand.vertical"
+        case .translate: "translate"
+        case .scroll: "arrow.down.to.line.compact"
         case .undo: "arrow.uturn.backward"
         case .redo: "arrow.uturn.forward"
         case .selection: "crop"
@@ -38,245 +36,179 @@ enum ToolbarAction: String, CaseIterable, Sendable {
         }
     }
 
-    fileprivate var keyHint: String? {
+    var keyHint: String? {
         switch self {
-        case .copy: "Enter"
+        case .copy: "↩"
         case .save: "⌘S"
         case .undo: "⌘Z"
         case .redo: "⇧⌘Z"
-        case .selection: "Tab"
-        case .close: "Esc"
+        case .selection: "⇥"
+        case .close: "esc"
         default: nil
         }
     }
 }
 
-/// A nonactivating, screen-aware AppKit annotation toolbar.
+/// A nonactivating, screen-aware capture toolbar that never steals keyboard focus from the canvas.
 @MainActor
 final class ToolbarController {
-    // App coordinators own this object on the main actor. Unsafe storage only supports
-    // normal deinit on macOS 14/15, whose runtimes cannot safely run isolated deinit.
-    nonisolated(unsafe) private var panel: HUDPanel?
-    private var content: HUDContentView?
-    private var selectedTool: AnnotationTool?
+    private var panel: CaptureHUDPanel?
+    private var stack: ToolbarStackView?
     private let onTool: (AnnotationTool) -> Void
     private let onAction: (ToolbarAction) -> Void
-    private let onColor: (NSColor) -> Void
-    private let onWidth: (CGFloat) -> Void
+    private let onStyle: (AnnotationStyle) -> Void
     private let confirmationTitle: String?
-    private var scrollEnabled = true
-    private var scrollExplanation = "沿当前选区捕获滚动内容。"
     private var placement: (selection: CGRect, screen: CGRect)?
-    private var canUndo = false
-    private var canRedo = false
+    private var selectedTool: AnnotationTool?
+    private var propertyTool: AnnotationTool?
+    private var style = AnnotationStyle()
+    private var canUndo = false, canRedo = false
+    private var scrollEnabled = true
+    private var scrollExplanation = "沿当前选区继续向下滚动截取。"
     private var textResultView: NSView?
-    private var preferredTextResultHeight: CGFloat = 260
+    private var preferredTextResultHeight: CGFloat = 280
 
-    /// Number of panels retained by the controller, for session teardown assertions.
     var windowCount: Int { panel == nil ? 0 : 1 }
-    /// Whether the additional tools are visible after disclosure or selecting an advanced tool.
-    var isAnnotationExpanded: Bool { content?.isAnnotationExpanded ?? false }
-    /// Retained color and stroke-width popovers; finishing a session must leave none.
-    var auxiliaryControlCount: Int { content?.auxiliaryControlCount ?? 0 }
+    var panelFrame: CGRect? { panel?.frame }
+    var isPropertyBarVisible: Bool { stack?.properties != nil }
+    /// Retained transient controls; the redesigned bars own none.
+    var auxiliaryControlCount: Int { 0 }
 
-    /// Creates the HUD without opening a panel or registering event monitors.
-    init(onTool: @escaping (AnnotationTool) -> Void,
-         onAction: @escaping (ToolbarAction) -> Void,
-         onColor: @escaping (NSColor) -> Void,
-         onWidth: @escaping (CGFloat) -> Void, confirmationTitle: String? = nil) {
+    init(onTool: @escaping (AnnotationTool) -> Void, onAction: @escaping (ToolbarAction) -> Void,
+         onStyle: @escaping (AnnotationStyle) -> Void = { _ in }, confirmationTitle: String? = nil) {
+        self.onTool = onTool; self.onAction = onAction; self.onStyle = onStyle
         self.confirmationTitle = confirmationTitle
-        self.onTool = onTool
-        self.onAction = onAction
-        self.onColor = onColor
-        self.onWidth = onWidth
     }
 
     deinit {
-        guard let remainingPanel = panel else { return }
-        // Normal use calls close() first; this fallback also handles release off the main thread.
-        if Thread.isMainThread {
-            MainActor.assumeIsolated {
-                (remainingPanel.contentView as? HUDContentView)?.closeAuxiliaryControls()
-                remainingPanel.orderOut(nil); remainingPanel.contentView = nil; remainingPanel.close()
-            }
-        } else {
-            Task { @MainActor in
-                (remainingPanel.contentView as? HUDContentView)?.closeAuxiliaryControls()
-                remainingPanel.orderOut(nil); remainingPanel.contentView = nil; remainingPanel.close()
-            }
-        }
+        guard let remaining = panel else { return }
+        MainActor.assumeIsolated { remaining.orderOut(nil); remaining.contentView = nil; remaining.close() }
     }
 
-    /// Shows the HUD outside the global AppKit selection, clamped to its owning screen.
+    /// Shows the toolbar next to a selection given in AppKit global coordinates.
     func show(near selectionGlobal: CGRect, screenFrame: CGRect) {
         guard screenFrame.width > 0, screenFrame.height > 0 else { return }
-        let creatingPanel = panel == nil
         placement = (selectionGlobal, screenFrame)
-        let available = Self.safeFrame(screenFrame)
-        if panel == nil {
-            let content = HUDContentView(onTool: { [weak self] tool in
-                guard let self else { return }
-                self.setSelectedTool(tool)
-                NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
-                self.onTool(tool)
-            }, onAction: { [weak self] action in
-                guard let self else { return }
-                if action == .selection {
-                    self.selectedTool = nil
-                    self.content?.setSelectedTool(nil)
-                }
-                if action == .close { self.close() }
-                self.onAction(action)
-            }, onColor: { [weak self] in self?.onColor($0) }, onWidth: { [weak self] in self?.onWidth($0) }, confirmationTitle: confirmationTitle)
-            let window = HUDPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-            // AppKit assigns the ordinary floating level when this flag changes.
-            // Set it before assigning the capture level, or the screen overlays cover the HUD.
-            window.isFloatingPanel = true
-            window.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
-            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-            window.backgroundColor = .clear
-            window.isOpaque = false
-            window.hasShadow = true
-            window.isReleasedWhenClosed = false
-            window.hidesOnDeactivate = false
-            window.becomesKeyOnlyIfNeeded = true
-            window.acceptsMouseMovedEvents = true
-            window.contentView = content
-            window.onCancel = { [weak self] in
-                guard let self else { return }
-                self.close(); self.onAction(.close)
-            }
-            window.setAccessibilityLabel("截图标注工具条")
-            self.content = content
-            panel = window
-            content.onLayoutChange = { [weak self] in self?.updateFrame() }
-        }
-        guard let panel, let content else { return }
-        panel.acceptsTextFocus = textResultView != nil
-        content.setSelectedTool(selectedTool, revealIfNeeded: creatingPanel)
-        content.setTextResultView(textResultView, preferredHeight: preferredTextResultHeight, notify: false)
-        content.setActionEnabled(.undo, enabled: canUndo)
-        content.setActionEnabled(.redo, enabled: canRedo)
-        content.setScrollAvailability(enabled: scrollEnabled, explanation: scrollExplanation)
-        let frame = layoutFrame(content: content, selection: selectionGlobal, screen: available)
-        let isNewlyShown = !panel.isVisible
-        panel.setFrame(frame, display: true)
-        if isNewlyShown && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            panel.alphaValue = 0
-            panel.orderFrontRegardless()
-            let spring = CASpringAnimation(keyPath: "transform.scale")
-            spring.fromValue = 0.97
-            spring.toValue = 1
-            spring.stiffness = 400
-            spring.damping = 30
-            spring.mass = 1
-            spring.duration = 0.15
-            content.layer?.add(spring, forKey: "HUDEntrance")
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.15
-                panel.animator().alphaValue = 1
-            }
-        } else {
-            panel.alphaValue = 1
-            panel.orderFrontRegardless()
-        }
+        if panel == nil { makePanel() }
+        guard let panel, let stack else { return }
+        stack.main.setSelectedTool(selectedTool)
+        stack.main.setEnabled(.undo, canUndo); stack.main.setEnabled(.redo, canRedo)
+        stack.main.setScrollAvailability(enabled: scrollEnabled, explanation: scrollExplanation)
+        relayout()
+        CaptureChrome.present(panel, content: stack)
     }
 
-    /// Immediately removes the panel, tracking areas and controls from the capture session.
+    private func makePanel() {
+        let panel = CaptureHUDPanel()
+        panel.onCancel = { [weak self] in self?.onAction(.close) }
+        panel.setAccessibilityLabel("截图工具栏")
+        let main = ToolbarMainBar(confirmationTitle: confirmationTitle,
+            onTool: { [weak self] tool in self?.chooseTool(tool) },
+            onAction: { [weak self] action in self?.onAction(action) })
+        let stack = ToolbarStackView(main: main)
+        panel.contentView = stack
+        self.panel = panel; self.stack = stack
+    }
+
+    private func chooseTool(_ tool: AnnotationTool) {
+        let concrete = tool == .mosaic && style.blur ? .blur : tool == .text && style.textBackground ? .note : tool
+        setSelectedTool(concrete)
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        onTool(concrete)
+    }
+
     func close() {
-        let oldPanel = panel
-        content?.closeAuxiliaryControls()
-        content?.onLayoutChange = nil
-        content?.setTextResultView(nil, notify: false)
-        panel = nil
-        content = nil
-        selectedTool = nil
-        placement = nil
-        textResultView = nil
-        canUndo = false; canRedo = false
-        oldPanel?.orderOut(nil)
-        oldPanel?.onCancel = nil
-        oldPanel?.contentView = nil
-        oldPanel?.close()
+        let old = panel
+        panel = nil; stack = nil; placement = nil; selectedTool = nil; propertyTool = nil
+        textResultView = nil; canUndo = false; canRedo = false
+        old?.orderOut(nil); old?.onCancel = nil; old?.contentView = nil; old?.close()
     }
 
-    /// Synchronizes the active tool after either pointer or keyboard selection.
-    func setSelectedTool(_ tool: AnnotationTool) {
+    /// Highlights the active tool and shows its style controls.
+    func setSelectedTool(_ tool: AnnotationTool?) {
         selectedTool = tool
-        content?.setSelectedTool(tool, revealIfNeeded: true)
+        stack?.main.setSelectedTool(tool)
+        setPropertyContext(tool: tool)
     }
 
-    /// Embeds OCR or translation content beneath the existing buttons, allowing native text focus while present.
-    func setTextResultView(_ view: NSView?, preferredHeight: CGFloat = 260) {
+    /// Shows style controls for a tool (or the selected item's tool); nil hides the style bar.
+    func setPropertyContext(tool: AnnotationTool?) {
+        guard confirmationTitle == nil else { return }
+        let next = tool?.toolbarTool
+        guard next != propertyTool || (next != nil && stack?.properties == nil) else { return }
+        propertyTool = next
+        guard let stack else { return }
+        if let next {
+            let bar = ToolbarPropertyBar(tool: next, style: style) { [weak self] style in
+                self?.style = style
+                self?.onStyle(style)
+            }
+            stack.setProperties(bar)
+        } else {
+            stack.setProperties(nil)
+        }
+        relayout()
+    }
+
+    /// Mirrors a style adopted from a selected item.
+    func setStyle(_ style: AnnotationStyle) {
+        self.style = style
+        stack?.properties?.update(style: style)
+    }
+
+    /// Embeds OCR or translation content under the bars; the panel accepts text focus while present.
+    func setTextResultView(_ view: NSView?, preferredHeight: CGFloat = 280) {
         guard confirmationTitle == nil else { return }
         textResultView = view
-        preferredTextResultHeight = preferredHeight.isFinite ? max(0, preferredHeight) : 260
-        panel?.acceptsTextFocus = view != nil
+        preferredTextResultHeight = preferredHeight.isFinite ? max(0, preferredHeight) : 280
+        panel?.allowsKey = view != nil
         if view == nil, panel?.isKeyWindow == true { panel?.resignKey() }
-        content?.setTextResultView(view, preferredHeight: preferredTextResultHeight)
+        stack?.setResult(view, height: preferredTextResultHeight)
+        relayout()
     }
 
-    /// Enables undo and redo only when the document has an applicable snapshot.
     func setUndoAvailability(canUndo: Bool, canRedo: Bool) {
         self.canUndo = canUndo; self.canRedo = canRedo
-        content?.setActionEnabled(.undo, enabled: canUndo)
-        content?.setActionEnabled(.redo, enabled: canRedo)
+        stack?.main.setEnabled(.undo, canUndo); stack?.main.setEnabled(.redo, canRedo)
     }
 
-    /// Keeps the visible long-capture action discoverable and explains any unavailable viewport.
     func setScrollAvailability(enabled: Bool, explanation: String) {
         scrollEnabled = enabled; scrollExplanation = explanation
-        content?.setScrollAvailability(enabled: enabled, explanation: explanation)
+        stack?.main.setScrollAvailability(enabled: enabled, explanation: explanation)
     }
 
-    private func updateFrame() {
-        guard let panel, let content, let placement else { return }
-        let frame = layoutFrame(content: content, selection: placement.selection,
-                                screen: Self.safeFrame(placement.screen))
+    /// Test access to native buttons.
+    func button(for action: ToolbarAction) -> NSButton? { stack?.main.actionButtons[action] }
+    func button(for tool: AnnotationTool) -> NSButton? { stack?.main.toolButtons[tool.toolbarTool] }
+    var propertyButtons: [NSButton] { stack?.properties?.buttons ?? [] }
+
+    private func relayout() {
+        guard let panel, let stack, let placement else { return }
+        let screen = Self.safeFrame(placement.screen)
+        let size = stack.measure(maximumWidth: screen.width, maximumHeight: screen.height)
+        let (frame, mainFirst) = Self.frame(for: size, near: placement.selection, screen: screen)
+        stack.mainFirst = mainFirst
         panel.setFrame(frame, display: true)
-        content.layoutSubtreeIfNeeded()
+        stack.needsLayout = true
+        stack.layoutSubtreeIfNeeded()
     }
 
-    private func layoutFrame(content: HUDContentView, selection: CGRect, screen: CGRect) -> CGRect {
-        let width = max(32, screen.width)
-        let size = content.configure(maximumWidth: width, maximumHeight: screen.height)
-        let preferred = Self.preferredFrame(near: selection, screenFrame: screen, size: size)
-        guard preferred.intersects(selection) else { return preferred }
-        // Wrap beside a tall selection when the toolbar or embedded result cannot fit above or below it.
-        let sideWidths = [selection.minX - screen.minX - 12, screen.maxX - selection.maxX - 12]
-            .filter { $0 >= 50 && $0 < width }.sorted(by: >)
-        for sideWidth in sideWidths {
-            let alternative = content.configure(maximumWidth: sideWidth, maximumHeight: screen.height)
-            guard alternative.height <= screen.height else { continue }
-            let frame = Self.preferredFrame(near: selection, screenFrame: screen, size: alternative)
-            if !frame.intersects(selection) { return frame }
-        }
-        _ = content.configure(maximumWidth: width, maximumHeight: screen.height)
-        return preferred
+    /// Below the selection (right-aligned), else above, else inside its lower edge.
+    nonisolated static func frame(for size: CGSize, near selection: CGRect, screen: CGRect) -> (CGRect, Bool) {
+        let gap: CGFloat = 8
+        let width = min(size.width, screen.width), height = min(size.height, screen.height)
+        let x = min(max(selection.maxX - width, screen.minX), screen.maxX - width)
+        let below = selection.minY - gap - height
+        if below >= screen.minY { return (CGRect(x: x, y: below, width: width, height: height), true) }
+        let above = selection.maxY + gap
+        if above + height <= screen.maxY { return (CGRect(x: x, y: above, width: width, height: height), false) }
+        let inside = min(max(screen.minY, selection.minY + gap), screen.maxY - height)
+        return (CGRect(x: x, y: inside, width: width, height: height), true)
     }
 
-    /// Computes a deterministic placement, preferring below, above, then either side.
-    nonisolated static func preferredFrame(near selection: CGRect, screenFrame: CGRect, size requestedSize: CGSize) -> CGRect {
-        let size = CGSize(width: min(requestedSize.width, screenFrame.width), height: min(requestedSize.height, screenFrame.height))
-        let gap: CGFloat = 12
-        func clamp(_ frame: CGRect) -> CGRect {
-            CGRect(x: min(max(frame.minX, screenFrame.minX), screenFrame.maxX - size.width),
-                   y: min(max(frame.minY, screenFrame.minY), screenFrame.maxY - size.height),
-                   width: size.width, height: size.height)
-        }
-        let candidates = [
-            CGRect(x: selection.midX - size.width / 2, y: selection.minY - size.height - gap, width: size.width, height: size.height),
-            CGRect(x: selection.midX - size.width / 2, y: selection.maxY + gap, width: size.width, height: size.height),
-            CGRect(x: selection.maxX + gap, y: selection.midY - size.height / 2, width: size.width, height: size.height),
-            CGRect(x: selection.minX - size.width - gap, y: selection.midY - size.height / 2, width: size.width, height: size.height)
-        ]
-        let placements = candidates.map(clamp)
-        if let outside = placements.first(where: { !$0.intersects(selection) }) { return outside }
-        return placements.min { lhs, rhs in
-            let left = lhs.intersection(selection)
-            let right = rhs.intersection(selection)
-            return max(0, left.width) * max(0, left.height) < max(0, right.width) * max(0, right.height)
-        } ?? clamp(candidates[0])
+    /// Compatibility wrapper used by layout tests: the toolbar's own frame next to a selection.
+    nonisolated static func preferredFrame(near selection: CGRect, screenFrame: CGRect, size: CGSize) -> CGRect {
+        frame(for: size, near: selection, screen: screenFrame).0
     }
 
     private static func safeFrame(_ screenFrame: CGRect) -> CGRect {
@@ -288,671 +220,501 @@ final class ToolbarController {
     }
 }
 
+// MARK: - Stack
+
+/// Vertically stacked glass cards; the main bar sits nearest the selection.
 @MainActor
-private final class HUDPanel: NSPanel {
-    // Keeping the overlay key preserves Enter, Esc and tool shortcuts during pointer use.
-    var acceptsTextFocus = false
-    var onCancel: (() -> Void)?
-    override var canBecomeKey: Bool { acceptsTextFocus }
-    override var canBecomeMain: Bool { false }
-    override func cancelOperation(_ sender: Any?) { onCancel?() }
+final class ToolbarStackView: NSView {
+    let main: ToolbarMainBar
+    private(set) var properties: ToolbarPropertyBar?
+    private var result: CaptureHUDBackground?
+    private var resultHeight: CGFloat = 280
+    private var preferredResultHeight: CGFloat = 280
+    private var availableWidth: CGFloat = .greatestFiniteMagnitude
+    var mainFirst = true { didSet { needsLayout = true } }
+    private let gap: CGFloat = 6
+    override var isFlipped: Bool { true }
+
+    init(main: ToolbarMainBar) {
+        self.main = main
+        super.init(frame: .zero)
+        addSubview(main)
+    }
+    required init?(coder: NSCoder) { nil }
+
+    func setProperties(_ bar: ToolbarPropertyBar?) {
+        properties?.removeFromSuperview()
+        properties = bar
+        if let bar {
+            addSubview(bar)
+            if !CaptureChrome.reduceMotion {
+                bar.alphaValue = 0
+                NSAnimationContext.runAnimationGroup { $0.duration = 0.14; bar.animator().alphaValue = 1 }
+            }
+        }
+        needsLayout = true
+    }
+
+    func setResult(_ view: NSView?, height: CGFloat) {
+        result?.removeFromSuperview(); result = nil
+        resultHeight = height; preferredResultHeight = height
+        guard let view else { needsLayout = true; return }
+        let card = CaptureHUDBackground()
+        view.translatesAutoresizingMaskIntoConstraints = true
+        view.autoresizingMask = [.width, .height]
+        card.addSubview(view)
+        addSubview(card)
+        result = card
+        needsLayout = true
+    }
+
+    private var cards: [(NSView, CGSize)] {
+        var items: [(NSView, CGSize)] = [(main, main.measuredSize(maximumWidth: availableWidth))]
+        if let properties { items.append((properties, properties.measuredSize(maximumWidth: availableWidth))) }
+        if let result { items.append((result, CGSize(width: min(availableWidth, max(main.fittingWidthSize.width, 420)), height: resultHeight))) }
+        return items
+    }
+
+    func measure(maximumWidth: CGFloat, maximumHeight: CGFloat) -> CGSize {
+        availableWidth = maximumWidth
+        resultHeight = preferredResultHeight
+        let sizes = cards.map(\.1)
+        let gaps = gap * CGFloat(max(0, sizes.count - 1))
+        let naturalHeight = sizes.reduce(0) { $0 + $1.height } + gaps
+        if naturalHeight > maximumHeight, result != nil {
+            resultHeight = max(24, preferredResultHeight - (naturalHeight - maximumHeight))
+        }
+        let height = cards.reduce(0) { $0 + $1.1.height } + gaps
+        let width = min(maximumWidth, sizes.map(\.width).max() ?? 0)
+        return CGSize(width: width, height: height)
+    }
+
+    override func layout() {
+        super.layout()
+        var ordered = cards
+        if !mainFirst { ordered.reverse() }
+        var y: CGFloat = 0
+        for (view, size) in ordered {
+            let width = min(bounds.width, size.width)
+            view.frame = CGRect(x: bounds.width - width, y: y, width: width, height: size.height)
+            if view === result, let content = view.subviews.first { content.frame = view.bounds.insetBy(dx: 10, dy: 8) }
+            y += size.height + gap
+        }
+    }
 }
 
-/// Two compact desktop rows, additional tools on demand, and optional inline text results.
+// MARK: - Main bar
+
+/// Tools · undo/redo · text & long capture · pin/save · cancel/done, in one row.
 @MainActor
-final class HUDContentView: NSVisualEffectView, NSPopoverDelegate {
-    private let column = NSStackView()
-    private static let commonTools: [AnnotationTool] = [.rectangle, .ellipse, .line, .arrow, .pen, .text, .mosaic]
-    private var commonToolGroups: [[NSView]] = []
-    private var toolGroups: [[NSView]] = []
-    private var styleGroups: [[NSView]] = []
-    private var commandGroups: [[NSView]] = []
-    private var editingGroups: [[NSView]] = []
-    private var advancedActionGroups: [[NSView]] = []
-    private var annotationButton: HUDIconButton?
-    private var toolButtons: [(AnnotationTool, HUDIconButton)] = []
-    private var actionButtons: [ToolbarAction: HUDIconButton] = [:]
-    private var colorButton: HUDIconButton?
-    private var colorPopover: NSPopover?
-    private var widthButton: HUDIconButton?
-    private var widthPopover: NSPopover?
-    private var selectedColor = 0
-    private var strokeWidth: CGFloat = 3
-    private var activeTool: AnnotationTool?
-    private let resultContainer = NSView()
-    private let resultDivider = NSBox()
-    private var textResultView: NSView?
-    private var preferredTextResultHeight: CGFloat = 260
-    private var resultViewConstraints: [NSLayoutConstraint] = []
-    private var resultWidthConstraint: NSLayoutConstraint?
-    private var resultHeightConstraint: NSLayoutConstraint?
-    private let onColorChange: (NSColor) -> Void
-    private let onWidthChange: (CGFloat) -> Void
-    private let displayNotifications = NSWorkspace.shared.notificationCenter
-    private let colors: [(String, NSColor)] = [
-        ("红色", .systemRed), ("橙色", .systemOrange), ("黄色", .systemYellow),
-        ("绿色", .systemGreen), ("蓝色", .systemBlue), ("白色", .white), ("黑色", .black)
-    ]
-    private var lastWidth: CGFloat = 0
-    private var lastHeight: CGFloat = 0
-    private var configuredSize = CGSize.zero
-    private var layoutDirty = true
-    private let confirmationOnly: Bool
+final class ToolbarMainBar: CaptureHUDBackground {
+    override var isFlipped: Bool { true }
+    private(set) var toolButtons: [AnnotationTool: ToolbarButton] = [:]
+    private(set) var actionButtons: [ToolbarAction: ToolbarButton] = [:]
+    private var items: [NSView] = []
+    private let padding: CGFloat = 5, spacing: CGFloat = 2
+    static let height: CGFloat = 42
 
-    /// Changes the actual owning panel frame after the inspector opens or closes.
-    var onLayoutChange: (() -> Void)?
-    /// The native disclosure state shared by pointer and keyboard entry points.
-    private(set) var isAnnotationExpanded = false
-    /// Retained transient style controllers, including those being explicitly closed.
-    var auxiliaryControlCount: Int { (colorPopover == nil ? 0 : 1) + (widthPopover == nil ? 0 : 1) }
-
-    init(onTool: @escaping (AnnotationTool) -> Void, onAction: @escaping (ToolbarAction) -> Void,
-         onColor: @escaping (NSColor) -> Void, onWidth: @escaping (CGFloat) -> Void, confirmationTitle: String? = nil) {
-        onColorChange = onColor
-        onWidthChange = onWidth
-        confirmationOnly = confirmationTitle != nil
-        super.init(frame: .zero)
-        material = .hudWindow
-        blendingMode = .behindWindow
-        state = .active
-        appearance = NSAppearance(named: .darkAqua)
-        wantsLayer = true
-        layer?.cornerRadius = 12
-        layer?.masksToBounds = true
-        layer?.borderWidth = 0.5
-        column.orientation = .vertical
-        column.alignment = .leading
-        column.spacing = 6
-        column.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(column)
-        NSLayoutConstraint.activate([
-            column.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 9),
-            column.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -9),
-            column.topAnchor.constraint(equalTo: topAnchor, constant: 7),
-            column.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -7)
-        ])
-        resultContainer.translatesAutoresizingMaskIntoConstraints = false
-        resultDivider.boxType = .separator
-        resultDivider.translatesAutoresizingMaskIntoConstraints = false
-        resultContainer.addSubview(resultDivider)
-        let resultWidth = resultContainer.widthAnchor.constraint(equalToConstant: 0)
-        let resultHeight = resultContainer.heightAnchor.constraint(equalToConstant: 0)
-        resultWidthConstraint = resultWidth; resultHeightConstraint = resultHeight
-        NSLayoutConstraint.activate([
-            resultWidth, resultHeight,
-            resultDivider.leadingAnchor.constraint(equalTo: resultContainer.leadingAnchor),
-            resultDivider.trailingAnchor.constraint(equalTo: resultContainer.trailingAnchor),
-            resultDivider.topAnchor.constraint(equalTo: resultContainer.topAnchor),
-            resultDivider.heightAnchor.constraint(equalToConstant: 1)
-        ])
-        if confirmationTitle == nil {
-            let annotation = HUDIconButton(symbol: "ellipsis", title: "更多标注工具")
-            annotation.setAccessibilityExpanded(false)
-            annotation.setAccessibilityHelp("展开模糊、高亮、序号、便签、放大标注和调整选区。")
-            annotation.onPress = { [weak self] in
-                guard let self else { return }
-                self.setAnnotationExpanded(!self.isAnnotationExpanded)
-            }
-            annotationButton = annotation
-            for tool in AnnotationTool.allCases {
-                let button = HUDIconButton(symbol: tool.symbol, title: tool.title)
-                button.onPress = { [weak self] in self?.setSelectedTool(tool, revealIfNeeded: true); onTool(tool) }
-                toolButtons.append((tool, button))
-            }
-            commonToolGroups = [Self.commonTools.compactMap { tool in toolButtons.first { $0.0 == tool }?.1 } + [annotation]]
-            toolGroups = [toolButtons.filter { !Self.commonTools.contains($0.0) }.map { $0.1 }]
-            let color = HUDIconButton(symbol: "circle.fill", title: "标注颜色：红色", tint: .systemRed)
-            color.onPress = { [weak self] in self?.showColorPopover() }
-            colorButton = color
-            let width = HUDIconButton(symbol: "lineweight", title: "标注线宽：3 pt")
-            width.onPress = { [weak self] in self?.showWidthPopover() }
-            widthButton = width
-            styleGroups = [[color, width]]
+    init(confirmationTitle: String?, onTool: @escaping (AnnotationTool) -> Void, onAction: @escaping (ToolbarAction) -> Void) {
+        super.init()
+        func action(_ kind: ToolbarAction, prominent: Bool = false, label: String? = nil) -> ToolbarButton {
+            let button = ToolbarButton(symbol: kind.symbol, title: kind.title, hint: kind.keyHint, prominent: prominent, label: label)
+            button.onPress = { onAction(kind) }
+            actionButtons[kind] = button
+            return button
         }
-        let groups: [[ToolbarAction]] = confirmationTitle == nil
-            ? [[.undo, .redo], [.selection], [.ocr, .translate], [.scroll], [.pin, .save], [.close, .copy]]
-            : [[.close, .copy]]
-        for group in groups {
-            var views: [NSView] = []
-            for action in group {
-                let title = action == .copy ? (confirmationTitle ?? action.title) : action.title
-                let button = HUDIconButton(symbol: action.symbol, title: title,
-                                           tint: action == .copy ? HUDPalette.accent : nil,
-                                           prominent: action == .copy,
-                                           visibleTitle: [.undo, .redo, .ocr, .translate, .scroll].contains(action) ? title
-                                                : action == .copy ? (confirmationTitle ?? "完成") : nil)
-                if action == .undo || action == .redo { button.isEnabled = false }
-                button.toolTip = action.keyHint.map { "\(title) · \($0)" } ?? title
-                if action == .ocr { button.toolTip = "识别文字 · 提取截图原文，可编辑、复制与查看译文" }
-                if action == .translate { button.toolTip = "翻译 · 自动识别截图文字并显示目标语言译文" }
-                button.onPress = { onAction(action) }
-                actionButtons[action] = button
-                views.append(button)
+        if let confirmationTitle {
+            items = [action(.close), action(.copy, prominent: true, label: confirmationTitle)]
+        } else {
+            var row: [NSView] = []
+            for tool in AnnotationTool.toolbarTools {
+                let button = ToolbarButton(symbol: tool.symbol, title: tool.title, hint: tool.shortcutHint)
+                button.onPress = { onTool(tool) }
+                toolButtons[tool] = button
+                row.append(button)
             }
-            if group.contains(.selection) { advancedActionGroups.append(views) }
-            else if group.contains(.undo) { editingGroups.append(views) }
-            else { commandGroups.append(views) }
+            row.append(ToolbarSeparator())
+            row += [action(.undo), action(.redo)]
+            row.append(ToolbarSeparator())
+            row += [action(.ocr), action(.translate), action(.scroll)]
+            row.append(ToolbarSeparator())
+            row += [action(.pin), action(.save), action(.close), action(.copy, prominent: true, label: "完成")]
+            items = row
+            actionButtons[.undo]?.isEnabled = false
+            actionButtons[.redo]?.isEnabled = false
+            actionButtons[.ocr]?.toolTip = "识别文字 · 提取截图中的文字，可编辑、复制"
+            actionButtons[.translate]?.toolTip = "翻译 · 识别文字并显示译文"
         }
-        updateMoreButton()
-        displayNotifications.addObserver(self, selector: #selector(displayOptionsChanged),
-                                         name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
-        updateAppearance()
+        items.forEach(addSubview)
     }
 
     required init?(coder: NSCoder) { nil }
 
-    deinit { displayNotifications.removeObserver(self) }
-
-    /// Closes transient native controls before the capture session releases its HUD.
-    func closeAuxiliaryControls() {
-        closeStylePopovers()
-        displayNotifications.removeObserver(self)
+    var fittingWidthSize: CGSize {
+        let width = items.reduce(0) { $0 + Self.width(of: $1) } + spacing * CGFloat(max(0, items.count - 1)) + padding * 2
+        return CGSize(width: width, height: Self.height)
     }
 
-    /// Discloses all editing tools without changing the active tool or document.
-    func setAnnotationExpanded(_ expanded: Bool, notify: Bool = true) {
-        guard !confirmationOnly, isAnnotationExpanded != expanded else { return }
-        closeStylePopovers()
-        isAnnotationExpanded = expanded
-        updateMoreButton()
-        layoutDirty = true
-        if notify { onLayoutChange?() }
+    private static func width(of view: NSView) -> CGFloat {
+        (view as? ToolbarButton)?.preferredWidth ?? (view is ToolbarSeparator ? 9 : view.frame.width)
     }
 
-    private func closeStylePopovers() {
-        let oldPopovers = [colorPopover, widthPopover].compactMap { $0 }
-        colorPopover = nil; widthPopover = nil
-        colorButton?.setSelected(false); widthButton?.setSelected(false)
-        for popover in oldPopovers {
-            popover.delegate = nil
-            popover.animates = false
-            popover.close()
-            popover.contentViewController = nil
+    func measuredSize(maximumWidth: CGFloat) -> CGSize {
+        let width = min(maximumWidth, fittingWidthSize.width)
+        return ToolbarFlow.arrange(items, width: width, padding: padding, spacing: spacing, rowHeight: Self.height,
+            size: { CGSize(width: Self.width(of: $0), height: $0 is ToolbarSeparator ? 20 : CaptureChrome.buttonSize) })
+    }
+
+    override func layout() {
+        super.layout()
+        _ = ToolbarFlow.arrange(items, width: bounds.width, padding: padding, spacing: spacing, rowHeight: Self.height,
+            apply: true, size: { CGSize(width: Self.width(of: $0), height: $0 is ToolbarSeparator ? 20 : CaptureChrome.buttonSize) })
+    }
+
+    func setSelectedTool(_ tool: AnnotationTool?) {
+        let shown = tool?.toolbarTool
+        for (key, button) in toolButtons {
+            button.isSelected = key == shown
+            if key == .mosaic, let tool, tool.isEffect { button.setSymbol(tool.symbol) }
+            if key == .text, let tool, tool.isTextual { button.setSymbol(tool.symbol) }
         }
     }
 
-    /// Keeps the result view attached across button reflows so text selection and input composition survive.
-    func setTextResultView(_ view: NSView?, preferredHeight: CGFloat = 260, notify: Bool = true) {
-        guard !confirmationOnly || view == nil else { return }
-        let height = preferredHeight.isFinite ? max(0, preferredHeight) : 260
-        guard textResultView !== view || abs(preferredTextResultHeight - height) > 0.5 else { return }
-        closeStylePopovers()
-        if textResultView !== view {
-            NSLayoutConstraint.deactivate(resultViewConstraints); resultViewConstraints.removeAll()
-            textResultView?.removeFromSuperview()
-            textResultView = view
-            if let view {
-                view.translatesAutoresizingMaskIntoConstraints = false
-                view.setContentHuggingPriority(.defaultLow, for: .horizontal)
-                view.setContentHuggingPriority(.defaultLow, for: .vertical)
-                resultContainer.addSubview(view)
-                resultViewConstraints = [
-                    view.leadingAnchor.constraint(equalTo: resultContainer.leadingAnchor),
-                    view.trailingAnchor.constraint(equalTo: resultContainer.trailingAnchor),
-                    view.topAnchor.constraint(equalTo: resultDivider.bottomAnchor, constant: 7),
-                    view.bottomAnchor.constraint(equalTo: resultContainer.bottomAnchor)
-                ]
-                NSLayoutConstraint.activate(resultViewConstraints)
-            } else {
-                column.removeArrangedSubview(resultContainer); resultContainer.removeFromSuperview()
-            }
-        }
-        preferredTextResultHeight = height
-        layoutDirty = true
-        if notify { onLayoutChange?() }
-    }
+    func setEnabled(_ action: ToolbarAction, _ enabled: Bool) { actionButtons[action]?.isEnabled = enabled }
 
-    func configure(maximumWidth: CGFloat, maximumHeight: CGFloat = .greatestFiniteMagnitude) -> CGSize {
-        guard layoutDirty || abs(lastWidth - maximumWidth) > 0.5 || abs(lastHeight - maximumHeight) > 0.5 else { return configuredSize }
-        closeStylePopovers()
-        layoutDirty = false
-        lastWidth = maximumWidth
-        lastHeight = maximumHeight
-        for row in column.arrangedSubviews where row !== resultContainer { column.removeArrangedSubview(row); row.removeFromSuperview() }
-        let limit = max(32, min(maximumWidth, 680) - 18)
-        for button in actionButtons.values { button.constrainWidth(to: limit) }
-        annotationButton?.constrainWidth(to: limit)
-        var largest: CGFloat = 32
-        var rowCount = 0
-        var flexibleRows: [NSLayoutConstraint] = []
-        // Keep drawing/history together and text/output together instead of spilling
-        // whichever actions happen to exceed one long row onto an accidental extra row.
-        var rows = confirmationOnly ? [commandGroups] : [commonToolGroups + styleGroups + editingGroups, commandGroups]
-        if isAnnotationExpanded { rows.append(toolGroups + advancedActionGroups) }
-        for groups in rows {
-            var rowViews: [NSView] = []
-            var rowWidth: CGFloat = 0
-            func finishRow() {
-                guard !rowViews.isEmpty else { return }
-                var hasFlexibleSpace = false
-                // 输出入口从左开始；完成动作固定在右边，避免短的一排整体向右漂移。
-                if let completion = actionButtons[.copy], let last = rowViews.last,
-                   completion.isDescendant(of: last), rowWidth + 4 <= limit {
-                    let space = NSView()
-                    space.translatesAutoresizingMaskIntoConstraints = false
-                    space.setContentHuggingPriority(.defaultLow, for: .horizontal)
-                    space.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-                    space.widthAnchor.constraint(greaterThanOrEqualToConstant: 0).isActive = true
-                    rowViews.insert(space, at: rowViews.count - 1)
-                    rowWidth += 4
-                    hasFlexibleSpace = true
-                }
-                let row = NSStackView(views: rowViews)
-                row.orientation = .horizontal
-                row.alignment = .centerY
-                row.spacing = 4
-                row.setHuggingPriority(.required, for: .horizontal)
-                let width = row.widthAnchor.constraint(equalToConstant: rowWidth)
-                width.isActive = true
-                if hasFlexibleSpace { flexibleRows.append(width) }
-                column.insertArrangedSubview(row, at: rowCount)
-                largest = max(largest, rowWidth)
-                rowCount += 1
-                rowViews = []
-                rowWidth = 0
-            }
-            for group in groups {
-                var pieces: [[NSView]] = []
-                var piece: [NSView] = []
-                var pieceWidth: CGFloat = 0
-                for view in group {
-                    let width = (view as? HUDIconButton)?.layoutWidth ?? 32
-                    if pieceWidth + width > limit && !piece.isEmpty { pieces.append(piece); piece = []; pieceWidth = 0 }
-                    piece.append(view)
-                    pieceWidth += width
-                }
-                if !piece.isEmpty { pieces.append(piece) }
-                for piece in pieces {
-                    let width = piece.reduce(CGFloat.zero) { $0 + (($1 as? HUDIconButton)?.layoutWidth ?? 32) }
-                    let separatorWidth: CGFloat = rowViews.isEmpty ? 0 : 9
-                    if rowWidth + separatorWidth + width > limit && !rowViews.isEmpty { finishRow() }
-                    if !rowViews.isEmpty {
-                        rowViews.append(Self.separator())
-                        rowWidth += 9
-                    }
-                    let groupView = NSStackView(views: piece)
-                    groupView.orientation = .horizontal
-                    groupView.alignment = .centerY
-                    groupView.spacing = 0
-                    groupView.widthAnchor.constraint(equalToConstant: width).isActive = true
-                    rowViews.append(groupView)
-                    rowWidth += width
-                }
-            }
-            finishRow()
-        }
-        for width in flexibleRows { width.constant = largest }
-        let buttonHeight = CGFloat(rowCount) * 32 + CGFloat(max(0, rowCount - 1)) * 6 + 14
-        var resultHeight: CGFloat = 0
-        if textResultView != nil {
-            let attachmentSpacing = 8 + column.spacing
-            let availableHeight = max(0, maximumHeight - buttonHeight - attachmentSpacing)
-            resultHeight = min(preferredTextResultHeight, availableHeight) + attachmentSpacing
-            resultWidthConstraint?.constant = largest
-            resultHeightConstraint?.constant = resultHeight - column.spacing
-            if !column.arrangedSubviews.contains(where: { $0 === resultContainer }) { column.addArrangedSubview(resultContainer) }
-        }
-        configuredSize = CGSize(width: min(maximumWidth, largest + 18), height: buttonHeight + resultHeight)
-        return configuredSize
-    }
-
-    func setSelectedTool(_ selected: AnnotationTool?, revealIfNeeded: Bool = false) {
-        activeTool = selected
-        for (tool, button) in toolButtons { button.setSelected(tool.title == selected?.title) }
-        actionButtons[.selection]?.setSelected(selected == nil)
-        updateMoreButton()
-        if revealIfNeeded, let selected, !Self.commonTools.contains(selected) { setAnnotationExpanded(true) }
-    }
-
-    private func updateMoreButton() {
-        let advancedTool = activeTool.flatMap { Self.commonTools.contains($0) ? nil : $0 }
-        annotationButton?.setSymbol(!isAnnotationExpanded ? advancedTool?.symbol ?? "ellipsis" : "ellipsis")
-        annotationButton?.setSelected(isAnnotationExpanded || advancedTool != nil)
-        annotationButton?.setAccessibilityExpanded(isAnnotationExpanded)
-        annotationButton?.toolTip = isAnnotationExpanded ? "收起更多标注工具"
-            : advancedTool.map { "当前工具：\($0.title) · 展开更多标注工具" } ?? "更多标注工具 · 模糊、高亮、序号、便签、放大标注与调整选区"
-        if let advancedTool, !isAnnotationExpanded { annotationButton?.setAccessibilityValue("当前工具：\(advancedTool.title)") }
-    }
-
-    func setActionEnabled(_ action: ToolbarAction, enabled: Bool) { actionButtons[action]?.isEnabled = enabled }
-
-    /// Updates native help even while the long-capture action is disabled.
     func setScrollAvailability(enabled: Bool, explanation: String) {
         guard let button = actionButtons[.scroll] else { return }
         button.isEnabled = enabled
         button.toolTip = "长截图 · \(explanation)"
         button.setAccessibilityHelp(explanation)
-        button.setAccessibilityValue(enabled ? "" : explanation)
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        updateAppearance()
-    }
-
-    private func updateAppearance() {
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            let contrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
-            layer?.borderWidth = contrast ? 1 : 0.5
-            layer?.borderColor = NSColor.white.withAlphaComponent(contrast ? 0.5 : 0.16).cgColor
-            layer?.backgroundColor = HUDPalette.surface.withAlphaComponent(NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency ? 1 : 0.72).cgColor
-        }
-    }
-
-    @objc private func displayOptionsChanged() { updateAppearance() }
-
-    private func showColorPopover() {
-        guard let colorButton, colorButton.window != nil else { return }
-        if let colorPopover, colorPopover.isShown { closeStylePopovers(); return }
-        closeStylePopovers()
-        let content = NSView(frame: CGRect(x: 0, y: 0, width: 184, height: 118))
-        let heading = NSTextField(labelWithString: "标注颜色")
-        heading.font = .systemFont(ofSize: 12, weight: .semibold)
-        heading.frame = CGRect(x: 12, y: 92, width: 160, height: 17)
-        content.addSubview(heading)
-        for (index, value) in colors.enumerated() {
-            let button = HUDIconButton(symbol: "circle.fill", title: "标注颜色：\(value.0)", tint: value.1)
-            button.setSelected(index == selectedColor)
-            button.onPress = { [weak self] in self?.chooseColor(index) }
-            button.translatesAutoresizingMaskIntoConstraints = true
-            button.frame = CGRect(x: 12 + CGFloat(index % 4) * 40, y: index < 4 ? 52 : 12, width: 32, height: 32)
-            content.addSubview(button)
-        }
-        let popover = makePopover(content: content)
-        colorPopover = popover
-        colorButton.setSelected(true)
-        popover.show(relativeTo: colorButton.bounds, of: colorButton, preferredEdge: .minY)
-    }
-
-    private func chooseColor(_ index: Int) {
-        guard colors.indices.contains(index) else { return }
-        selectedColor = index
-        let value = colors[selectedColor]
-        colorButton?.setTint(value.1)
-        colorButton?.toolTip = "标注颜色：\(value.0)"
-        colorButton?.setAccessibilityLabel("标注颜色：\(value.0)")
-        onColorChange(value.1)
-        colorPopover?.close()
-    }
-
-    private func showWidthPopover() {
-        guard let widthButton, widthButton.window != nil else { return }
-        if let widthPopover, widthPopover.isShown { closeStylePopovers(); return }
-        closeStylePopovers()
-        let content = NSView(frame: CGRect(x: 0, y: 0, width: 216, height: 86))
-        let heading = NSTextField(labelWithString: "线宽")
-        heading.font = .systemFont(ofSize: 12, weight: .semibold)
-        heading.frame = CGRect(x: 14, y: 57, width: 188, height: 17)
-        let control = StrokeWidthControl(value: strokeWidth) { [weak self] value in
-            guard let self else { return }
-            self.strokeWidth = value
-            self.widthButton?.toolTip = "标注线宽：\(Int(value)) pt"
-            self.widthButton?.setAccessibilityLabel("标注线宽：\(Int(value)) pt")
-            self.onWidthChange(value)
-        }
-        control.translatesAutoresizingMaskIntoConstraints = true
-        control.frame = CGRect(x: 10, y: 9, width: 196, height: 44)
-        content.addSubview(heading)
-        content.addSubview(control)
-        let popover = makePopover(content: content)
-        widthPopover = popover
-        widthButton.setSelected(true)
-        popover.show(relativeTo: widthButton.bounds, of: widthButton, preferredEdge: .minY)
-    }
-
-    func popoverDidClose(_ notification: Notification) {
-        guard let closing = notification.object as? NSPopover else { return }
-        if closing === colorPopover {
-            colorButton?.setSelected(false)
-            colorPopover?.contentViewController = nil
-            colorPopover?.delegate = nil
-            colorPopover = nil
-        } else if closing === widthPopover {
-            widthButton?.setSelected(false)
-            widthPopover?.contentViewController = nil
-            widthPopover?.delegate = nil
-            widthPopover = nil
-        }
-    }
-
-    private func makePopover(content: NSView) -> NSPopover {
-        let popover = NSPopover()
-        popover.behavior = .transient
-        popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        popover.delegate = self
-        let controller = NSViewController()
-        controller.view = content
-        popover.contentViewController = controller
-        popover.contentSize = content.frame.size
-        return popover
-    }
-
-    private static func separator() -> NSView {
-        let separator = NSBox()
-        separator.boxType = .separator
-        separator.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([separator.widthAnchor.constraint(equalToConstant: 1), separator.heightAnchor.constraint(equalToConstant: 18)])
-        return separator
     }
 }
 
 @MainActor
-private enum HUDPalette {
-    static let accent = NSColor(calibratedRed: 0.91, green: 0.73, blue: 0.46, alpha: 1)
-    static let surface = NSColor(calibratedWhite: 0.09, alpha: 1)
+final class ToolbarSeparator: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        CaptureChrome.separator.setFill()
+        NSRect(x: bounds.midX - 0.5, y: 0, width: 1, height: bounds.height).fill()
+    }
 }
 
-@MainActor
-private final class HUDIconButton: NSButton {
-    var onPress: (() -> Void)?
-    private var tracking: NSTrackingArea?
-    private var hovered = false
-    private var selected = false
-    private var mousePressed = false
-    private var symbolTint: NSColor?
-    private let prominent: Bool
-    private let isColorSwatch: Bool
-    private let visibleTitle: String?
-    private let preferredWidth: CGFloat
-    private var widthConstraint: NSLayoutConstraint?
-    var layoutWidth: CGFloat { widthConstraint?.constant ?? 32 }
+// MARK: - Property bar
 
-    init(symbol: String, title: String, tint: NSColor? = nil, prominent: Bool = false, visibleTitle: String? = nil) {
-        symbolTint = tint
-        self.prominent = prominent
-        self.visibleTitle = visibleTitle
-        preferredWidth = visibleTitle.map {
-            max(48, ceil(($0 as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium)]).width) + 30)
-        } ?? 32
-        isColorSwatch = symbol == "circle.fill" && tint != nil
-        super.init(frame: CGRect(x: 0, y: 0, width: 32, height: 32))
-        isBordered = false
-        bezelStyle = .regularSquare
-        setButtonType(.momentaryPushIn)
-        self.title = visibleTitle ?? ""
-        font = .systemFont(ofSize: 12, weight: .medium)
-        imagePosition = visibleTitle == nil ? .imageOnly : .imageLeading
-        if !isColorSwatch {
-            image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?.withSymbolConfiguration(.init(pointSize: 14.5, weight: .medium))
+/// Color, size and per-tool options for the active tool or selected annotation.
+@MainActor
+final class ToolbarPropertyBar: CaptureHUDBackground {
+    override var isFlipped: Bool { true }
+    private let tool: AnnotationTool
+    private var style: AnnotationStyle
+    private let onChange: (AnnotationStyle) -> Void
+    private var colorButtons: [ToolbarSwatchButton] = []
+    private var sizeButtons: [ToolbarButton] = []
+    private var toggles: [(ToolbarButton, (inout AnnotationStyle) -> Void, (AnnotationStyle) -> Bool)] = []
+    private var items: [NSView] = []
+    private let padding: CGFloat = 6, spacing: CGFloat = 3
+    static let height: CGFloat = 38
+
+    var buttons: [NSButton] { colorButtons as [NSButton] + sizeButtons + toggles.map(\.0) }
+
+    init(tool: AnnotationTool, style: AnnotationStyle, onChange: @escaping (AnnotationStyle) -> Void) {
+        self.tool = tool; self.style = style; self.onChange = onChange
+        super.init()
+        if tool != .mosaic {
+            for (index, entry) in AnnotationColor.palette.enumerated() {
+                let swatch = ToolbarSwatchButton(color: entry.color, name: entry.name)
+                swatch.onPress = { [weak self] in self?.change { $0.color = AnnotationColor.palette[index].color } }
+                colorButtons.append(swatch); items.append(swatch)
+            }
+            items.append(ToolbarSeparator())
         }
-        imageScaling = .scaleNone
-        toolTip = title
-        setAccessibilityLabel(title)
-        target = self
-        action = #selector(pressed)
-        wantsLayer = true
-        layer?.cornerRadius = 6
-        focusRingType = .exterior
-        translatesAutoresizingMaskIntoConstraints = false
-        let width = widthAnchor.constraint(equalToConstant: preferredWidth)
-        widthConstraint = width
-        NSLayoutConstraint.activate([width, heightAnchor.constraint(equalToConstant: 32)])
-        refreshAppearance()
+        let textual = tool == .text
+        let presets = textual ? AnnotationStyle.fontPresets : AnnotationStyle.widthPresets
+        for (index, value) in presets.enumerated() {
+            let names = textual ? ["小号文字", "中号文字", "大号文字"] : ["细", "中", "粗"]
+            let button = ToolbarButton(dot: CGFloat(index), title: names[index])
+            button.onPress = { [weak self] in
+                self?.change { textual ? ($0.fontSize = value) : ($0.width = value) }
+            }
+            sizeButtons.append(button); items.append(button)
+        }
+        func toggle(_ symbol: String, _ title: String, apply: @escaping (inout AnnotationStyle) -> Void,
+                    isOn: @escaping (AnnotationStyle) -> Bool) {
+            let button = ToolbarButton(symbol: symbol, title: title, hint: nil, size: 28)
+            button.onPress = { [weak self] in self?.change(apply) }
+            toggles.append((button, apply, isOn))
+        }
+        switch tool {
+        case .rectangle, .ellipse:
+            toggle(tool == .rectangle ? "rectangle.fill" : "circle.fill", "填充", apply: { $0.filled.toggle() }, isOn: { $0.filled })
+        case .text:
+            toggle("note.text", "便签底色", apply: { $0.textBackground.toggle() }, isOn: { $0.textBackground })
+        case .mosaic:
+            toggle("checkerboard.rectangle", "马赛克", apply: { $0.blur = false }, isOn: { !$0.blur })
+            toggle("drop.halffull", "模糊", apply: { $0.blur = true }, isOn: { $0.blur })
+        default: break
+        }
+        if !toggles.isEmpty { items.append(ToolbarSeparator()); items += toggles.map(\.0) }
+        items.forEach(addSubview)
+        update(style: style)
     }
 
     required init?(coder: NSCoder) { nil }
 
-    /// Preserves a desktop-size hit target and the visible label when narrow screens require extra rows.
-    func constrainWidth(to maximumWidth: CGFloat) {
-        guard visibleTitle != nil else { return }
-        let width = min(preferredWidth, max(32, maximumWidth))
-        widthConstraint?.constant = width
-        let labelFits = width >= preferredWidth - 0.5
-        imagePosition = labelFits ? .imageLeading : .imageAbove
-        font = .systemFont(ofSize: labelFits ? 12 : 10, weight: .medium)
+    private func change(_ apply: (inout AnnotationStyle) -> Void) {
+        apply(&style)
+        update(style: style)
+        onChange(style)
     }
 
-    @objc private func pressed() { onPress?() }
-
-    override var acceptsFirstResponder: Bool { isEnabled }
-
-    // Borderless SF Symbol cells otherwise change their alignment inset when the glyph changes.
-    override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0) }
-
-    override var isEnabled: Bool { didSet { refreshAppearance() } }
-
-    override func becomeFirstResponder() -> Bool {
-        let accepted = super.becomeFirstResponder()
-        refreshAppearance()
-        return accepted
+    func update(style: AnnotationStyle) {
+        self.style = style
+        for (index, swatch) in colorButtons.enumerated() { swatch.isSelected = AnnotationColor.palette[index].color == style.color }
+        let presets = tool == .text ? AnnotationStyle.fontPresets : AnnotationStyle.widthPresets
+        let current = tool == .text ? style.fontSize : style.width
+        let nearest = presets.enumerated().min { abs($0.element - current) < abs($1.element - current) }?.offset
+        for (index, button) in sizeButtons.enumerated() { button.isSelected = index == nearest }
+        for (button, _, isOn) in toggles { button.isSelected = isOn(style) }
     }
 
-    override func resignFirstResponder() -> Bool {
-        let accepted = super.resignFirstResponder()
-        refreshAppearance()
-        return accepted
+    var fittingWidthSize: CGSize {
+        let width = items.reduce(0) { $0 + Self.width(of: $1) } + spacing * CGFloat(max(0, items.count - 1)) + padding * 2
+        return CGSize(width: width, height: Self.height)
     }
 
-    override func mouseDown(with event: NSEvent) {
-        guard isEnabled else { return }
-        mousePressed = true
-        refreshAppearance()
-        super.mouseDown(with: event)
-        mousePressed = false
-        refreshAppearance()
+    private static func width(of view: NSView) -> CGFloat {
+        if view is ToolbarSeparator { return 9 }
+        if view is ToolbarSwatchButton { return 24 }
+        return (view as? ToolbarButton)?.preferredWidth ?? 28
     }
 
-    func setTint(_ color: NSColor) { symbolTint = color; refreshAppearance() }
+    func measuredSize(maximumWidth: CGFloat) -> CGSize {
+        let width = min(maximumWidth, fittingWidthSize.width)
+        return ToolbarFlow.arrange(items, width: width, padding: padding, spacing: spacing, rowHeight: Self.height,
+            size: { CGSize(width: Self.width(of: $0), height: $0 is ToolbarSeparator ? 18 : $0 is ToolbarSwatchButton ? 24 : 28) })
+    }
+
+    override func layout() {
+        super.layout()
+        _ = ToolbarFlow.arrange(items, width: bounds.width, padding: padding, spacing: spacing, rowHeight: Self.height,
+            apply: true, size: { CGSize(width: Self.width(of: $0), height: $0 is ToolbarSeparator ? 18 : $0 is ToolbarSwatchButton ? 24 : 28) })
+    }
+}
+
+/// Wraps native controls at their full hit size when a display cannot fit the single-row toolbar.
+@MainActor
+private enum ToolbarFlow {
+    static func arrange(_ items: [NSView], width: CGFloat, padding: CGFloat, spacing: CGFloat, rowHeight: CGFloat,
+                        apply: Bool = false, size: (NSView) -> CGSize) -> CGSize {
+        var x = padding, y: CGFloat = 0
+        for view in items {
+            let item = size(view)
+            if view is ToolbarSeparator, x == padding || x + item.width > width - padding {
+                if apply { view.isHidden = true }
+                continue
+            }
+            if x > padding, x + item.width > width - padding { x = padding; y += rowHeight }
+            if apply {
+                view.isHidden = false
+                view.frame = CGRect(x: x, y: y + (rowHeight - item.height) / 2, width: item.width, height: item.height)
+            }
+            x += item.width + spacing
+        }
+        return CGSize(width: width, height: y + rowHeight)
+    }
+}
+
+// MARK: - Buttons
+
+/// A layer-drawn HUD button: hover tint, pressed scale, accent fill for the selected tool.
+@MainActor
+class ToolbarButton: NSButton {
+    var onPress: (() -> Void)?
+    var isSelected = false { didSet { refresh(); setAccessibilityValue(isSelected ? "已选择" : "") } }
+    let preferredWidth: CGFloat
+    var drawsSelectionBackground = true
+    private let prominent: Bool
+    private let dotLevel: CGFloat?
+    private var hovering = false
+    private var pressed = false
+    private var tracking: NSTrackingArea?
+    private var symbolImage: NSImage?
+    /// Scaled on press; AppKit owns the backing layer's geometry, so content lives in a sublayer.
+    private let contentLayer = CALayer()
+    private let iconLayer = CALayer()
+    private let labelLayer = CATextLayer()
+    private let dotLayer = CALayer()
+
+    init(symbol: String, title: String, hint: String?, prominent: Bool = false, label: String? = nil, size: CGFloat = CaptureChrome.buttonSize) {
+        self.prominent = prominent
+        dotLevel = nil
+        let labelWidth = label.map { ceil(($0 as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12.5, weight: .semibold)]).width) } ?? 0
+        preferredWidth = label == nil ? size : labelWidth + 40
+        super.init(frame: CGRect(x: 0, y: 0, width: preferredWidth, height: size))
+        configure(title: title, hint: hint)
+        setSymbol(symbol)
+        if let label {
+            labelLayer.string = label
+            labelLayer.font = NSFont.systemFont(ofSize: 12.5, weight: .semibold)
+            labelLayer.fontSize = 12.5
+            labelLayer.alignmentMode = .left
+            labelLayer.foregroundColor = NSColor.white.cgColor
+            labelLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+            contentLayer.addSublayer(labelLayer)
+        }
+    }
+
+    /// A size preset showing a dot whose diameter grows with the level.
+    init(dot level: CGFloat, title: String) {
+        prominent = false
+        dotLevel = level
+        preferredWidth = 28
+        super.init(frame: CGRect(x: 0, y: 0, width: 28, height: 28))
+        configure(title: title, hint: nil)
+        dotLayer.backgroundColor = NSColor.white.cgColor
+        contentLayer.addSublayer(dotLayer)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    private func configure(title: String, hint: String?) {
+        self.title = ""
+        isBordered = false
+        bezelStyle = .regularSquare
+        setButtonType(.momentaryChange)
+        imagePosition = .noImage
+        wantsLayer = true
+        layer?.cornerRadius = CaptureChrome.buttonRadius
+        layer?.cornerCurve = .continuous
+        iconLayer.contentsGravity = .center
+        iconLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        contentLayer.addSublayer(iconLayer)
+        layer?.addSublayer(contentLayer)
+        toolTip = hint.map { "\(title)  \($0)" } ?? title
+        setAccessibilityLabel(title)
+        target = self; action = #selector(performPress)
+        focusRingType = .none
+        refresh()
+    }
 
     func setSymbol(_ symbol: String) {
-        image = NSImage(systemSymbolName: symbol, accessibilityDescription: accessibilityLabel())?
-            .withSymbolConfiguration(.init(pointSize: 14.5, weight: .medium))
+        let configuration = NSImage.SymbolConfiguration(pointSize: prominent ? 12.5 : 14, weight: prominent ? .bold : .medium)
+        symbolImage = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?.withSymbolConfiguration(configuration)
+        refresh()
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        refreshAppearance(invalidate: false)
-        super.draw(dirtyRect)
-        guard isColorSwatch, let symbolTint else { return }
-        let circle = NSBezierPath(ovalIn: CGRect(x: bounds.midX - 7, y: bounds.midY - 7, width: 14, height: 14))
-        symbolTint.setFill()
-        circle.fill()
-        NSColor.secondaryLabelColor.withAlphaComponent(0.6).setStroke()
-        circle.lineWidth = 0.75
-        circle.stroke()
+    @objc private func performPress() {
+        guard isEnabled else { return }
+        onPress?()
     }
 
-    func setSelected(_ value: Bool) {
-        selected = value
-        setAccessibilityValue(value ? "已选择" : "")
-        refreshAppearance()
-    }
+    override var isEnabled: Bool { didSet { refresh() } }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
         let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
-        addTrackingArea(area)
-        tracking = area
+        addTrackingArea(area); tracking = area
     }
 
-    override func mouseEntered(with event: NSEvent) { hovered = true; refreshAppearance(); animateHover() }
-    override func mouseExited(with event: NSEvent) { hovered = false; refreshAppearance(); animateHover() }
+    override func mouseEntered(with event: NSEvent) { hovering = true; refresh(animated: true) }
+    override func mouseExited(with event: NSEvent) { hovering = false; refresh(animated: true) }
 
-    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); refreshAppearance() }
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        pressed = true; refresh(); scale(0.9)
+        super.mouseDown(with: event)
+        pressed = false; refresh(animated: true); scale(1)
+    }
 
-    private func refreshAppearance(invalidate: Bool = true) {
-        contentTintColor = selected && symbolTint == nil ? HUDPalette.accent : symbolTint ?? .labelColor
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            let background: NSColor
-            if !isEnabled { background = .clear }
-            else if mousePressed || cell?.isHighlighted == true { background = .labelColor.withAlphaComponent(0.14) }
-            else if selected { background = HUDPalette.accent.withAlphaComponent(0.2) }
-            else if prominent { background = HUDPalette.accent.withAlphaComponent(hovered ? 0.21 : 0.13) }
-            else { background = hovered ? .labelColor.withAlphaComponent(0.08) : .clear }
-            layer?.backgroundColor = background.cgColor
-            let focused = window?.firstResponder === self
-            layer?.borderWidth = focused ? 2 : selected ? 0.5 : 0
-            layer?.borderColor = HUDPalette.accent.withAlphaComponent(focused ? 0.9 : 0.4).cgColor
-            layer?.opacity = isEnabled ? 1 : 0.55
+    private func scale(_ value: CGFloat) {
+        guard !CaptureChrome.reduceMotion else { return }
+        let animation = CASpringAnimation(keyPath: "transform.scale")
+        animation.fromValue = contentLayer.presentation()?.value(forKeyPath: "transform.scale") ?? 1
+        animation.toValue = value
+        animation.stiffness = 700; animation.damping = 26; animation.duration = 0.2
+        contentLayer.setValue(value, forKeyPath: "transform.scale")
+        contentLayer.add(animation, forKey: "press")
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        contentLayer.bounds = bounds
+        contentLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        if labelLayer.superlayer != nil {
+            iconLayer.frame = CGRect(x: 10, y: 0, width: 16, height: bounds.height)
+            labelLayer.frame = CGRect(x: 29, y: (bounds.height - 16) / 2 - 0.5, width: bounds.width - 31, height: 17)
+        } else {
+            iconLayer.frame = bounds
         }
-        if invalidate { needsDisplay = true }
-    }
-
-    private func animateHover() {
-        guard let layer else { return }
-        let scale: CGFloat = hovered && isEnabled ? 1.06 : 1
-        let previous = layer.presentation()?.value(forKeyPath: "transform.scale") as? CGFloat ?? 1
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        layer.setAffineTransform(CGAffineTransform(scaleX: scale, y: scale))
+        if let dotLevel {
+            let diameter = 4 + dotLevel * 3.5
+            dotLayer.frame = CGRect(x: bounds.midX - diameter / 2, y: bounds.midY - diameter / 2, width: diameter, height: diameter)
+            dotLayer.cornerRadius = diameter / 2
+        }
         CATransaction.commit()
-        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
-            layer.removeAnimation(forKey: "HUDHover")
-            layer.setAffineTransform(.identity)
-            return
-        }
-        let spring = CASpringAnimation(keyPath: "transform.scale")
-        spring.fromValue = previous
-        spring.toValue = scale
-        spring.stiffness = 400
-        spring.damping = 30
-        spring.duration = 0.15
-        layer.add(spring, forKey: "HUDHover")
+    }
+
+    func refresh(animated: Bool = false) {
+        let background: NSColor
+        if prominent { background = CaptureChrome.accent.withAlphaComponent(pressed ? 0.75 : hovering ? 0.88 : 1) }
+        else if isSelected && drawsSelectionBackground { background = CaptureChrome.accent }
+        else if pressed { background = CaptureChrome.pressed }
+        else if hovering && isEnabled { background = CaptureChrome.hover }
+        else { background = .clear }
+        CATransaction.begin()
+        CATransaction.setDisableActions(!animated || CaptureChrome.reduceMotion)
+        CATransaction.setAnimationDuration(0.12)
+        layer?.backgroundColor = background.cgColor
+        layer?.opacity = isEnabled ? 1 : 0.35
+        CATransaction.commit()
+        let tint: NSColor = prominent || (isSelected && drawsSelectionBackground) ? .white : CaptureChrome.primaryText
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        iconLayer.contents = symbolImage?.tinted(tint)
+        dotLayer.backgroundColor = (isSelected ? NSColor.white : CaptureChrome.primaryText).cgColor
+        CATransaction.commit()
+        needsDisplay = true
     }
 }
 
+/// A round color well with a ring around the current color.
 @MainActor
-private final class StrokeWidthControl: NSView {
-    private let slider: NSSlider
-    private let label = NSTextField(labelWithString: "3 pt")
-    private let onChange: (CGFloat) -> Void
+final class ToolbarSwatchButton: ToolbarButton {
+    private let color: AnnotationColor
+    override var isSelected: Bool { didSet { needsDisplay = true } }
 
-    init(value: CGFloat = 3, onChange: @escaping (CGFloat) -> Void) {
-        self.onChange = onChange
-        slider = NSSlider(value: Double(value), minValue: 1, maxValue: 16, target: nil, action: nil)
-        super.init(frame: CGRect(x: 0, y: 0, width: 196, height: 44))
-        slider.target = self
-        slider.action = #selector(changed)
-        slider.isContinuous = true
-        slider.numberOfTickMarks = 16
-        slider.allowsTickMarkValuesOnly = true
-        slider.setAccessibilityLabel("标注线宽")
-        slider.toolTip = "标注线宽，1–16 pt"
-        label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
-        label.textColor = .secondaryLabelColor
-        label.stringValue = "\(Int(value)) pt"
-        let stack = NSStackView(views: [slider, label])
-        stack.orientation = .horizontal
-        stack.alignment = .centerY
-        stack.spacing = 6
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
-        translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: 196), heightAnchor.constraint(equalToConstant: 44),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
-            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
-            slider.widthAnchor.constraint(equalToConstant: 148), slider.heightAnchor.constraint(equalToConstant: 44),
-            label.widthAnchor.constraint(equalToConstant: 32)
-        ])
+    init(color: AnnotationColor, name: String) {
+        self.color = color
+        super.init(symbol: "", title: name, hint: nil, size: 24)
+        drawsSelectionBackground = false
     }
-
     required init?(coder: NSCoder) { nil }
 
-    @objc private func changed() {
-        let width = CGFloat(slider.doubleValue.rounded())
-        label.stringValue = "\(Int(width)) pt"
-        onChange(width)
+    override func draw(_ dirtyRect: NSRect) {
+        let outer = bounds.insetBy(dx: 2, dy: 2)
+        if isSelected {
+            NSColor.white.setStroke()
+            let ring = NSBezierPath(ovalIn: outer.insetBy(dx: 0.75, dy: 0.75)); ring.lineWidth = 1.5; ring.stroke()
+        }
+        let inner = outer.insetBy(dx: isSelected ? 4 : 2.5, dy: isSelected ? 4 : 2.5)
+        (NSColor(cgColor: color.cgColor) ?? .systemRed).setFill()
+        NSBezierPath(ovalIn: inner).fill()
+        NSColor.white.withAlphaComponent(0.25).setStroke()
+        let edge = NSBezierPath(ovalIn: inner.insetBy(dx: 0.25, dy: 0.25)); edge.lineWidth = 0.5; edge.stroke()
+    }
+}
+
+private extension NSImage {
+    /// Returns a template-tinted copy so SF Symbols render in the HUD's colors inside a CALayer.
+    func tinted(_ color: NSColor) -> NSImage {
+        let image = NSImage(size: size, flipped: false) { rect in
+            self.draw(in: rect)
+            color.set()
+            rect.fill(using: .sourceAtop)
+            return true
+        }
+        image.isTemplate = false
+        return image
     }
 }

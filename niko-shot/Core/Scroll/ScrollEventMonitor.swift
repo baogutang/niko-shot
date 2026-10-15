@@ -1,79 +1,73 @@
-// 只在长截图激活期间监听滚轮；不监听键盘、文字输入或其它应用事件。
+// Observes scrolling activity over the capture viewport only while a long capture is active.
 import AppKit
 
+/// One observed input that may have moved the target's content.
+struct ScrollActivity: Sendable, Equatable {
+    /// Content shift in points implied by a precise (trackpad / Magic Mouse) delta; positive means scrolled down.
+    var preciseDownwardPoints: CGFloat?
+    /// The event came from automatic scrolling.
+    var isSynthetic = false
+}
+
+/// Global monitors never consume events; mouse and wheel observation needs no extra permission.
 @MainActor
 final class ScrollEventMonitor {
-    static let finishDebounce: TimeInterval = 0.06
     private var local: Any?
     private var global: Any?
-    private var timer: Timer?
     private var viewport: CGRect = .zero
-    private var windowID: CGWindowID?
-    private var onScroll: (() -> Void)?
-    private var onFinished: (() -> Void)?
-    var localMonitorCount: Int { local == nil ? 0 : 1 }
-    var globalMonitorCount: Int { global == nil ? 0 : 1 }
-    var timerCount: Int { timer?.isValid == true ? 1 : 0 }
+    private var onActivity: ((ScrollActivity) -> Void)?
+    private var dragging = false
+    var monitorCount: Int { (local == nil ? 0 : 1) + (global == nil ? 0 : 1) }
 
-    func start(viewport: CGRect, windowID: CGWindowID? = nil, onScroll: @escaping () -> Void, onFinished: @escaping () -> Void) {
+    /// Starts observing wheel, scroll-bar drags and keyboard paging (keys only arrive with Accessibility consent).
+    func start(viewport: CGRect, onActivity: @escaping (ScrollActivity) -> Void) {
         stop()
-        self.viewport = viewport; self.onScroll = onScroll; self.onFinished = onFinished
-        self.windowID = windowID
-        local = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+        self.viewport = viewport
+        self.onActivity = onActivity
+        let mask: NSEvent.EventTypeMask = [.scrollWheel, .leftMouseDown, .leftMouseDragged, .leftMouseUp, .keyDown]
+        local = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
             MainActor.assumeIsolated { self?.receive(event) }
             return event
         }
-        // AppKit 的 global monitor 在主线程回调，并且与 local monitor 的事件范围互斥。
-        global = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+        global = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] event in
             MainActor.assumeIsolated { self?.receive(event) }
         }
     }
 
     func update(viewport: CGRect) { self.viewport = viewport }
 
-    func receive(_ event: NSEvent) {
-        let point: CGPoint
-        var target: Int64 = 0, synthetic = false
-        if let native = event.cgEvent {
-            synthetic = native.getIntegerValueField(.eventSourceUserData) == AutoScroller.eventMarker
-            target = native.getIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent)
-            if target == 0, event.windowNumber > 0 { target = Int64(event.windowNumber) }
-            point = CGPoint(x: native.location.x,
-                y: CoordinateSpace.flippedY(native.location.y, primaryTop: NSScreen.screens.first?.frame.maxY ?? 0))
-        } else { point = NSEvent.mouseLocation }
-        guard event.scrollingDeltaY != 0 || event.momentumPhase == .ended || event.phase == .ended else { return }
-        receiveScrollEvent(at: point, targetWindow: target, synthetic: synthetic)
-    }
-
-    /// WindowServer 的目标字段只读；无权限测试从同一个解码后的入口注入，不伪造系统窗口。
-    func receiveScrollEvent(at point: CGPoint, targetWindow: Int64, synthetic: Bool = false) {
-        // 预览/其它窗口在选区上方滚动不能让目标静止截图提前完成；未知字段仍按选区判断。
-        if !synthetic, let windowID, targetWindow > 0, targetWindow != Int64(windowID) { return }
-        guard viewport.contains(point) else { return }
-        receiveScrollEvent()
-    }
-
-    /// 共享入口也用于无 TCC 的流程测试；只有滚动事件会重设结束计时。
-    func receiveScrollEvent() {
-        guard let onScroll else { return }
-        timer?.invalidate()
-        // 从事件到达计时，不能让 GPU 抓帧/拼接耗时偷偷延长这 60ms。
-        timer = Timer.scheduledTimer(withTimeInterval: Self.finishDebounce, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                self.timer?.invalidate(); self.timer = nil
-                self.onFinished?()
-            }
-        }
-        if let timer { RunLoop.main.add(timer, forMode: .common) }
-        onScroll()
-    }
-
     func stop() {
         if let local { NSEvent.removeMonitor(local) }
         if let global { NSEvent.removeMonitor(global) }
-        local = nil; global = nil
-        timer?.invalidate(); timer = nil
-        onScroll = nil; onFinished = nil; viewport = .zero; windowID = nil
+        local = nil; global = nil; onActivity = nil; dragging = false; viewport = .zero
+    }
+
+    /// Decodes an AppKit event; also the injection point for permission-free tests.
+    func receive(_ event: NSEvent) {
+        switch event.type {
+        case .scrollWheel:
+            guard viewport.contains(NSEvent.mouseLocation) else { return }
+            let synthetic = event.cgEvent?.getIntegerValueField(.eventSourceUserData) == AutoScroller.eventMarker
+            let delta = event.hasPreciseScrollingDeltas ? -event.scrollingDeltaY : nil
+            guard event.scrollingDeltaY != 0 || event.phase == .ended || event.momentumPhase == .ended else { return }
+            onActivity?(ScrollActivity(preciseDownwardPoints: delta, isSynthetic: synthetic))
+        case .leftMouseDown:
+            // 拖动滚动条或内容时，窗口可能在选区外侧（滚动条）——以窗口内拖动为准。
+            dragging = viewport.insetBy(dx: -24, dy: -8).contains(NSEvent.mouseLocation)
+        case .leftMouseDragged:
+            if dragging { onActivity?(ScrollActivity()) }
+        case .leftMouseUp:
+            if dragging { dragging = false; onActivity?(ScrollActivity()) }
+        case .keyDown:
+            // 方向键、空格、PageUp/Down、Home/End 会滚动目标内容。
+            if [49, 115, 116, 119, 121, 125, 126].contains(Int(event.keyCode)) { onActivity?(ScrollActivity()) }
+        default: break
+        }
+    }
+
+    /// Permission-free test entry with an explicit pointer location.
+    func receiveScroll(at point: CGPoint, deltaY: CGFloat, precise: Bool, synthetic: Bool = false) {
+        guard viewport.contains(point) else { return }
+        onActivity?(ScrollActivity(preciseDownwardPoints: precise ? -deltaY : nil, isSynthetic: synthetic))
     }
 }

@@ -1,36 +1,25 @@
-// Exercises the real AppKit HUD's compact completion, disclosure, screen placement and transient-control lifecycle.
+// Verifies native toolbar actions, adaptive layout, contextual styles and text focus through real AppKit controls.
 import AppKit
 import XCTest
 @testable import NikoShot
 
 @MainActor
 final class ToolbarLayoutTests: XCTestCase {
-    func testDrawnLineArrowAndRectangleCanBeUndoneAndRedoneFromVisibleButtons() throws {
+    func testDrawnAnnotationsCanBeUndoneAndRedoneFromVisibleButtons() throws {
         let pixels = try ImageUtilities.context(width: 400, height: 320)
         let session = SelectionSession()
         session.edit(image: try XCTUnwrap(pixels.makeImage()), pointSize: CGSize(width: 200, height: 160)) { _, _ in }
         defer { session.finish() }
-        let hud = try XCTUnwrap(try shownPanel().contentView as? HUDContentView)
+        let hud = try stack()
         let canvas = try XCTUnwrap(NSApp.windows.compactMap(\.contentView).flatMap { allViews(in: $0) }
             .compactMap { $0 as? AnnotationCanvasView }.first)
         let undo = try button(ToolbarAction.undo.title, in: hud), redo = try button(ToolbarAction.redo.title, in: hud)
         XCTAssertFalse(undo.isEnabled); XCTAssertFalse(redo.isEnabled)
         for (index, tool) in [AnnotationTool.line, .arrow, .rectangle].enumerated() {
             try button(tool.title, in: hud).performClick(nil)
-            for (type, point) in [(NSEvent.EventType.leftMouseDown, CGPoint(x: 20, y: 20)),
-                                  (.leftMouseDragged, CGPoint(x: 120, y: 90)), (.leftMouseUp, CGPoint(x: 120, y: 90))] {
-                let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: canvas.convert(point, to: nil),
-                    modifierFlags: [], timestamp: 0, windowNumber: canvas.window?.windowNumber ?? 0,
-                    context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
-                switch type {
-                case .leftMouseDown: canvas.mouseDown(with: event)
-                case .leftMouseDragged: canvas.mouseDragged(with: event)
-                default: canvas.mouseUp(with: event)
-                }
-            }
+            try draw(in: canvas, from: CGPoint(x: 20, y: 15 + index * 40), to: CGPoint(x: 120, y: 35 + index * 40))
             XCTAssertEqual(canvas.document.commands.count, index + 1)
-            XCTAssertTrue(undo.isEnabled)
-            XCTAssertFalse(redo.isEnabled)
+            XCTAssertTrue(undo.isEnabled); XCTAssertFalse(redo.isEnabled)
         }
         for count in stride(from: 2, through: 0, by: -1) {
             undo.performClick(nil)
@@ -46,296 +35,196 @@ final class ToolbarLayoutTests: XCTestCase {
         }
         undo.performClick(nil)
         try button(AnnotationTool.pen.title, in: hud).performClick(nil)
-        let key = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
-            windowNumber: canvas.window?.windowNumber ?? 0, context: nil, characters: " ", charactersIgnoringModifiers: " ",
-            isARepeat: false, keyCode: 49))
-        canvas.keyDown(with: key)
-        let move = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
-            windowNumber: canvas.window?.windowNumber ?? 0, context: nil, characters: "", charactersIgnoringModifiers: "",
-            isARepeat: false, keyCode: 124))
-        canvas.keyDown(with: move); canvas.keyDown(with: key)
-        XCTAssertFalse(redo.isEnabled, "A new drawing invalidates the old redo branch")
+        try draw(in: canvas, from: CGPoint(x: 160, y: 120), to: CGPoint(x: 180, y: 140))
+        XCTAssertFalse(redo.isEnabled, "Drawing after undo must discard the old redo branch")
     }
 
-    func testCompactBarHasOneRightmostCompletionAndDiscoverableScroll() throws {
+    func testMainBarExposesEveryToolAndOneRightmostCompletion() throws {
         var actions: [ToolbarAction] = []
-        let hud = HUDContentView(onTool: { _ in }, onAction: { actions.append($0) }, onColor: { _ in }, onWidth: { _ in })
-        defer { hud.closeAuxiliaryControls() }
-        layout(hud, width: 704)
-        let buttons = allButtons(in: hud)
-        XCTAssertEqual(buttons.count, 19)
-        XCTAssertEqual(hud.frame.height, 84)
-        XCTAssertGreaterThanOrEqual(hud.frame.width, 400)
-        XCTAssertLessThanOrEqual(hud.frame.width, 520)
-        for tool in [AnnotationTool.rectangle, .ellipse, .line, .arrow, .pen, .text, .mosaic] {
-            XCTAssertNotNil(try button(tool.title, in: hud))
-        }
-        XCTAssertFalse(hud.isAnnotationExpanded)
-        XCTAssertEqual(buttons.filter { $0.accessibilityLabel() == "完成并复制" }.count, 1)
-        XCTAssertFalse(buttons.contains { $0.accessibilityLabel() == "复制" })
-        let completion = try button("完成并复制", in: hud)
-        XCTAssertEqual(ToolbarAction.copy.symbol, "checkmark")
-        XCTAssertNotNil(completion.image)
-        XCTAssertEqual(completion.toolTip, "完成并复制 · Enter")
-        XCTAssertEqual(completion.title, "完成")
+        let controller = ToolbarController(onTool: { _ in }, onAction: { actions.append($0) })
+        defer { controller.close() }
+        show(controller)
+        let hud = try stack()
+        XCTAssertEqual(allButtons(in: hud).count, 19)
+        XCTAssertFalse(controller.isPropertyBarVisible)
+        for tool in AnnotationTool.toolbarTools { XCTAssertNotNil(controller.button(for: tool)) }
+        for action in ToolbarAction.allCases where action != .selection { XCTAssertNotNil(controller.button(for: action)) }
+        let completion = try XCTUnwrap(controller.button(for: ToolbarAction.copy))
         let completionFrame = completion.convert(completion.bounds, to: hud)
-        XCTAssertEqual(completionFrame.maxX, try XCTUnwrap(buttons.map { $0.convert($0.bounds, to: hud).maxX }.max()), accuracy: 0.5)
-        let scroll = try button("长截图", in: hud)
-        let recognition = try button("识别文字", in: hud)
-        XCTAssertEqual(recognition.convert(recognition.bounds, to: hud).minX,
-                       try button(AnnotationTool.rectangle.title, in: hud).convert(recognition.bounds, to: hud).minX, accuracy: 0.5)
-        XCTAssertEqual(scroll.title, "长截图")
-        XCTAssertEqual(scroll.imagePosition, .imageLeading)
-        for action in [ToolbarAction.undo, .redo, .ocr, .translate] {
-            let labeled = try button(action.title, in: hud)
-            XCTAssertEqual(labeled.title, action.title)
-            XCTAssertEqual(labeled.imagePosition, .imageLeading)
-        }
-        let undo = try button(ToolbarAction.undo.title, in: hud)
-        XCTAssertEqual(undo.convert(undo.bounds, to: hud).midY,
-                       try button(AnnotationTool.arrow.title, in: hud).convert(undo.bounds, to: hud).midY, accuracy: 0.5)
-        XCTAssertNotEqual(undo.convert(undo.bounds, to: hud).midY, completionFrame.midY)
-        try assertHitTargets(in: hud, expectedCount: 19)
-        try button(ToolbarAction.translate.title, in: hud).performClick(nil)
-        XCTAssertEqual(actions, [.translate])
+        XCTAssertEqual(completionFrame.maxX, try XCTUnwrap(allButtons(in: hud).map { $0.convert($0.bounds, to: hud).maxX }.max()), accuracy: 0.5)
+        XCTAssertEqual(allButtons(in: hud).filter { $0.accessibilityLabel() == ToolbarAction.copy.title }.count, 1)
+        XCTAssertTrue((completion.toolTip ?? "").contains("↩"))
+        try assertHitTargets(in: hud)
+        controller.button(for: ToolbarAction.translate)?.performClick(nil)
         completion.performClick(nil)
         XCTAssertEqual(actions, [.translate, .copy])
     }
 
-    func testDisclosureResizesRealPanelAndKeyboardSelectionReopensTools() throws {
-        let controller = ToolbarController(onTool: { _ in }, onAction: { _ in }, onColor: { _ in }, onWidth: { _ in })
+    func testSelectingToolsRevealsOnlyRelevantPropertiesAndMirrorsVariants() throws {
+        let controller = ToolbarController(onTool: { _ in }, onAction: { _ in })
         defer { controller.close() }
-        let screen = CGRect(x: 0, y: 0, width: 900, height: 700)
-        let selection = CGRect(x: 180, y: 300, width: 420, height: 250)
-        controller.setUndoAvailability(canUndo: true, canRedo: false)
-        controller.show(near: selection, screenFrame: screen)
-        let panel = try shownPanel()
-        let hud = try XCTUnwrap(panel.contentView as? HUDContentView)
+        show(controller)
+        let panel = try shownPanel(), hud = try stack()
         let compactHeight = panel.frame.height
-        XCTAssertFalse(panel.canBecomeKey)
-        XCTAssertGreaterThan(panel.level.rawValue, NSWindow.Level.screenSaver.rawValue)
-        try button(AnnotationTool.rectangle.title, in: hud).performClick(nil)
-        XCTAssertFalse(controller.isAnnotationExpanded, "Common tools must draw directly without opening an inspector")
-        XCTAssertEqual(panel.frame.height, compactHeight)
-        try button("更多标注工具", in: hud).performClick(nil)
-        XCTAssertTrue(controller.isAnnotationExpanded)
+        controller.button(for: AnnotationTool.rectangle)?.performClick(nil)
+        XCTAssertTrue(controller.isPropertyBarVisible)
         XCTAssertGreaterThan(panel.frame.height, compactHeight)
-        XCTAssertFalse(panel.frame.intersects(selection))
-        try assertHitTargets(in: hud, expectedCount: 25)
-        XCTAssertTrue(try button(ToolbarAction.undo.title, in: hud).isEnabled)
-        XCTAssertFalse(try button(ToolbarAction.redo.title, in: hud).isEnabled)
-        try button(AnnotationTool.blur.title, in: hud).performClick(nil)
-        XCTAssertEqual(try button(AnnotationTool.blur.title, in: hud).accessibilityValue() as? String, "已选择")
-        try button("更多标注工具", in: hud).performClick(nil)
-        XCTAssertFalse(controller.isAnnotationExpanded)
-        XCTAssertEqual(panel.frame.height, compactHeight, "Identical available width must not retain the expanded height")
-        XCTAssertNil(allButtons(in: hud).first { $0.accessibilityLabel() == AnnotationTool.blur.title })
-        XCTAssertEqual(try button("更多标注工具", in: hud).accessibilityValue() as? String, "当前工具：模糊")
-        controller.setSelectedTool(.pen)
-        XCTAssertFalse(controller.isAnnotationExpanded, "Keyboard entry to a common tool must keep the toolbar compact")
-        XCTAssertEqual(try button(AnnotationTool.pen.title, in: hud).accessibilityValue() as? String, "已选择")
-        XCTAssertEqual(try button(AnnotationTool.rectangle.title, in: hud).accessibilityValue() as? String, "")
-        controller.setSelectedTool(.highlight)
-        XCTAssertTrue(controller.isAnnotationExpanded, "Keyboard entry to an advanced tool must reveal its selected control")
-        XCTAssertEqual(try button(AnnotationTool.highlight.title, in: hud).accessibilityValue() as? String, "已选择")
-        try assertHitTargets(in: hud, expectedCount: 25)
-        try button("更多标注工具", in: hud).performClick(nil)
-        controller.show(near: selection, screenFrame: screen)
-        XCTAssertFalse(controller.isAnnotationExpanded, "Repositioning must preserve an explicitly collapsed inspector")
-        XCTAssertTrue((try button("更多标注工具", in: hud).toolTip ?? "").contains(AnnotationTool.highlight.title))
-        controller.close()
-        XCTAssertEqual(controller.windowCount, 0)
-        XCTAssertEqual(controller.auxiliaryControlCount, 0)
+        XCTAssertFalse(panel.canBecomeKey)
+        XCTAssertNotNil(controller.propertyButtons.first { $0.accessibilityLabel() == "填充" })
+        controller.setSelectedTool(.blur)
+        XCTAssertEqual(controller.button(for: AnnotationTool.mosaic)?.accessibilityValue() as? String, "已选择")
+        XCTAssertNotNil(controller.propertyButtons.first { $0.accessibilityLabel() == "模糊" })
+        XCTAssertFalse(controller.propertyButtons.contains { ($0.accessibilityLabel() ?? "").contains("蓝色") })
+        controller.setSelectedTool(.note)
+        XCTAssertEqual(controller.button(for: AnnotationTool.text)?.accessibilityValue() as? String, "已选择")
+        XCTAssertNotNil(controller.propertyButtons.first { $0.accessibilityLabel() == "便签底色" })
+        try assertHitTargets(in: hud)
+        controller.setSelectedTool(nil)
+        XCTAssertFalse(controller.isPropertyBarVisible)
+        XCTAssertEqual(panel.frame.height, compactHeight)
     }
 
-    func testNarrowRowsKeepEveryToolAndActionInsideHUD() throws {
-        let hud = HUDContentView(onTool: { _ in }, onAction: { _ in }, onColor: { _ in }, onWidth: { _ in })
-        defer { hud.closeAuxiliaryControls() }
-        for width: CGFloat in [240, 100] {
-            for expanded in [false, true] {
-                hud.setAnnotationExpanded(expanded)
-                layout(hud, width: width)
-                XCTAssertLessThanOrEqual(hud.frame.width, width)
-                try assertHitTargets(in: hud, expectedCount: expanded ? 25 : 19)
-                XCTAssertEqual(try button("长截图", in: hud).title, "长截图")
-                if expanded {
-                    for tool in AnnotationTool.allCases { XCTAssertNotNil(try button(tool.title, in: hud)) }
-                }
-            }
+    func testNarrowScreensKeepAllToolsAndStyleControlsInsideThePanel() throws {
+        let controller = ToolbarController(onTool: { _ in }, onAction: { _ in })
+        defer { controller.close() }
+        for width: CGFloat in [640, 320, 240] {
+            let screen = CGRect(x: 0, y: 0, width: width, height: 700)
+            controller.show(near: CGRect(x: 20, y: 350, width: width - 40, height: 200), screenFrame: screen)
+            controller.setSelectedTool(.rectangle)
+            let panel = try shownPanel(), hud = try stack()
+            XCTAssertTrue(screen.insetBy(dx: 8, dy: 8).contains(panel.frame))
+            XCTAssertEqual(allButtons(in: hud.main).count, 19)
+            try assertHitTargets(in: hud)
         }
     }
 
-    func testExpandedInspectorWrapsBesideTallSelection() throws {
-        let controller = ToolbarController(onTool: { _ in }, onAction: { _ in }, onColor: { _ in }, onWidth: { _ in })
-        defer { controller.close() }
-        let screen = CGRect(x: 0, y: 0, width: 640, height: 480)
-        let selection = CGRect(x: 20, y: 40, width: 320, height: 360)
-        controller.show(near: selection, screenFrame: screen)
-        let panel = try shownPanel()
-        let hud = try XCTUnwrap(panel.contentView as? HUDContentView)
-        let compactHeight = panel.frame.height
-        try button("更多标注工具", in: hud).performClick(nil)
-        XCTAssertTrue(controller.isAnnotationExpanded)
-        XCTAssertTrue(screen.insetBy(dx: 8, dy: 8).contains(panel.frame))
-        XCTAssertFalse(panel.frame.intersects(selection), "A free side should be used before covering the selected pixels")
-        XCTAssertGreaterThan(panel.frame.minX, selection.maxX)
-        try assertHitTargets(in: hud, expectedCount: 25)
-        try button("更多标注工具", in: hud).performClick(nil)
-        XCTAssertEqual(panel.frame.height, compactHeight)
-        XCTAssertFalse(panel.frame.intersects(selection))
+    func testToolbarUsesFreeSpaceAboveOrBelowBeforeCoveringSelection() throws {
+        let size = CGSize(width: 650, height: 86), screen = CGRect(x: 8, y: 8, width: 884, height: 684)
+        for selection in [CGRect(x: 180, y: 300, width: 420, height: 250), CGRect(x: 180, y: 10, width: 420, height: 250)] {
+            let (frame, _) = ToolbarController.frame(for: size, near: selection, screen: screen)
+            XCTAssertTrue(screen.contains(frame)); XCTAssertFalse(frame.intersects(selection))
+        }
     }
 
-    func testConfirmationModeContainsOnlyConfirmAndCancel() throws {
+    func testConfirmationOnlyOffersCancelAndTheNamedCompletion() throws {
         for title in ["开始录制", "开始长截图"] {
             var actions: [ToolbarAction] = []
-            let hud = HUDContentView(onTool: { _ in XCTFail("Confirmation must not select an annotation tool") },
-                                     onAction: { actions.append($0) }, onColor: { _ in }, onWidth: { _ in }, confirmationTitle: title)
-            defer { hud.closeAuxiliaryControls() }
-            layout(hud, width: 400)
-            hud.setAnnotationExpanded(true)
+            let controller = ToolbarController(onTool: { _ in XCTFail("Confirmation cannot select a tool") },
+                onAction: { actions.append($0) }, confirmationTitle: title)
+            defer { controller.close() }
+            show(controller)
             let ignoredResult = NSView()
-            hud.setTextResultView(ignoredResult)
-            layout(hud, width: 400)
-            XCTAssertFalse(hud.isAnnotationExpanded)
-            XCTAssertNil(ignoredResult.superview, "Confirmation modes must not acquire text or annotation UI")
-            try assertHitTargets(in: hud, expectedCount: 2)
-            XCTAssertEqual(Set(allButtons(in: hud).compactMap { $0.accessibilityLabel() }), [title, ToolbarAction.close.title])
-            let confirm = try button(title, in: hud)
-            XCTAssertEqual(confirm.title, title)
-            XCTAssertEqual(confirm.toolTip, "\(title) · Enter")
-            confirm.performClick(nil)
-            XCTAssertEqual(actions, [.copy], "The selection coordinator owns the confirmation behavior")
+            controller.setSelectedTool(.rectangle)
+            controller.setTextResultView(ignoredResult)
+            XCTAssertFalse(controller.isPropertyBarVisible)
+            XCTAssertNil(ignoredResult.superview)
+            XCTAssertEqual(allButtons(in: try stack()).count, 2)
+            try XCTUnwrap(controller.button(for: ToolbarAction.copy)).performClick(nil)
+            XCTAssertEqual(actions, [.copy])
+            XCTAssertFalse(try shownPanel().canBecomeKey)
         }
     }
 
-    func testStylePopoversCloseOnCollapseAndSessionTeardown() async throws {
-        var colors: [NSColor] = [], widths: [CGFloat] = []
-        var controller: ToolbarController? = ToolbarController(onTool: { _ in }, onAction: { _ in },
-                                                               onColor: { colors.append($0) }, onWidth: { widths.append($0) })
+    func testInlineStyleChangesAreDeliveredAndCloseReleasesController() throws {
+        var styles: [AnnotationStyle] = []
+        var controller: ToolbarController? = ToolbarController(onTool: { _ in }, onAction: { _ in }, onStyle: { styles.append($0) })
         weak let weakController = controller
-        defer { controller?.close() }
-        controller?.show(near: CGRect(x: 180, y: 300, width: 420, height: 250),
-                         screenFrame: CGRect(x: 0, y: 0, width: 900, height: 700))
-        let hud = try XCTUnwrap(try shownPanel().contentView as? HUDContentView)
-        XCTAssertFalse(hud.isAnnotationExpanded)
-        try button("标注颜色：红色", in: hud).performClick(nil)
-        XCTAssertEqual(controller?.auxiliaryControlCount, 1)
-        let blue = try XCTUnwrap(NSApplication.shared.windows.flatMap { $0.contentView.map { allButtons(in: $0) } ?? [] }
-            .first { $0.accessibilityLabel() == "标注颜色：蓝色" })
-        blue.performClick(nil)
-        try await waitUntil { controller?.auxiliaryControlCount == 0 }
-        XCTAssertEqual(colors.count, 1, "A style can be chosen before any drawing tool")
-        XCTAssertFalse(hud.isAnnotationExpanded)
-        try button("标注线宽：3 pt", in: hud).performClick(nil)
-        let slider = try XCTUnwrap(NSApplication.shared.windows.flatMap { $0.contentView.map { allViews(in: $0) } ?? [] }
-            .compactMap { $0 as? NSSlider }.first { $0.accessibilityLabel() == "标注线宽" })
-        slider.doubleValue = 9
-        XCTAssertTrue(slider.sendAction(slider.action, to: slider.target))
-        XCTAssertEqual(widths, [9])
-        XCTAssertNotNil(try button("标注线宽：9 pt", in: hud))
-        try button("更多标注工具", in: hud).performClick(nil)
-        XCTAssertEqual(controller?.auxiliaryControlCount, 0)
-        controller?.setSelectedTool(.pen)
-        try button("标注线宽：9 pt", in: hud).performClick(nil)
-        XCTAssertEqual(controller?.auxiliaryControlCount, 1)
+        show(try XCTUnwrap(controller))
+        controller?.setSelectedTool(.rectangle)
+        let hud = try stack()
+        try button("蓝色", in: hud, contains: true).performClick(nil)
+        XCTAssertEqual(styles.last?.color, AnnotationColor.palette[4].color)
+        try button("粗", in: hud).performClick(nil)
+        XCTAssertEqual(styles.last?.width, 8)
+        try button("填充", in: hud).performClick(nil)
+        XCTAssertEqual(styles.last?.filled, true)
         controller?.close()
         XCTAssertEqual(controller?.auxiliaryControlCount, 0)
-        XCTAssertEqual(hud.auxiliaryControlCount, 0)
         XCTAssertEqual(controller?.windowCount, 0)
         controller = nil
-        XCTAssertNil(weakController, "Closed native controls must not retain the session controller")
+        XCTAssertNil(weakController)
     }
 
-    func testInlineTextPreservesFocusCompositionAndAttachmentAcrossReflow() throws {
-        let controller = ToolbarController(onTool: { _ in }, onAction: { _ in }, onColor: { _ in }, onWidth: { _ in })
+    func testInlineTextKeepsIMECompositionAndAttachmentWhenPropertiesChange() throws {
+        let controller = ToolbarController(onTool: { _ in }, onAction: { _ in })
         defer { controller.close() }
-        controller.show(near: CGRect(x: 180, y: 360, width: 420, height: 230),
-                        screenFrame: CGRect(x: 0, y: 0, width: 900, height: 800))
-        let panel = try shownPanel(), hud = try XCTUnwrap(panel.contentView as? HUDContentView)
+        show(controller)
+        let panel = try shownPanel(), hud = try stack()
         let compactHeight = panel.frame.height
         let result = ToolbarResultFixtureView()
         let editor = NSTextView(frame: .zero)
-        editor.string = "English 与中文"
-        editor.autoresizingMask = [.width, .height]
+        editor.string = "English 与中文"; editor.autoresizingMask = [.width, .height]
         result.addSubview(editor)
         controller.setTextResultView(result, preferredHeight: 180)
-        XCTAssertTrue(panel.canBecomeKey)
-        XCTAssertFalse(panel.canBecomeMain)
-        XCTAssertEqual(result.frame.height, 180, accuracy: 0.5)
-        XCTAssertGreaterThan(panel.frame.height, compactHeight + 180)
+        XCTAssertTrue(panel.canBecomeKey); XCTAssertFalse(panel.canBecomeMain)
         XCTAssertTrue(result.window === panel)
         panel.makeKeyAndOrderFront(nil)
         XCTAssertTrue(panel.makeFirstResponder(editor))
-        editor.setSelectedRange(NSRange(location: 2, length: 3))
         editor.setMarkedText("日本語", selectedRange: NSRange(location: 0, length: 3),
                              replacementRange: NSRange(location: NSNotFound, length: 0))
         XCTAssertTrue(editor.hasMarkedText())
         let detachments = result.detachments
-        try button("更多标注工具", in: hud).performClick(nil)
+        controller.setSelectedTool(.rectangle)
+        controller.setSelectedTool(.text)
         XCTAssertTrue(panel.firstResponder === editor)
-        XCTAssertTrue(editor.hasMarkedText(), "Button relayout must not cancel native IME composition")
+        XCTAssertTrue(editor.hasMarkedText())
         XCTAssertEqual(result.detachments, detachments)
-        XCTAssertTrue(result.window === panel)
         XCTAssertTrue(hud.bounds.contains(result.convert(result.bounds, to: hud)))
-        try assertHitTargets(in: hud, expectedCount: 25)
         controller.setTextResultView(nil)
-        XCTAssertFalse(panel.canBecomeKey)
-        XCTAssertNil(result.window)
-        XCTAssertEqual(controller.auxiliaryControlCount, 0)
-        try button("更多标注工具", in: hud).performClick(nil)
+        controller.setSelectedTool(nil)
+        XCTAssertFalse(panel.canBecomeKey); XCTAssertNil(result.window)
         XCTAssertEqual(panel.frame.height, compactHeight)
     }
 
-    func testInlineTextFitsLimitedHeightWithoutHidingButtons() throws {
-        let hud = HUDContentView(onTool: { _ in }, onAction: { _ in }, onColor: { _ in }, onWidth: { _ in })
-        defer { hud.closeAuxiliaryControls(); hud.setTextResultView(nil) }
+    func testTextCardFitsShortScreensWithoutClippingTools() throws {
+        let controller = ToolbarController(onTool: { _ in }, onAction: { _ in })
+        defer { controller.close() }
+        controller.show(near: CGRect(x: 20, y: 120, width: 250, height: 150),
+                        screenFrame: CGRect(x: 0, y: 0, width: 320, height: 350))
+        controller.setSelectedTool(.rectangle)
         let result = NSView()
-        hud.setTextResultView(result, preferredHeight: 280)
-        hud.frame.size = hud.configure(maximumWidth: 240, maximumHeight: 300)
-        hud.layoutSubtreeIfNeeded()
-        XCTAssertLessThanOrEqual(hud.frame.height, 300)
-        XCTAssertLessThan(result.frame.height, 280)
+        controller.setTextResultView(result, preferredHeight: 280)
+        let hud = try stack()
+        XCTAssertLessThanOrEqual(hud.bounds.height, 334)
         XCTAssertGreaterThan(result.frame.height, 0)
         XCTAssertTrue(hud.bounds.contains(result.convert(result.bounds, to: hud)))
-        try assertHitTargets(in: hud, expectedCount: 19)
+        try assertHitTargets(in: hud)
     }
 
-    private func layout(_ hud: HUDContentView, width: CGFloat) {
-        hud.frame.size = hud.configure(maximumWidth: width)
-        hud.layoutSubtreeIfNeeded()
+    private func show(_ controller: ToolbarController) {
+        controller.show(near: CGRect(x: 180, y: 360, width: 420, height: 230), screenFrame: CGRect(x: 0, y: 0, width: 1000, height: 800))
     }
 
     private func shownPanel() throws -> NSWindow {
-        try XCTUnwrap(NSApplication.shared.windows.first { $0.isVisible && $0.accessibilityLabel() == "截图标注工具条" })
+        try XCTUnwrap(NSApp.windows.first { $0.isVisible && $0.accessibilityLabel() == "截图工具栏" })
     }
 
-    private func button(_ label: String, in hud: HUDContentView) throws -> NSButton {
-        try XCTUnwrap(allButtons(in: hud).first { $0.accessibilityLabel() == label }, label)
+    private func stack() throws -> ToolbarStackView { try XCTUnwrap(try shownPanel().contentView as? ToolbarStackView) }
+
+    private func button(_ label: String, in view: NSView, contains: Bool = false) throws -> NSButton {
+        try XCTUnwrap(allButtons(in: view).first { contains ? ($0.accessibilityLabel() ?? "").contains(label) : $0.accessibilityLabel() == label }, label)
     }
 
-    private func allButtons(in view: NSView) -> [NSButton] {
-        (view as? NSButton).map { [$0] } ?? view.subviews.flatMap { allButtons(in: $0) }
-    }
-
+    private func allButtons(in view: NSView) -> [NSButton] { (view as? NSButton).map { [$0] } ?? view.subviews.flatMap { allButtons(in: $0) } }
     private func allViews(in view: NSView) -> [NSView] { [view] + view.subviews.flatMap { allViews(in: $0) } }
 
-    private func waitUntil(_ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(3)
-        while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
-        XCTAssertTrue(condition(), "Native style popover must finish closing")
+    private func draw(in canvas: AnnotationCanvasView, from: CGPoint, to: CGPoint) throws {
+        for (type, point) in [(NSEvent.EventType.leftMouseDown, from), (.leftMouseDragged, to), (.leftMouseUp, to)] {
+            let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: canvas.convert(point, to: nil), modifierFlags: [], timestamp: 0,
+                windowNumber: canvas.window?.windowNumber ?? 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+            switch type { case .leftMouseDown: canvas.mouseDown(with: event); case .leftMouseDragged: canvas.mouseDragged(with: event); default: canvas.mouseUp(with: event) }
+        }
     }
 
-    private func assertHitTargets(in hud: HUDContentView, expectedCount: Int) throws {
+    private func assertHitTargets(in hud: ToolbarStackView) throws {
         hud.layoutSubtreeIfNeeded()
-        let buttons = allButtons(in: hud)
-        XCTAssertEqual(buttons.count, expectedCount)
-        for button in buttons {
+        for button in allButtons(in: hud) {
             let frame = button.convert(button.bounds, to: hud)
-            let title = button.accessibilityLabel() ?? "unnamed control"
-            XCTAssertFalse(button.isHiddenOrHasHiddenAncestor, title)
-            XCTAssertGreaterThanOrEqual(frame.width, 32, title)
-            XCTAssertGreaterThanOrEqual(frame.height, 32, title)
-            XCTAssertTrue(hud.bounds.contains(frame), "\(title) \(frame) must fit inside \(hud.bounds)")
+            let label = button.accessibilityLabel() ?? "control"
+            XCTAssertFalse(button.isHiddenOrHasHiddenAncestor, label)
+            XCTAssertGreaterThanOrEqual(frame.width, 24, label)
+            XCTAssertGreaterThanOrEqual(frame.height, 24, label)
+            XCTAssertTrue(hud.bounds.contains(frame), "\(label) \(frame) must fit inside \(hud.bounds)")
         }
     }
 }
@@ -343,8 +232,5 @@ final class ToolbarLayoutTests: XCTestCase {
 @MainActor
 private final class ToolbarResultFixtureView: NSView {
     var detachments = 0
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        if window == nil { detachments += 1 }
-    }
+    override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); if window == nil { detachments += 1 } }
 }

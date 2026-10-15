@@ -1,4 +1,4 @@
-// Exercises native key events, real modal text input, accessibility and rendered pixel output without CGEvents.
+// Exercises native key events, inline text input, accessibility and rendered pixel output without CGEvents.
 import AppKit
 import CoreGraphics
 import ImageIO
@@ -12,22 +12,22 @@ final class AnnotationKeyboardTests: XCTestCase {
         defer { canvas.prepareForFinish() }
         var changes: [AnnotationTool] = []
         canvas.onToolChange = { changes.append($0) }
-        for expected in Array(AnnotationTool.allCases.dropFirst()) + [.rectangle] {
+        for expected in Array(AnnotationTool.toolbarTools.dropFirst()) + [.rectangle] {
             try send("]", code: 30, to: canvas)
             XCTAssertEqual(canvas.tool, expected)
         }
-        XCTAssertEqual(Set(changes), Set(AnnotationTool.allCases))
+        XCTAssertEqual(Set(changes), Set(AnnotationTool.toolbarTools))
         try send("[", code: 33, to: canvas)
         XCTAssertEqual(canvas.tool, .magnifier)
-        try send("6", code: 22, to: canvas)
+        try send("7", code: 26, to: canvas)
         XCTAssertEqual(canvas.tool, .text)
         try send("9", code: 25, to: canvas)
         XCTAssertEqual(canvas.tool, .highlight)
         try send("]", code: 30, to: canvas)
-        XCTAssertEqual(canvas.tool, .step)
+        XCTAssertEqual(canvas.tool, .mosaic)
         XCTAssertEqual(canvas.accessibilityRole(), .group)
         XCTAssertTrue((canvas.accessibilityHelp() ?? "").contains("原图像素"))
-        XCTAssertTrue((canvas.accessibilityValue() as? String ?? "").contains("序号"))
+        XCTAssertTrue((canvas.accessibilityValue() as? String ?? "").contains("马赛克"))
     }
 
     func testKeyboardGestureMovesOneOriginalPixelAndExportsAtRetinaResolution() async throws {
@@ -96,6 +96,9 @@ final class AnnotationKeyboardTests: XCTestCase {
         XCTAssertEqual(canvas.resourceCounts["pendingGesture"], 0)
         try send(" ", code: 49, to: canvas)
         try send("", code: 53, to: canvas)
+        XCTAssertEqual(actions, [.save, .copy, .selection], "The first Escape discards the in-flight mark")
+        try send("", code: 53, to: canvas)
+        try send("", code: 53, to: canvas)
         XCTAssertEqual(actions, [.save, .copy, .selection, .close])
         XCTAssertEqual(canvas.document.commands.count, 1, "Escape and Tab discard uncommitted marks")
         XCTAssertEqual(canvas.resourceCounts["pendingGesture"], 0)
@@ -117,53 +120,38 @@ final class AnnotationKeyboardTests: XCTestCase {
         XCTAssertTrue(item.points.allSatisfy { canvas.bounds.contains($0) || $0.x == canvas.bounds.maxX || $0.y == canvas.bounds.maxY })
     }
 
-    func testSpaceUsesNativeTextModalAndPreservesTheFontSnapshot() async throws {
-        _ = NSApplication.shared
+    func testSpaceEditsTextInlineAndCommitsItsFontAndStyle() async throws {
         for tool in [AnnotationTool.text, .note] {
             let canvas = try await makeCanvas()
             defer { canvas.prepareForFinish() }
             canvas.tool = tool
-            let timer = Timer(timeInterval: 0.05, repeats: false) { _ in
-                MainActor.assumeIsolated {
-                    guard let window = NSApp.modalWindow, let content = window.contentView,
-                          let input = Self.findText(in: content), let add = Self.findButton("添加", in: content) else {
-                        XCTFail("Space must present the regular native text modal"); NSApp.abortModal(); return
-                    }
-                    input.string = "键盘添加\nnative text"
-                    input.font = NSFont(name: "Helvetica", size: 24)
-                    add.performClick(nil)
-                }
-            }
-            RunLoop.main.add(timer, forMode: .modalPanel)
-            defer { timer.invalidate() }
+            canvas.style.fontSize = 24
             try send(" ", code: 49, to: canvas)
+            XCTAssertTrue(canvas.isEditingText)
+            XCTAssertNil(NSApp.modalWindow, "Text belongs on the canvas, without a modal dialog")
+            let editor = try XCTUnwrap(Self.findText(in: canvas))
+            editor.string = "键盘添加\nnative text"
+            canvas.commitPendingEdits()
             let item = try XCTUnwrap(canvas.document.commands.first)
             XCTAssertEqual(item.tool, tool); XCTAssertEqual(item.text, "键盘添加\nnative text")
-            XCTAssertEqual(item.font.postScriptName, "Helvetica"); XCTAssertEqual(item.font.pointSize, 24)
+            XCTAssertEqual(item.font.pointSize, 24)
             XCTAssertEqual(canvas.resourceCounts["textAlert"], 0)
         }
     }
 
-    func testSessionFinishAbortsNativeTextModalAndCannotAppendAfterReturn() async throws {
-        _ = NSApplication.shared
+    func testSessionFinishDiscardsInlineTextAndPreventsLaterInput() async throws {
         let canvas = try await makeCanvas()
         canvas.tool = .text
-        var modalWasVisible = false
-        let closeCanvas: @MainActor @Sendable () -> Void = {
-            modalWasVisible = NSApp.modalWindow?.isVisible == true
-            canvas.prepareForFinish()
-        }
-        let timer = Timer(timeInterval: 0.05, repeats: false) { _ in
-            MainActor.assumeIsolated { closeCanvas() }
-        }
-        RunLoop.main.add(timer, forMode: .modalPanel)
-        defer { timer.invalidate(); canvas.prepareForFinish() }
         try send(" ", code: 49, to: canvas)
-        XCTAssertTrue(modalWasVisible)
+        XCTAssertTrue(canvas.isEditingText)
+        let editor = try XCTUnwrap(Self.findText(in: canvas))
+        editor.string = "Uncommitted text"
+        canvas.prepareForFinish()
+        await canvas.finishAndDrain()
         XCTAssertTrue(canvas.document.commands.isEmpty)
         XCTAssertEqual(canvas.resourceCounts.values.reduce(0, +), 0)
-        XCTAssertNil(NSApp.modalWindow)
         try send(" ", code: 49, to: canvas)
+        canvas.commitPendingEdits()
         XCTAssertTrue(canvas.document.commands.isEmpty)
         XCTAssertEqual(canvas.resourceCounts.values.reduce(0, +), 0)
     }
@@ -172,7 +160,12 @@ final class AnnotationKeyboardTests: XCTestCase {
         let canvas = try await makeCanvas()
         canvas.tool = .step
         for _ in 0..<12 { try send(" ", code: 49, to: canvas) }
-        XCTAssertEqual(canvas.resourceCounts["preview"], 12, "Superseded workers remain owned until they return")
+        XCTAssertEqual(canvas.document.commands.count, 12)
+        canvas.tool = .blur
+        try send(" ", code: 49, to: canvas)
+        try send("", code: 124, modifiers: .shift, to: canvas)
+        try send("", code: 125, modifiers: .shift, to: canvas)
+        XCTAssertGreaterThan(canvas.resourceCounts["preview"] ?? 0, 0, "Effect rendering remains owned until it returns")
         canvas.prepareForFinish()
         await canvas.finishAndDrain()
         XCTAssertEqual(canvas.resourceCounts.values.reduce(0, +), 0)

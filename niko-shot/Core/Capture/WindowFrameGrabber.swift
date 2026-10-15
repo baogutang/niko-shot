@@ -59,7 +59,7 @@ final class WindowFrameGrabber {
 
     func prepare(context: CaptureContext, ownWindowID: CGWindowID?) async throws -> RegionSnapshot {
         try Task.checkCancellation()
-        guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else { throw AppError.permission("屏幕录制") }
+        guard CGPreflightScreenCaptureAccess() else { throw AppError.permission("屏幕录制") }
         let original = try context.windowID.flatMap { try CaptureEngine.windowGeometry(id: $0) }
         if context.windowID != nil, original == nil { throw ScrollTargetError.windowUnavailable }
         if let original, !context.appBundleID.isEmpty,

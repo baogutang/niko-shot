@@ -56,8 +56,7 @@ final class SelectionSession {
     var onRecognizedText: ((String) -> Void)?
     var onTextWorkspace: ((OCRViewModel, TranslationViewModel) -> Void)?
     var outputAction: ToolbarAction = .copy
-    private var annotationColor = AnnotationColor.red
-    private var annotationWidth: CGFloat = 3
+    private var annotationStyle = AnnotationStyle()
     private var imageEditorWindow: NSWindow?
     private var imageEditorSource: FrozenFrame?
     private var completedDisplayStatistics: [ActiveDisplayLink.Statistics] = []
@@ -227,11 +226,11 @@ final class SelectionSession {
 
     private func showToolbar(context: CaptureContext) {
         if toolbar == nil {
-            toolbar = ToolbarController(onTool: { [weak self] tool in self?.beginAnnotation(tool: tool) }, onAction: { [weak self] action in self?.perform(action) }, onColor: { [weak self] color in
-                guard let rgb = color.usingColorSpace(.deviceRGB) else { return }
-                let value = AnnotationColor(red: rgb.redComponent, green: rgb.greenComponent, blue: rgb.blueComponent, alpha: rgb.alphaComponent)
-                self?.annotationColor = value; self?.canvas?.color = value
-            }, onWidth: { [weak self] width in self?.annotationWidth = width; self?.canvas?.strokeWidth = width }, confirmationTitle: confirmationTitle)
+            toolbar = ToolbarController(onTool: { [weak self] tool in self?.beginAnnotation(tool: tool) },
+                onAction: { [weak self] action in self?.perform(action) },
+                onStyle: { [weak self] style in self?.annotationStyle = style; self?.canvas?.style = style },
+                confirmationTitle: confirmationTitle)
+            toolbar?.setStyle(annotationStyle)
         }
         if let window = imageEditorWindow { toolbar?.show(near: window.frame, screenFrame: window.screen?.frame ?? NSScreen.main?.frame ?? window.frame) }
         else { toolbar?.show(near: context.globalRect, screenFrame: context.screen.frame) }
@@ -299,14 +298,9 @@ final class SelectionSession {
                     restored.rebase(by: CGPoint(x: previous.localRect.minX - rect.minX, y: previous.localRect.minY - rect.minY), canvasSize: rect.size)
                     canvas.document = restored; canvas.refresh()
                 }
-                canvas.frame = rect; canvas.tool = tool
-                canvas.color = self.annotationColor; canvas.strokeWidth = self.annotationWidth
-                canvas.onAction = { [weak self] action in self?.perform(action) }
-                canvas.onToolChange = { [weak self] tool in self?.toolbar?.setSelectedTool(tool) }
-                canvas.onDocumentChange = { [weak self, weak canvas] in
-                    self?.closeScreenshotText()
-                    self?.toolbar?.setUndoAvailability(canUndo: canvas?.document.canUndo ?? false, canRedo: canvas?.document.canRedo ?? false)
-                }
+                canvas.frame = rect
+                self.configure(canvas)
+                canvas.tool = tool
                 stage.addSubview(canvas)
                 self.canvas = canvas
                 for window in self.windows {
@@ -334,6 +328,7 @@ final class SelectionSession {
         }
         let render: @Sendable () throws -> CGImage
         if let canvas, state == .annotating {
+            canvas.commitPendingEdits()
             let base = canvas.base, document = canvas.document
             let scale = CGFloat(base.width) / max(1, document.canvasSize.width)
             render = { try AnnotationRenderer.render(base: base, document: document, scale: scale) }
@@ -429,6 +424,7 @@ final class SelectionSession {
         case .ocr: requestScreenshotText()
         case .translate: requestScreenshotText(translate: true)
         case .selection:
+            toolbar?.setSelectedTool(nil)
             if imageEditorWindow != nil { toggleEditorSelection(); return }
             guard let archive else { return }
             let callback = completion, kind = captureKind, savedDocument = canvas?.document, savedContext = editorContext, token = generation
@@ -450,13 +446,20 @@ final class SelectionSession {
     }
 
     private func configure(_ view: AnnotationCanvasView) {
+        view.style = annotationStyle
         view.onAction = { [weak self] action in self?.perform(action) }
         view.onToolChange = { [weak self] tool in self?.toolbar?.setSelectedTool(tool) }
         view.onDocumentChange = { [weak self, weak view] in
             self?.closeScreenshotText()
             self?.toolbar?.setUndoAvailability(canUndo: view?.document.canUndo ?? false, canRedo: view?.document.canRedo ?? false)
         }
-        view.color = annotationColor; view.strokeWidth = annotationWidth
+        view.onSelectionChange = { [weak self, weak view] item in
+            self?.toolbar?.setPropertyContext(tool: item?.tool ?? view?.tool)
+        }
+        view.onStyleChange = { [weak self] style in
+            self?.annotationStyle = style
+            self?.toolbar?.setStyle(style)
+        }
     }
 
     private func toggleEditorSelection() {
@@ -520,15 +523,17 @@ final class SelectionSession {
         if directScrollSelection { return }
         if imageEditorWindow != nil, state == .selected { applyEditorCrop(output: outputAction); return }
         if let canvas, let context = editorContext, state == .annotating {
+            canvas.commitPendingEdits()
             state = .exporting
             updateScrollAvailability()
             let document = canvas.document, base = canvas.base, callback = completion
+            let effects = canvas.effects
             let token = generation
             let scale = CGFloat(base.width) / max(1, document.canvasSize.width)
             let gate = afterImageOperation
             runOperation { [weak self] in
                 do {
-                    let image = try await Self.imageWork(after: gate) { try AnnotationRenderer.render(base: base, document: document, scale: scale) }
+                    let image = try await Self.imageWork(after: gate) { try AnnotationRenderer.render(base: base, document: document, scale: scale, effects: effects) }
                     guard !Task.isCancelled, let self, self.generation == token, self.state == .exporting else { return }
                     self.finish(completed: true); callback?(image, context)
                 } catch {

@@ -247,7 +247,7 @@ final class SelectionTextSessionTests: XCTestCase {
     }
 
     private func panel() throws -> NSWindow {
-        try XCTUnwrap(NSApp.windows.first { $0.isVisible && $0.accessibilityLabel() == "截图标注工具条" })
+        try XCTUnwrap(NSApp.windows.first { $0.isVisible && $0.accessibilityLabel() == "截图工具栏" })
     }
 
     private func button(_ title: String, in view: NSView?) throws -> NSButton {

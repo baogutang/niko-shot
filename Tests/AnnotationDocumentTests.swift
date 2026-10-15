@@ -42,7 +42,7 @@ final class AnnotationDocumentTests: XCTestCase {
         context.setFillColor(CGColor(gray: 0, alpha: 1)); context.fill(CGRect(x: 0, y: 0, width: 80, height: 80))
         let base = try XCTUnwrap(context.makeImage())
         var document = AnnotationDocument(canvasSize: CGSize(width: 80, height: 80))
-        document.append(AnnotationItem(tool: .highlight, color: .red, rect: CGRect(x: 10, y: 10, width: 60, height: 60)))
+        document.append(AnnotationItem(tool: .rectangle, color: .red, rect: CGRect(x: 10, y: 10, width: 60, height: 60), filled: true))
         document.append(AnnotationItem(tool: .blur, width: 1, rect: CGRect(x: 30, y: 30, width: 20, height: 20)))
         for scale: CGFloat in [1, 2] {
             let image = try AnnotationRenderer.render(base: base, document: document, scale: scale)

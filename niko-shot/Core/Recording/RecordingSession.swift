@@ -44,7 +44,7 @@ public final class RecordingSession {
         state = .preparing; duration = 0; errorMessage = nil; lastOutputSize = .zero
         var localPipeline: RecordingPipeline?, localStream: SCStream?
         do {
-            guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else {
+            guard CGPreflightScreenCaptureAccess() else {
                 throw RecordingError.permission("屏幕与系统音频录制")
             }
             if options.microphone { try await requireAccess(to: .audio, named: "麦克风") }

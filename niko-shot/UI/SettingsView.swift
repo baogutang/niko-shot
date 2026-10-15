@@ -187,17 +187,12 @@ public struct SettingsView: View {
         title: "权限",
         caption: "麦克风与摄像头按录制选项授权。截图中按 Esc 取消、↩ 复制。"
       ) {
-        permissionRow(
-          title: "屏幕录制", detail: "截图与录屏", allowed: screenCaptureAllowed,
-          pane: "Privacy_ScreenCapture")
-        permissionRow(
-          title: "辅助功能",
-          detail: accessibilityAllowed ? "自动滚动长截图" : "自动滚动需要；手动滚动无需授权",
-          allowed: accessibilityAllowed, pane: "Privacy_Accessibility")
+        permissionRow(.screenRecording, allowed: screenCaptureAllowed)
+        permissionRow(.accessibility, allowed: accessibilityAllowed)
         HStack(spacing: 10) {
-          Button("打开使用向导…", action: onShowWizard)
+          Button("打开欢迎与权限向导…", action: onShowWizard)
             .keyboardShortcut("h", modifiers: [.command, .shift])
-            .accessibilityLabel("打开三步使用和权限向导")
+            .accessibilityLabel("打开欢迎与权限向导")
           Spacer(minLength: 8)
           Button("刷新权限状态") { refreshPermissions() }
             .help("重新读取系统授权状态，不请求新权限")
@@ -206,21 +201,23 @@ public struct SettingsView: View {
     }
   }
 
-  private func permissionRow(
-    title: String, detail: String, allowed: Bool, pane: String
-  ) -> some View {
+  private func permissionRow(_ kind: PermissionKind, allowed: Bool) -> some View {
     HStack(spacing: 12) {
+      Image(systemName: kind.symbol).foregroundStyle(allowed ? Color.green : NikoTheme.accent)
+        .frame(width: 22).accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 2) {
-        Text(title)
-        Text(detail).font(.caption).foregroundStyle(.secondary)
+        Text(kind.title)
+        Text(kind.purpose).font(.caption).foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
       }
       Spacer(minLength: 8)
-      Label(allowed ? "已授权" : "未授权", systemImage: allowed ? "checkmark.circle.fill" : "circle")
-        .font(.caption).foregroundStyle(allowed ? Color.green : Color.secondary)
-        .fixedSize()
-      Button("设置…") { openPrivacySettings(pane) }
-        .accessibilityLabel("打开\(title)权限系统设置")
+      if allowed {
+        Label("已授权", systemImage: "checkmark.circle.fill")
+          .font(.caption).foregroundStyle(Color.green).fixedSize()
+      } else {
+        Button("授权…") { PermissionGuide.shared.present(kind) }
+          .accessibilityLabel("授权\(kind.title)")
+      }
     }.controlSize(.small)
   }
 
@@ -279,10 +276,6 @@ public struct SettingsView: View {
           Text("关闭后显示屏幕点数；导出始终按屏幕实际缩放倍率计算。")
             .font(.caption).foregroundStyle(.secondary)
         }
-      }
-      SettingsGroup(title: "长截图", caption: "兼容选项在下一次长截图时生效。") {
-        Toggle("使用旧版长截图引擎", isOn: $settings.useLegacyScrollEngine)
-          .toggleStyle(.switch).accessibilityLabel("使用旧版长截图引擎")
       }
       SettingsGroup(title: "预设尺寸", caption: "框选时可选择预设，尺寸以屏幕点数计算。") {
         ForEach(settings.presetSizes) { preset in

@@ -39,6 +39,25 @@ final class WindowFrameGrabberTests: XCTestCase {
         XCTAssertTrue(native === retina)
     }
 
+    func testAutomaticScrollChecksTheInputWindowAndIgnoresClickThroughChrome() async throws {
+        let frame = CGRect(x: 220, y: 300, width: 320, height: 240)
+        let target = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        let blocker = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        target.isReleasedWhenClosed = false; blocker.isReleasedWhenClosed = false
+        blocker.level = .floating
+        defer { blocker.close(); target.close() }
+        target.orderFrontRegardless()
+        let point = CGPoint(x: frame.midX, y: frame.midY), id = CGWindowID(target.windowNumber)
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertNoThrow(try CaptureEngine.checkScrollDestination(windowID: id, point: point))
+        blocker.orderFrontRegardless()
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertThrowsError(try CaptureEngine.checkScrollDestination(windowID: id, point: point))
+        blocker.ignoresMouseEvents = true
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertNoThrow(try CaptureEngine.checkScrollDestination(windowID: id, point: point))
+    }
+
     func testMovingWindowPastDisplayEdgeDoesNotChangeItsViewportDimensions() {
         let screen = ScreenGeometry(id: 1, frame: CGRect(x: 0, y: 0, width: 1_440, height: 900), scale: 2)
         let context = CaptureContext(screen: screen, localRect: CGRect(x: -100, y: 80, width: 320, height: 240), kind: "window")

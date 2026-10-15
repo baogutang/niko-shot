@@ -25,7 +25,7 @@
     ocr: { alt: "当前原生 OCR 窗口，左侧勾选编辑文字；未配置翻译时右侧直接显示原文", width: 1960, height: 1240 },
     settings: { alt: "当前原生翻译设置，五类服务及独立的凭据配置区", width: 1800, height: 1300 },
     recording: { alt: "当前原生录屏配置，包含区域、画质、声音与摄像头选项", width: 1000, height: 1120 },
-    scroll: { alt: "示例文档正在滚动截图，透明选区保留实时画面，旁边的原生半透明预览显示已经拼好的整张长图，可切换全图与跟随", width: 1760, height: 1080 }
+    scroll: { alt: "示例文档正在滚动截图，透明选区保留实时画面，旁边的原生半透明预览跟随已拼接内容，向上查看后可恢复跟随", width: 1760, height: 1120 }
   };
   let preview = "ocr";
   const nativeImage = document.querySelector("#native-image");

@@ -1,0 +1,152 @@
+// Verifies tolerant row matching, fixed chrome, direction handling and exact reconstruction.
+import CoreGraphics
+import XCTest
+@testable import NikoShot
+
+final class ScrollStitcherTests: XCTestCase {
+    private let viewportHeight = 600
+
+    /// Scrolls through a document with uneven steps and expects the stitched image to equal the source rows.
+    func testUnevenScrollingReconstructsTheDocumentExactly() throws {
+        let document = try ScrollImageFixture.document(width: 800, height: 3_000)
+        var stitcher = ScrollStitcher(pixelsPerPoint: 2)
+        var offset = 0
+        XCTAssertEqual(try stitcher.add(ScrollImageFixture.viewport(document, offset: 0, height: viewportHeight)), .appended(rows: viewportHeight))
+        for step in [37, 120, 3, 260, 410, 88, 199, 333, 17, 451, 240] {
+            offset = min(document.height - viewportHeight, offset + step)
+            let result = try stitcher.add(ScrollImageFixture.viewport(document, offset: offset, height: viewportHeight))
+            guard case .appended = result else { return XCTFail("step \(step) at \(offset): \(result)") }
+        }
+        let image = try stitcher.makeImage()
+        XCTAssertEqual(image.width, 800)
+        XCTAssertEqual(image.height, offset + viewportHeight)
+        let expected = try XCTUnwrap(document.cropping(to: CGRect(x: 0, y: 0, width: 800, height: image.height)))
+        XCTAssertEqual(try ScrollImageFixture.pixels(image), try ScrollImageFixture.pixels(expected))
+    }
+
+    /// A toolbar on top and a composer on the bottom stay fixed; both appear exactly once.
+    func testFixedHeaderAndFooterAppearOnce() throws {
+        let document = try ScrollImageFixture.document(width: 700, height: 2_600)
+        let header = 64, footer = 72, body = viewportHeight - header - footer
+        var stitcher = ScrollStitcher(pixelsPerPoint: 2)
+        var offset = 0
+        _ = try stitcher.add(ScrollImageFixture.viewport(document, offset: 0, height: viewportHeight, header: header, footer: footer))
+        for step in [90, 140, 200, 60, 230, 180, 300] {
+            offset = min(document.height - body, offset + step)
+            let result = try stitcher.add(ScrollImageFixture.viewport(document, offset: offset, height: viewportHeight, header: header, footer: footer))
+            guard case .appended = result else { return XCTFail("step \(step): \(result)") }
+        }
+        XCTAssertEqual(stitcher.footerRows, footer)
+        let image = try stitcher.makeImage()
+        XCTAssertEqual(image.height, header + offset + body + footer)
+        let pixels = try ScrollImageFixture.pixels(image)
+        let first = try ScrollImageFixture.pixels(ScrollImageFixture.viewport(document, offset: 0, height: viewportHeight, header: header, footer: footer))
+        let rowBytes = 700 * 4
+        // Header rows come from the first viewport, footer rows from the last; the body is the document.
+        XCTAssertEqual(Array(pixels[0..<(header * rowBytes)]), Array(first[0..<(header * rowBytes)]))
+        let documentPixels = try ScrollImageFixture.pixels(XCTUnwrap(document.cropping(to: CGRect(x: 0, y: 0, width: 700, height: offset + body))))
+        XCTAssertEqual(Array(pixels[(header * rowBytes)..<((header + offset + body) * rowBytes)]), documentPixels)
+    }
+
+    /// Overlay scroll bars move with every frame and rendering adds small noise; matching still holds.
+    func testScrollBarOverlayAndRenderingNoiseDoNotBreakAlignment() throws {
+        let document = try ScrollImageFixture.document(width: 900, height: 3_200)
+        var stitcher = ScrollStitcher(pixelsPerPoint: 2)
+        var offset = 0
+        _ = try stitcher.add(ScrollImageFixture.viewport(document, offset: 0, height: viewportHeight, scrollbarAt: 0, noise: 3, seed: 1))
+        for (index, step) in [150, 75, 220, 140, 310, 95].enumerated() {
+            offset += step
+            let frame = try ScrollImageFixture.viewport(document, offset: offset, height: viewportHeight,
+                                                         scrollbarAt: offset * viewportHeight / document.height, noise: 3, seed: UInt64(index + 2))
+            XCTAssertEqual(try stitcher.add(frame), .appended(rows: step), "step \(index)")
+        }
+        XCTAssertEqual(stitcher.outputHeight, offset + viewportHeight)
+    }
+
+    /// Scrolling up shows already captured content: nothing is appended and the tail is preserved.
+    func testBackwardScrollIsReversedAndForwardResumes() throws {
+        let document = try ScrollImageFixture.document(width: 800, height: 2_400)
+        var stitcher = ScrollStitcher(pixelsPerPoint: 2)
+        _ = try stitcher.add(ScrollImageFixture.viewport(document, offset: 0, height: viewportHeight))
+        _ = try stitcher.add(ScrollImageFixture.viewport(document, offset: 300, height: viewportHeight))
+        let height = stitcher.outputHeight
+        XCTAssertEqual(try stitcher.add(ScrollImageFixture.viewport(document, offset: 180, height: viewportHeight)), .reversed)
+        XCTAssertEqual(try stitcher.add(ScrollImageFixture.viewport(document, offset: 300, height: viewportHeight)), .unchanged)
+        XCTAssertEqual(stitcher.outputHeight, height)
+        XCTAssertEqual(try stitcher.add(ScrollImageFixture.viewport(document, offset: 420, height: viewportHeight)), .appended(rows: 120))
+    }
+
+    /// A jump larger than the viewport has no overlap; the stitcher waits until overlap returns.
+    func testTooFastScrollIsUnmatchedThenRecovers() throws {
+        let document = try ScrollImageFixture.document(width: 800, height: 3_000)
+        var stitcher = ScrollStitcher(pixelsPerPoint: 2)
+        _ = try stitcher.add(ScrollImageFixture.viewport(document, offset: 0, height: viewportHeight))
+        XCTAssertEqual(try stitcher.add(ScrollImageFixture.viewport(document, offset: 900, height: viewportHeight)), .unmatched)
+        XCTAssertEqual(stitcher.outputHeight, viewportHeight)
+        XCTAssertEqual(try stitcher.add(ScrollImageFixture.viewport(document, offset: 400, height: viewportHeight)), .appended(rows: 400))
+    }
+
+    func testIdenticalFrameIsUnchangedAndResizeIsRejected() throws {
+        let document = try ScrollImageFixture.document(width: 800, height: 2_000)
+        var stitcher = ScrollStitcher(pixelsPerPoint: 2)
+        let frame = try ScrollImageFixture.viewport(document, offset: 100, height: viewportHeight)
+        _ = try stitcher.add(frame)
+        XCTAssertEqual(try stitcher.add(frame), .unchanged)
+        XCTAssertThrowsError(try stitcher.add(ScrollImageFixture.viewport(document, offset: 100, height: viewportHeight - 10)))
+    }
+
+    /// Long blank stretches have no image evidence; precise trackpad deltas carry the capture across them.
+    func testBlankStretchUsesPreciseScrollHint() throws {
+        let document = try ScrollImageFixture.document(width: 800, height: 3_000, sparse: true)
+        var stitcher = ScrollStitcher(pixelsPerPoint: 2)
+        _ = try stitcher.add(ScrollImageFixture.viewport(document, offset: 0, height: 400))
+        var offset = 0
+        for step in [120, 120, 120, 120, 120, 120, 120, 120] {
+            offset += step
+            let result = try stitcher.add(ScrollImageFixture.viewport(document, offset: offset, height: 400), hint: step)
+            XCTAssertEqual(result, .appended(rows: step), "offset \(offset)")
+        }
+        let image = try stitcher.makeImage()
+        let expected = try XCTUnwrap(document.cropping(to: CGRect(x: 0, y: 0, width: 800, height: offset + 400)))
+        XCTAssertEqual(try ScrollImageFixture.pixels(image), try ScrollImageFixture.pixels(expected))
+    }
+
+    func testRetinaSizedFrameMatchesQuickly() throws {
+        let document = try ScrollImageFixture.document(width: 2_400, height: 6_000)
+        let first = try ScrollImageFixture.viewport(document, offset: 0, height: 1_600)
+        let second = try ScrollImageFixture.viewport(document, offset: 420, height: 1_600)
+        var stitcher = ScrollStitcher(pixelsPerPoint: 2)
+        _ = try stitcher.add(first)
+        let frame = try ScrollFrame(second, pixelsPerPoint: 2)
+        let started = ContinuousClock.now
+        XCTAssertEqual(try stitcher.add(frame), .appended(rows: 420))
+        let elapsed = started.duration(to: .now)
+        XCTAssertLessThan(elapsed, .seconds(3), "Debug builds are slow; release matching is far faster")
+    }
+
+    func testOutputLimitStopsAppending() throws {
+        let document = try ScrollImageFixture.document(width: 600, height: 2_000)
+        var stitcher = ScrollStitcher(pixelsPerPoint: 2, maximumHeight: 900)
+        _ = try stitcher.add(ScrollImageFixture.viewport(document, offset: 0, height: viewportHeight))
+        XCTAssertEqual(try stitcher.add(ScrollImageFixture.viewport(document, offset: 500, height: viewportHeight)), .limitReached)
+        XCTAssertEqual(stitcher.outputHeight, 900)
+    }
+
+    func testWorkerPreviewFollowsAcceptedRowsAndFinishReleasesState() async throws {
+        let document = try ScrollImageFixture.document(width: 800, height: 2_400)
+        let worker = ScrollStitchWorker(pixelsPerPoint: 2)
+        let first = try await worker.add(ScrollImageFixture.viewport(document, offset: 0, height: viewportHeight), hint: nil)
+        XCTAssertEqual(first.frames, 1)
+        XCTAssertEqual(first.preview?.sourceHeight, viewportHeight)
+        let second = try await worker.add(ScrollImageFixture.viewport(document, offset: 250, height: viewportHeight), hint: 250)
+        XCTAssertEqual(second.result, .appended(rows: 250))
+        XCTAssertEqual(second.height, 850)
+        // A coincidentally static strip at the bottom is kept once as the footer, outside the preview body.
+        XCTAssertLessThanOrEqual(try XCTUnwrap(second.preview?.sourceHeight), 850)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(second.preview?.sourceHeight), 800)
+        let image = try await worker.finish()
+        XCTAssertEqual(image.height, 850)
+        let frames = await worker.frames
+        XCTAssertEqual(frames, 0)
+    }
+}
