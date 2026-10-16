@@ -203,10 +203,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let action = selectionSession.outputAction
         let id = UUID(), date = Date.now
-        let archive = AppPaths.captures.appendingPathComponent("\(id.uuidString).png")
-        // Copies claim the clipboard before any encoding, so a paste right after the click already works.
-        let clipboard = action == .pin || action == .save ? nil : DeferredCapturePayload(image: image, date: date, file: archive)
-        if let clipboard { ClipboardWriter.write(clipboard) }
+        // The clipboard takes the capture as soon as its PNG is encoded off the main thread, tens of
+        // milliseconds later; a copy made in between, or a newer capture, wins instead.
+        let copies = action != .pin && action != .save
+        if copies { ClipboardWriter.reserve(id) }
         CaptureFeedback.playShutter()
         let previewScreen = context.screen.id != 0 ? context.screen.frame : (NSScreen.main?.frame ?? .zero)
         let previewScale = NSScreen.screens.first { $0.frame == previewScreen }?.backingScaleFactor ?? 2
@@ -214,7 +214,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         outputTasks[taskID] = Task {
             defer { outputTasks[taskID] = nil }
             do {
-                let saved = try await storeCapture(image, context: context, id: id, date: date) { clipboard?.fulfill(png: $0) }
+                let saved = try await storeCapture(image, context: context, id: id, date: date) { png, file in
+                    if copies { ClipboardWriter.publish(id, png: png, image: image, date: date, file: file) }
+                }
                 let record = saved.record
                 let file = URL(fileURLWithPath: record.path)
                 try Task.checkCancellation()
@@ -242,8 +244,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let thumbnail = try await Self.imageWork { CapturePreviewController.makeThumbnail(image, backingScale: previewScale) }
                 guard let thumbnail, !isTerminating, selectionSession.state == .idle, captureTask == nil else { return }
                 CapturePreviewController.shared.show(record: record, thumbnail: thumbnail, screenFrame: previewScreen, status: "已复制")
-            } catch is CancellationError { clipboard?.fail() }
-            catch { clipboard?.fail(); if !isTerminating, !Task.isCancelled { ErrorPresenter.show(error) } }
+            } catch is CancellationError {}
+            catch { if !isTerminating, !Task.isCancelled { ErrorPresenter.show(error) } }
         }
     }
 
@@ -252,20 +254,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let png: Data
     }
 
-    /// Archives a capture: the PNG first (reported through `onArchived`), then its thumbnail and history row.
+    /// Archives a capture: the PNG first (reported through `onArchived` with its file, or with no file
+    /// when writing it failed), then its thumbnail and history row.
     private func storeCapture(_ image: CGImage, context: CaptureContext, id: UUID = UUID(), date: Date = .now,
-                              onArchived: @MainActor (Data) -> Void = { _ in }) async throws -> SavedCapture {
+                              onArchived: @MainActor (Data, URL?) -> Void = { _, _ in }) async throws -> SavedCapture {
         let file = AppPaths.captures.appendingPathComponent("\(id.uuidString).png")
-        let png = try await Self.imageWork { () -> Data in
+        let (png, writeError) = try await Self.imageWork { () -> (Data, (any Error)?) in
             let png = try Exporters.encode(image, format: .png, date: date)
             try Task.checkCancellation()
-            try FileManager.default.createDirectory(at: AppPaths.captures, withIntermediateDirectories: true)
-            try png.write(to: file, options: .atomic)
-            return png
+            do {
+                try FileManager.default.createDirectory(at: AppPaths.captures, withIntermediateDirectories: true)
+                try png.write(to: file, options: .atomic)
+                return (png, nil)
+            } catch { return (png, error) }
         }
         do { try Task.checkCancellation() }
         catch { try? FileManager.default.removeItem(at: file); throw error }
-        onArchived(png)
+        if let writeError { onArchived(png, nil); throw writeError }
+        onArchived(png, file)
         let thumbnail = try await Self.imageWork { try Exporters.thumbnail(from: png) }
         let store = try getHistoryStore()
         let record = HistoryRecord(id: id, createdAt: date, path: file.path, thumbnail: thumbnail,
@@ -611,9 +617,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if command.action == .ocr {
             NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text ?? "", forType: .string)
         } else {
-            let payload = DeferredCapturePayload(image: captured.0, date: saved.record.createdAt, file: file)
-            payload.fulfill(png: saved.png)
-            ClipboardWriter.write(payload)
+            ClipboardWriter.write(png: saved.png, image: captured.0, date: saved.record.createdAt, file: file)
         }
         return AutomationResponse(outputPath: file.path, text: text,
             message: command.action == .ocr ? "识别文字已复制。" : "截图已保存并复制。")

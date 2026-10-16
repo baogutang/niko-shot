@@ -1,4 +1,4 @@
-// Verifies the instant clipboard, the floating capture thumbnail and magnifier placement.
+// Verifies the capture clipboard, the floating capture thumbnail and magnifier placement.
 import AppKit
 import XCTest
 @testable import NikoShot
@@ -12,37 +12,55 @@ final class CaptureOutputTests: XCTestCase {
         return try XCTUnwrap(context.makeImage())
     }
 
-    func testClipboardIsClaimedBeforeArchivingAndOffersTheFileOnceSaved() throws {
-        let pasteboard = NSPasteboard(name: NSPasteboard.Name("niko-shot-tests-\(UUID().uuidString)"))
-        defer { pasteboard.releaseGlobally() }
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).png")
-        defer { try? FileManager.default.removeItem(at: file) }
-        let payload = DeferredCapturePayload(image: try image(), date: Date(), file: file)
-        let item = NSPasteboardItem()
-        item.setDataProvider(payload, forTypes: [.png, .tiff, .fileURL])
-        pasteboard.clearContents(); pasteboard.writeObjects([item])
-
-        // Before the archive exists, image types already paste; encoding happens on request.
-        let png = try XCTUnwrap(pasteboard.data(forType: .png))
-        XCTAssertEqual(NSBitmapImageRep(data: png)?.pixelsWide, 64)
-        XCTAssertNotNil(pasteboard.data(forType: .tiff))
-
-        try png.write(to: file)
-        payload.fulfill(png: png)
-        XCTAssertEqual(pasteboard.string(forType: .fileURL), file.absoluteString)
+    private func scratchPasteboard() -> NSPasteboard {
+        NSPasteboard(name: NSPasteboard.Name("niko-shot-tests-\(UUID().uuidString)"))
     }
 
-    func testFailedArchiveStillPastesTheImageWithoutAFileURL() throws {
-        let pasteboard = NSPasteboard(name: NSPasteboard.Name("niko-shot-tests-\(UUID().uuidString)"))
+    func testPublishedCaptureHoldsPNGAndFileURLAsDataSoReadersNeverCallBack() throws {
+        let pasteboard = scratchPasteboard()
         defer { pasteboard.releaseGlobally() }
-        let payload = DeferredCapturePayload(image: try image(), date: Date(),
-                                             file: URL(fileURLWithPath: "/nonexistent/\(UUID().uuidString).png"))
-        payload.fail()
-        let item = NSPasteboardItem()
-        item.setDataProvider(payload, forTypes: [.png, .fileURL])
-        pasteboard.clearContents(); pasteboard.writeObjects([item])
-        XCTAssertNotNil(pasteboard.data(forType: .png))
+        let image = try image()
+        let png = try Exporters.encode(image, format: .png)
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).png")
+        try png.write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let capture = UUID()
+        ClipboardWriter.reserve(capture, on: pasteboard)
+        XCTAssertTrue(ClipboardWriter.publish(capture, png: png, image: image, date: Date(), file: file, on: pasteboard))
+
+        // Apps that read every new clipboard ask for these at once; they must already be there.
+        let item = try XCTUnwrap(pasteboard.pasteboardItems?.first)
+        XCTAssertEqual(item.data(forType: .png), png)
+        XCTAssertEqual(item.string(forType: .fileURL), file.absoluteString)
+        XCTAssertEqual(NSBitmapImageRep(data: try XCTUnwrap(pasteboard.data(forType: .tiff)))?.pixelsWide, 64)
+    }
+
+    func testACopyOrANewerCaptureAfterTheClickKeepsTheClipboard() throws {
+        let pasteboard = scratchPasteboard()
+        defer { pasteboard.releaseGlobally() }
+        let image = try image(), png = try Exporters.encode(image, format: .png)
+
+        let first = UUID()
+        ClipboardWriter.reserve(first, on: pasteboard)
+        pasteboard.clearContents(); pasteboard.setString("copied meanwhile", forType: .string)
+        XCTAssertFalse(ClipboardWriter.publish(first, png: png, image: image, date: Date(), file: nil, on: pasteboard))
+        XCTAssertEqual(pasteboard.string(forType: .string), "copied meanwhile")
+
+        let older = UUID(), newer = UUID()
+        ClipboardWriter.reserve(older, on: pasteboard)
+        ClipboardWriter.reserve(newer, on: pasteboard)
+        XCTAssertFalse(ClipboardWriter.publish(older, png: png, image: image, date: Date(), file: nil, on: pasteboard))
+        XCTAssertTrue(ClipboardWriter.publish(newer, png: png, image: image, date: Date(), file: nil, on: pasteboard))
+    }
+
+    func testUnarchivedCaptureStillPastesTheImageWithoutAFileURL() throws {
+        let pasteboard = scratchPasteboard()
+        defer { pasteboard.releaseGlobally() }
+        let image = try image(), png = try Exporters.encode(image, format: .png)
+        ClipboardWriter.write(png: png, image: image, date: Date(), file: nil, to: pasteboard)
+        XCTAssertEqual(pasteboard.data(forType: .png), png)
         XCTAssertNil(pasteboard.string(forType: .fileURL))
+        XCTAssertEqual(pasteboard.pasteboardItems?.count, 1, "No file promise without a file")
     }
 
     func testThumbnailFitsTheCornerWithoutUpscalingTinyCaptures() {
