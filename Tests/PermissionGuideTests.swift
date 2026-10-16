@@ -29,6 +29,50 @@ final class PermissionGuideTests: XCTestCase {
         XCTAssertTrue(visible.contains(frame))
     }
 
+    func testDraggingTheIconDragsTheAppNotTheGuidePanel() throws {
+        let icon = AppIconDragView(frame: CGRect(x: 0, y: 0, width: 76, height: 76))
+        XCTAssertFalse(icon.mouseDownCanMoveWindow, "A movable-by-background panel would otherwise move instead of dragging")
+        let bundle = URL(fileURLWithPath: "/Applications/niko-shot.app", isDirectory: true)
+        let item = icon.makeDraggingItem(bundleURL: bundle)
+        let writer = try XCTUnwrap(item.item as? NSURL)
+        XCTAssertEqual(writer as URL, bundle)
+        let types = writer.writableTypes(for: NSPasteboard(name: NSPasteboard.Name("niko-shot-drag-\(UUID().uuidString)")))
+        XCTAssertTrue(types.contains(.fileURL), "Privacy lists accept a dropped application file")
+    }
+
+    func testIconInsideTheGuidePanelIsTheDragSourceUnderThePointer() throws {
+        let opener = PermissionGuide.shared.openSettings
+        PermissionGuide.shared.openSettings = { _ in }
+        PermissionGuide.shared.present(.accessibility)
+        defer { PermissionGuide.shared.dismiss(); PermissionGuide.shared.openSettings = opener }
+        let panel = try XCTUnwrap(NSApp.windows.first { $0.accessibilityLabel() == "权限授权引导" && $0.isVisible })
+        XCTAssertTrue(panel.isMovableByWindowBackground)
+        let content = try XCTUnwrap(panel.contentView)
+        content.layoutSubtreeIfNeeded()
+        let icon = try XCTUnwrap(Self.views(in: content).compactMap { $0 as? AppIconDragView }.first)
+        let center = icon.convert(CGPoint(x: icon.bounds.midX, y: icon.bounds.midY), to: nil)
+        // hitTest takes a point in the receiver's superview, as NSWindow uses it for a real click.
+        let frameView = try XCTUnwrap(content.superview)
+        let hit = frameView.hitTest(frameView.convert(center, from: nil))
+        XCTAssertTrue(hit === icon, "The icon, not the panel background, receives the drag")
+        XCTAssertFalse(hit?.mouseDownCanMoveWindow ?? true)
+    }
+
+    func testScreenRecordingGrantIsNoticedBeforeARelaunch() {
+        let other: [String: Any] = [kCGWindowOwnerPID as String: NSNumber(value: 4242), kCGWindowLayer as String: NSNumber(value: 0),
+                                    kCGWindowOwnerName as String: "系统设置", kCGWindowName as String: "隐私与安全性"]
+        XCTAssertTrue(ScreenRecordingProbe.otherWindowTitlesAreReadable([other], ownPID: 1))
+        var hidden = other; hidden.removeValue(forKey: kCGWindowName as String)
+        XCTAssertFalse(ScreenRecordingProbe.otherWindowTitlesAreReadable([hidden], ownPID: 1), "Titles are hidden without consent")
+        XCTAssertFalse(ScreenRecordingProbe.otherWindowTitlesAreReadable([other], ownPID: 4242), "Our own windows prove nothing")
+        var dock = other; dock[kCGWindowOwnerName as String] = "Dock"
+        XCTAssertFalse(ScreenRecordingProbe.otherWindowTitlesAreReadable([dock], ownPID: 1))
+        var menu = other; menu[kCGWindowLayer as String] = NSNumber(value: 25)
+        XCTAssertFalse(ScreenRecordingProbe.otherWindowTitlesAreReadable([menu], ownPID: 1))
+    }
+
+    private static func views(in root: NSView) -> [NSView] { [root] + root.subviews.flatMap { views(in: $0) } }
+
     func testPermissionNamesMapToGuides() {
         XCTAssertEqual(PermissionKind.matching("屏幕录制"), .screenRecording)
         XCTAssertEqual(PermissionKind.matching("屏幕与系统音频录制"), .screenRecording)

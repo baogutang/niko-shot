@@ -7,12 +7,17 @@ import SwiftUI
 @MainActor @Observable
 final class PermissionStatusModel {
     private(set) var granted: [PermissionKind: Bool] = [:]
+    private(set) var states: [PermissionKind: PermissionState] = [:]
     @ObservationIgnored private var timer: Timer?
 
     init() { refresh() }
 
     func refresh() {
-        for kind in PermissionKind.allCases { granted[kind] = kind.isGranted }
+        for kind in PermissionKind.allCases {
+            let state = kind.state
+            states[kind] = state
+            granted[kind] = state == .granted
+        }
     }
 
     func startUpdating() {
@@ -164,6 +169,10 @@ private struct WelcomeView: View {
             if granted {
                 Label("已授权", systemImage: "checkmark.circle.fill").font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.green).labelStyle(.titleAndIcon)
+            } else if status.states[kind] == .grantedNeedsRelaunch {
+                Button("重新打开以生效") { AppRelauncher.relaunch() }
+                    .controlSize(.regular).buttonStyle(.borderedProminent)
+                    .help("已在系统设置中授权；屏幕录制在重新打开 niko-shot 后生效")
             } else {
                 Button("授权…") { authorize(kind) }.controlSize(.regular)
                     .accessibilityLabel("授权\(kind.title)")

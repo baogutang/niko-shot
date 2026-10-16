@@ -49,10 +49,17 @@ enum PermissionKind: String, CaseIterable, Identifiable, Sendable {
     }
 
     /// Reads the current consent without showing any system prompt.
-    @MainActor var isGranted: Bool {
+    @MainActor var isGranted: Bool { state == .granted }
+
+    /// Consent as this process can use it. Screen Recording granted while the app runs only takes
+    /// effect after a relaunch, so it reads as `grantedNeedsRelaunch` until then.
+    @MainActor var state: PermissionState {
         switch self {
-        case .screenRecording: CGPreflightScreenCaptureAccess()
-        case .accessibility: AXIsProcessTrusted()
+        case .screenRecording:
+            if CGPreflightScreenCaptureAccess() { return .granted }
+            return ScreenRecordingProbe.otherWindowTitlesAreReadable() ? .grantedNeedsRelaunch : .notGranted
+        case .accessibility:
+            return AXIsProcessTrusted() ? .granted : .notGranted
         }
     }
 
@@ -64,6 +71,27 @@ enum PermissionKind: String, CaseIterable, Identifiable, Sendable {
         if name.contains("辅助") { return .accessibility }
         if name.contains("屏幕") || name.contains("录屏") { return .screenRecording }
         return nil
+    }
+}
+
+enum PermissionState: Sendable, Equatable {
+    case notGranted, grantedNeedsRelaunch, granted
+}
+
+/// Notices Screen Recording consent without a relaunch. `CGPreflightScreenCaptureAccess` keeps the answer
+/// this process started with, but the window server hides other apps' window titles only while consent is
+/// missing, and it decides that on every call.
+enum ScreenRecordingProbe {
+    static func otherWindowTitlesAreReadable(_ list: [[String: Any]]? = nil, ownPID: pid_t = getpid()) -> Bool {
+        let windows = list ?? (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+            as? [[String: Any]] ?? [])
+        return windows.contains { info in
+            guard let pid = (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value, pid != ownPID,
+                  (info[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                  let owner = info[kCGWindowOwnerName as String] as? String,
+                  owner != "Window Server", owner != "Dock" else { return false }
+            return info[kCGWindowName as String] is String
+        }
     }
 }
 

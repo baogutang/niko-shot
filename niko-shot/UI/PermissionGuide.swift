@@ -8,8 +8,9 @@ import SwiftUI
 final class PermissionGuideModel {
     var kind: PermissionKind = .screenRecording
     var reason: String?
-    var granted = false
+    var state: PermissionState = .notGranted
     var dragging = false
+    var granted: Bool { state != .notGranted }
 }
 
 /// Opens the privacy list, then floats a draggable app icon next to it until permission is granted.
@@ -25,6 +26,8 @@ final class PermissionGuide {
     private var grantedAt: Date?
     /// Called once when the presented permission becomes granted.
     var onGranted: ((PermissionKind) -> Void)?
+    /// Opens the System Settings list; replaceable so tests never launch System Settings.
+    var openSettings: (PermissionKind) -> Void = { $0.openSettings() }
 
     var isPresented: Bool { panel != nil }
     var presentedKind: PermissionKind? { panel == nil ? nil : model.kind }
@@ -33,10 +36,10 @@ final class PermissionGuide {
     func present(_ kind: PermissionKind, reason: String? = nil) {
         model.kind = kind
         model.reason = reason
-        model.granted = kind.isGranted && !kind.needsRelaunchAfterGrant
+        model.state = kind.state
         grantedAt = nil
         missingSettingsTicks = 0
-        kind.openSettings()
+        openSettings(kind)
         if panel == nil { makePanel() }
         reposition(animated: false)
         if let panel { CaptureChrome.present(panel, content: panel.contentView) }
@@ -55,7 +58,8 @@ final class PermissionGuide {
         panel.hasShadow = true
         let hosting = NSHostingView(rootView: PermissionGuideView(model: model,
             close: { [weak self] in self?.dismiss() },
-            openSettings: { [weak self] in self?.model.kind.openSettings() },
+            openSettings: { [weak self] in if let self { self.openSettings(self.model.kind) } },
+            reveal: { NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL]) },
             relaunch: { AppRelauncher.relaunch() }))
         hosting.frame = CGRect(origin: .zero, size: Self.size)
         panel.contentView = hosting
@@ -64,7 +68,7 @@ final class PermissionGuide {
         self.panel = panel
     }
 
-    private static let size = CGSize(width: 460, height: 172)
+    static let size = CGSize(width: 480, height: 196)
 
     private func startTimer() {
         timer?.invalidate()
@@ -79,14 +83,18 @@ final class PermissionGuide {
         guard panel != nil else { timer?.invalidate(); timer = nil; return }
         reposition(animated: true)
         let kind = model.kind
-        if !model.granted, kind.isGranted {
-            model.granted = true
-            grantedAt = .now
-            NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
-            onGranted?(kind)
+        let state = kind.state
+        if state != model.state {
+            let wasGranted = model.granted
+            model.state = state
+            if state != .notGranted, !wasGranted {
+                grantedAt = .now
+                NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+                onGranted?(kind)
+            }
         }
-        // 辅助功能立即生效：显示成功状态片刻后自动收起。
-        if let grantedAt, !kind.needsRelaunchAfterGrant, Date.now.timeIntervalSince(grantedAt) > 1.8 { dismiss() }
+        // 立即生效的授权显示成功片刻后自动收起；需要重新打开的保留「重新打开」按钮。
+        if let grantedAt, state == .granted, Date.now.timeIntervalSince(grantedAt) > 1.8 { dismiss() }
     }
 
     private func reposition(animated: Bool) {
@@ -154,6 +162,7 @@ private struct PermissionGuideView: View {
     @Bindable var model: PermissionGuideModel
     let close: () -> Void
     let openSettings: () -> Void
+    let reveal: () -> Void
     let relaunch: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var bob = false
@@ -185,44 +194,59 @@ private struct PermissionGuideView: View {
                 if let reason = model.reason {
                     Text("\(reason)需要此权限。").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
-                step(1, "把左侧的 niko-shot 图标拖进上方「\(model.kind.settingsListName)」列表")
-                step(2, model.kind.needsRelaunchAfterGrant ? "打开 niko-shot 的开关，然后重新打开应用" : "打开 niko-shot 右侧的开关")
+                step(1, "把左侧的 niko-shot 图标拖进上方「\(model.kind.settingsListName)」列表",
+                     detail: "拖不进去时，点列表下方的 ＋，在「应用程序」里选择 niko-shot")
+                step(2, model.kind.needsRelaunchAfterGrant ? "打开 niko-shot 的开关，再按提示重新打开应用" : "打开 niko-shot 右侧的开关")
                 Spacer(minLength: 0)
                 HStack(spacing: 8) {
                     status
                     Spacer(minLength: 0)
-                    if !model.granted {
+                    switch model.state {
+                    case .notGranted:
+                        Button("在访达中显示", action: reveal).controlSize(.small)
+                            .help("从访达把 niko-shot 拖进列表")
                         Button("打开设置", action: openSettings).controlSize(.small)
-                    }
-                    if model.kind.needsRelaunchAfterGrant {
+                    case .grantedNeedsRelaunch:
                         Button("重新打开 niko-shot", action: relaunch)
                             .controlSize(.small).buttonStyle(.borderedProminent)
                             .help("屏幕录制权限在重新打开应用后生效")
+                    case .granted:
+                        EmptyView()
                     }
                 }
             }
         }
         .padding(16)
-        .frame(width: 460, height: 172, alignment: .topLeading)
+        .frame(width: PermissionGuide.size.width, height: PermissionGuide.size.height, alignment: .topLeading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.state)
         .onAppear { bob = true }
     }
 
-    private func step(_ number: Int, _ text: String) -> some View {
+    private func step(_ number: Int, _ text: String, detail: String? = nil) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 7) {
             Text("\(number)").font(.system(size: 10, weight: .bold, design: .rounded))
                 .foregroundStyle(.white).frame(width: 16, height: 16)
                 .background(Color.accentColor, in: Circle())
-            Text(text).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(text).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
+                if let detail {
+                    Text(detail).font(.system(size: 10.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
     }
 
     @ViewBuilder private var status: some View {
-        if model.granted {
-            Label(model.kind.needsRelaunchAfterGrant ? "已授权，重新打开后生效" : "已授权，可以继续使用", systemImage: "checkmark.circle.fill")
+        switch model.state {
+        case .granted:
+            Label("已授权，可以继续使用", systemImage: "checkmark.circle.fill")
                 .font(.system(size: 11, weight: .medium)).foregroundStyle(.green)
-        } else {
+        case .grantedNeedsRelaunch:
+            Label("已授权，重新打开后生效", systemImage: "checkmark.circle.fill")
+                .font(.system(size: 11, weight: .medium)).foregroundStyle(.green)
+        case .notGranted:
             HStack(spacing: 6) {
                 ProgressView().controlSize(.mini)
                 Text(model.dragging ? "松开到列表里…" : "等待授权…").font(.system(size: 11)).foregroundStyle(.secondary)
@@ -272,6 +296,10 @@ final class AppIconDragView: NSView, NSDraggingSource {
         addTrackingArea(area); tracking = area
     }
 
+    /// The guide panel moves by its background; without this, dragging the icon would drag the panel
+    /// instead of the application, and nothing would ever reach the System Settings list.
+    override var mouseDownCanMoveWindow: Bool { false }
+
     override func cursorUpdate(with event: NSEvent) { NSCursor.openHand.set() }
     override func mouseEntered(with event: NSEvent) { hovering = true; needsDisplay = true }
     override func mouseExited(with event: NSEvent) { hovering = false; needsDisplay = true }
@@ -290,15 +318,33 @@ final class AppIconDragView: NSView, NSDraggingSource {
         icon.draw(in: CGRect(x: tile.midX - side / 2, y: tile.midY - side / 2, width: side, height: side))
     }
 
-    override func mouseDown(with event: NSEvent) { NSCursor.closedHand.set() }
+    private var downPoint: CGPoint?
+
+    override func mouseDown(with event: NSEvent) {
+        downPoint = convert(event.locationInWindow, from: nil)
+        NSCursor.closedHand.set()
+    }
+
+    override func mouseUp(with event: NSEvent) { downPoint = nil; NSCursor.openHand.set() }
 
     override func mouseDragged(with event: NSEvent) {
-        let item = NSDraggingItem(pasteboardWriter: Bundle.main.bundleURL as NSURL)
-        let side = min(bounds.width, bounds.height) - 18
-        item.setDraggingFrame(CGRect(x: bounds.midX - side / 2, y: bounds.midY - side / 2, width: side, height: side), contents: icon)
-        let session = beginDraggingSession(with: [item], event: event, source: self)
+        guard let start = downPoint else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        guard hypot(point.x - start.x, point.y - start.y) > 3 else { return }
+        downPoint = nil
+        let session = beginDraggingSession(with: [makeDraggingItem()], event: event, source: self)
         session.animatesToStartingPositionsOnCancelOrFail = true
+        session.draggingFormation = .none
         onDragChange?(true)
+    }
+
+    /// The running application bundle as a Finder-style file drag, which privacy lists accept as an addition.
+    /// `NSURL` writes both the modern file-URL type and the legacy filename types older lists still read.
+    func makeDraggingItem(bundleURL: URL = Bundle.main.bundleURL) -> NSDraggingItem {
+        let dragging = NSDraggingItem(pasteboardWriter: bundleURL as NSURL)
+        let side = min(bounds.width, bounds.height) - 18
+        dragging.setDraggingFrame(CGRect(x: bounds.midX - side / 2, y: bounds.midY - side / 2, width: side, height: side), contents: icon)
+        return dragging
     }
 
     nonisolated func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {

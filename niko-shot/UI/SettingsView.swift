@@ -29,8 +29,8 @@ public struct SettingsView: View {
   @State private var navigation = SettingsNavigation.shared
   @State private var translationDrafts = TranslationSettingsDrafts()
   @State private var showsTranslationSettings = true
-  @State private var screenCaptureAllowed = false
-  @State private var accessibilityAllowed = false
+  @State private var screenCaptureState = PermissionState.notGranted
+  @State private var accessibilityState = PermissionState.notGranted
   private let onShowWizard: () -> Void
 
   /// Shares live preferences and hotkeys; opening a guide keeps unsaved translation input.
@@ -187,8 +187,8 @@ public struct SettingsView: View {
         title: "权限",
         caption: "麦克风与摄像头按录制选项授权。截图中按 Esc 取消、↩ 复制。"
       ) {
-        permissionRow(.screenRecording, allowed: screenCaptureAllowed)
-        permissionRow(.accessibility, allowed: accessibilityAllowed)
+        permissionRow(.screenRecording, state: screenCaptureState)
+        permissionRow(.accessibility, state: accessibilityState)
         HStack(spacing: 10) {
           Button("打开欢迎与权限向导…", action: onShowWizard)
             .keyboardShortcut("h", modifiers: [.command, .shift])
@@ -198,12 +198,19 @@ public struct SettingsView: View {
             .help("重新读取系统授权状态，不请求新权限")
         }.controlSize(.small)
       }
+      // 在系统设置里打开开关后，这里随即更新，不必手动刷新。
+      .task {
+        while !Task.isCancelled {
+          refreshPermissions()
+          try? await Task.sleep(for: .seconds(1.5))
+        }
+      }
     }
   }
 
-  private func permissionRow(_ kind: PermissionKind, allowed: Bool) -> some View {
+  private func permissionRow(_ kind: PermissionKind, state: PermissionState) -> some View {
     HStack(spacing: 12) {
-      Image(systemName: kind.symbol).foregroundStyle(allowed ? Color.green : NikoTheme.accent)
+      Image(systemName: kind.symbol).foregroundStyle(state != .notGranted ? Color.green : NikoTheme.accent)
         .frame(width: 22).accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 2) {
         Text(kind.title)
@@ -211,10 +218,15 @@ public struct SettingsView: View {
           .fixedSize(horizontal: false, vertical: true)
       }
       Spacer(minLength: 8)
-      if allowed {
+      switch state {
+      case .granted:
         Label("已授权", systemImage: "checkmark.circle.fill")
           .font(.caption).foregroundStyle(Color.green).fixedSize()
-      } else {
+      case .grantedNeedsRelaunch:
+        Button("重新打开以生效") { AppRelauncher.relaunch() }
+          .buttonStyle(.borderedProminent)
+          .help("已在系统设置中授权；屏幕录制在重新打开 niko-shot 后生效")
+      case .notGranted:
         Button("授权…") { PermissionGuide.shared.present(kind) }
           .accessibilityLabel("授权\(kind.title)")
       }
@@ -222,8 +234,8 @@ public struct SettingsView: View {
   }
 
   private func refreshPermissions() {
-    screenCaptureAllowed = CGPreflightScreenCaptureAccess()
-    accessibilityAllowed = AXIsProcessTrusted()
+    screenCaptureState = PermissionKind.screenRecording.state
+    accessibilityState = PermissionKind.accessibility.state
   }
 
   private var hotkeyContent: some View {

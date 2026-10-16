@@ -121,6 +121,7 @@ final class ToolbarController {
         let old = panel
         panel = nil; stack = nil; placement = nil; selectedTool = nil; propertyTool = nil
         textResultView = nil; canUndo = false; canRedo = false
+        HUDTooltip.shared.hide()
         old?.orderOut(nil); old?.onCancel = nil; old?.contentView = nil; old?.close()
     }
 
@@ -537,6 +538,17 @@ class ToolbarButton: NSButton {
     private var hovering = false
     private var pressed = false
     private var tracking: NSTrackingArea?
+    private var hint: String?
+
+    /// Kept on the button and shown by `HUDTooltip`: a system tool tip would open below the
+    /// screen-saver-level capture overlay and stay hidden.
+    override var toolTip: String? {
+        get { hint }
+        set {
+            hint = newValue
+            if hovering, let newValue { HUDTooltip.shared.schedule(newValue, for: self) }
+        }
+    }
     private var symbolImage: NSImage?
     /// Scaled on press; AppKit owns the backing layer's geometry, so content lives in a sublayer.
     private let contentLayer = CALayer()
@@ -617,10 +629,22 @@ class ToolbarButton: NSButton {
         addTrackingArea(area); tracking = area
     }
 
-    override func mouseEntered(with event: NSEvent) { hovering = true; refresh(animated: true) }
-    override func mouseExited(with event: NSEvent) { hovering = false; refresh(animated: true) }
+    override func mouseEntered(with event: NSEvent) {
+        hovering = true; refresh(animated: true)
+        if let hint { HUDTooltip.shared.schedule(hint, for: self) }
+    }
+    override func mouseExited(with event: NSEvent) {
+        hovering = false; refresh(animated: true)
+        HUDTooltip.shared.hide(for: self)
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { HUDTooltip.shared.hide(for: self) }
+        super.viewWillMove(toWindow: newWindow)
+    }
 
     override func mouseDown(with event: NSEvent) {
+        HUDTooltip.shared.hide(for: self)
         guard isEnabled else { return }
         pressed = true; refresh(); scale(0.9)
         super.mouseDown(with: event)
