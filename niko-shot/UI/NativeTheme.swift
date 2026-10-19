@@ -1,27 +1,44 @@
 // Shares adaptive native surfaces, typography and interaction treatments across the application.
+// Design language: light = 纸间 Print Shop (warm paper, cinnabar accent),
+// dark = 墨 Ink (deep ink, turmeric accent); one accent per appearance.
 import AppKit
 import SwiftUI
 
-/// Warm, adaptive surfaces; text and separators retain native system contrast behavior.
+/// Adaptive brand surfaces; the palette follows the niko-shot paper-and-ink identity.
 @MainActor
 enum NikoTheme {
+  /// 纸本 #F3EDE2 / 深墨 #121417 — window canvas.
   static var canvas: Color {
-    Color(nsColor: .windowBackgroundColor)
+    adaptive(light: (0.952941, 0.929412, 0.886275), dark: (0.070588, 0.078431, 0.090196))
   }
+  /// 冲印纸 #FBF8F2 / 墨面 #1E2226 — cards and panels.
   static var surface: Color {
-    Color(nsColor: .controlBackgroundColor)
+    adaptive(light: (0.984314, 0.972549, 0.949020), dark: (0.117647, 0.133333, 0.149020))
   }
+  /// 纸白 #FFFDF7 / 墨台 #262B30 — raised controls resting on surface.
   static var raisedSurface: Color {
-    Color(nsColor: .controlColor)
+    adaptive(light: (1.000000, 0.992157, 0.968627), dark: (0.149020, 0.168627, 0.188235))
   }
+  /// 朱砂 #C8402F / 藤黄 #F2B33D — the single accent: primary actions, selection, readings.
   static var accent: Color {
-    adaptive(light: (0.620, 0.380, 0.105), dark: (0.955, 0.705, 0.365))
+    adaptive(light: (0.784314, 0.250980, 0.184314), dark: (0.949020, 0.701961, 0.239216))
   }
   static var onAccent: Color {
-    adaptive(light: (1.000, 1.000, 1.000), dark: (0.115, 0.100, 0.075))
+    adaptive(light: (0.992157, 0.968627, 0.941176), dark: (0.133333, 0.094118, 0.015686))
   }
   static var selection: Color { accent.opacity(0.12) }
-  static var separator: Color { Color(nsColor: .separatorColor) }
+  /// 暖纸发丝线 #E2D9C6 / 墨缝线 #2A2D32 — hairline separators.
+  static var separator: Color {
+    adaptive(light: (0.886275, 0.850980, 0.776471), dark: (0.164706, 0.176471, 0.196078))
+  }
+  /// 青瓷 #2F5D62 / 花青 #5FB3A1 — reserved for translated text and connection success.
+  static var translation: Color {
+    adaptive(light: (0.184314, 0.364706, 0.384314), dark: (0.372549, 0.701961, 0.631373))
+  }
+  /// 朱砂印 #C8402F / 朱砂 #CE3527 — seals and recording state only; dark value keeps 3:1 on ink surfaces.
+  static var seal: Color {
+    adaptive(light: (0.784314, 0.250980, 0.184314), dark: (0.807843, 0.207843, 0.152941))
+  }
   static let cornerRadius: CGFloat = 10
 
   private nonisolated static func adaptive(
@@ -32,6 +49,15 @@ enum NikoTheme {
       let value = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
       return NSColor(srgbRed: value.0, green: value.1, blue: value.2, alpha: 1)
     })
+  }
+}
+
+/// AppKit-side brand accent for overlay layers and custom drawing; resolves with current appearance.
+nonisolated enum NikoAccent {
+  static let nsColor = NSColor(name: nil) { appearance in
+    let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    return dark ? NSColor(srgbRed: 0.949020, green: 0.701961, blue: 0.239216, alpha: 1)
+      : NSColor(srgbRed: 0.784314, green: 0.250980, blue: 0.184314, alpha: 1)
   }
 }
 

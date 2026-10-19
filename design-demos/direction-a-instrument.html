@@ -1,0 +1,913 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>方向 A · 仪器 Instrument — niko-shot UI 探索</title>
+<style>
+/* ============================================================
+   DIRECTION A — INSTRUMENT 仪器
+   深色 HUD · 等宽读数 · 键盘优先 · 单一琥珀信号色
+   密度 7 / 变化 4 / 动效 4
+   ============================================================ */
+:root {
+  --page: #0a0b0e;
+  --page-line: #1d1e24;
+  --hud: rgba(21, 22, 27, .86);
+  --hud-solid: #17181d;
+  --hud-inset: #0e0f13;
+  --hud-raise: #22232a;
+  --line: rgba(255, 255, 255, .09);
+  --line-soft: rgba(255, 255, 255, .055);
+  --text: #f0eee8;
+  --muted: #8f8e89;
+  --faint: #5b5a56;
+  --amber: #f2b23e;
+  --amber-dim: rgba(242, 178, 62, .13);
+  --on-amber: #211503;
+  --red: #e5533d;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", sans-serif;
+  --r-hud: 10px;
+  --r-ctl: 6px;
+  --ease: cubic-bezier(.2, .8, .2, 1);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--page); color: var(--text); font-family: var(--sans);
+  font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased;
+}
+::selection { background: var(--amber-dim); color: var(--amber); }
+.i { width: 16px; height: 16px; display: inline-block; flex: none; vertical-align: -3px; }
+.i use { pointer-events: none; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+kbd, .kbd {
+  font-family: var(--mono); font-size: 9.5px; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px;
+  background: rgba(255,255,255,.03); white-space: nowrap;
+}
+
+/* ---------- 页面骨架 ---------- */
+.pg-topbar {
+  position: sticky; top: 0; z-index: 40; display: flex; align-items: center; gap: 16px;
+  padding: 0 28px; height: 56px; border-bottom: 1px solid var(--page-line);
+  background: rgba(10, 11, 14, .88); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+}
+.pg-back { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); text-decoration: none; font-size: 12.5px; }
+.pg-back:hover { color: var(--text); }
+.pg-title { font-family: var(--mono); font-size: 12px; letter-spacing: .14em; color: var(--text); }
+.pg-title b { color: var(--amber); font-weight: 600; }
+.pg-chips { margin-left: auto; display: flex; gap: 8px; }
+.pg-chip {
+  font-family: var(--mono); font-size: 10px; color: var(--muted);
+  border: 1px solid var(--page-line); border-radius: 99px; padding: 3px 10px;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.pg-chip .dot { width: 8px; height: 8px; border-radius: 50%; }
+
+.pg-wrap { max-width: 1180px; margin: 0 auto; padding: 0 28px; }
+
+.pg-hero { padding: 72px 0 48px; border-bottom: 1px solid var(--page-line); }
+.pg-hero .no { font-family: var(--mono); font-size: 11px; letter-spacing: .22em; color: var(--amber); }
+.pg-hero h1 { font-size: clamp(38px, 5vw, 56px); font-weight: 700; letter-spacing: -.03em; line-height: 1.1; margin: 14px 0 16px; }
+.pg-hero h1 em { font-style: normal; color: var(--amber); }
+.pg-hero p { max-width: 620px; color: var(--muted); font-size: 14.5px; }
+.pg-principles { display: flex; flex-wrap: wrap; gap: 10px 28px; margin-top: 28px; }
+.pg-principles span { font-family: var(--mono); font-size: 11px; color: var(--muted); display: inline-flex; gap: 8px; align-items: center; }
+.pg-principles b { color: var(--amber); font-weight: 500; }
+
+.pg-section { padding: 64px 0 8px; }
+.pg-sec-head { display: flex; align-items: baseline; gap: 18px; margin-bottom: 8px; }
+.pg-sec-head .no { font-family: var(--mono); font-size: 11px; color: var(--amber); letter-spacing: .18em; }
+.pg-sec-head h2 { font-size: 22px; font-weight: 650; letter-spacing: -.02em; }
+.pg-sec-sub { color: var(--muted); font-size: 13px; margin-bottom: 28px; max-width: 640px; }
+
+.pg-scene { display: grid; grid-template-columns: minmax(0, 1fr) 292px; gap: 24px; align-items: start; }
+@media (max-width: 960px) { .pg-scene { grid-template-columns: 1fr; } }
+
+.pg-notes {
+  border: 1px solid var(--page-line); border-radius: var(--r-hud); padding: 18px;
+  background: #0e0f13;
+}
+.pg-notes h3 { font-family: var(--mono); font-size: 10.5px; letter-spacing: .18em; color: var(--amber); font-weight: 500; margin-bottom: 12px; }
+.pg-notes li { list-style: none; padding: 9px 0; border-top: 1px solid var(--line-soft); font-size: 12.5px; color: var(--muted); }
+.pg-notes li:first-of-type { border-top: 0; }
+.pg-notes li b { color: var(--text); font-weight: 600; display: block; margin-bottom: 2px; }
+
+.pg-footer { border-top: 1px solid var(--page-line); margin-top: 80px; padding: 28px; display: flex; justify-content: space-between; color: var(--faint); font-family: var(--mono); font-size: 11px; }
+.pg-footer a { color: var(--muted); }
+
+/* ============================================================
+   场景 1 — 截图标注舞台
+   ============================================================ */
+.stage {
+  position: relative; border-radius: 14px; overflow: hidden;
+  border: 1px solid var(--page-line); aspect-ratio: 16 / 9.4; background: #000;
+}
+.stage > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.stage .dim { position: absolute; inset: 0; background: rgba(5, 6, 9, .58); }
+
+/* 选区：琥珀取景框角标 + 细发丝线 */
+.sel {
+  position: absolute; left: 15%; top: 15%; width: 54%; height: 46%;
+  box-shadow: 0 0 0 1px rgba(242, 178, 62, .55);
+}
+.sel .corner { position: absolute; width: 14px; height: 14px; border: 2px solid var(--amber); }
+.sel .corner.tl { top: -2px; left: -2px; border-right: 0; border-bottom: 0; }
+.sel .corner.tr { top: -2px; right: -2px; border-left: 0; border-bottom: 0; }
+.sel .corner.bl { bottom: -2px; left: -2px; border-right: 0; border-top: 0; }
+.sel .corner.br { bottom: -2px; right: -2px; border-left: 0; border-top: 0; }
+.sel .hatch {
+  position: absolute; inset: 0; pointer-events: none; opacity: .35;
+  background:
+    repeating-linear-gradient(90deg, transparent 0 calc(33.333% - 1px), rgba(242,178,62,.28) calc(33.333% - 1px) 33.333%),
+    repeating-linear-gradient(0deg, transparent 0 calc(33.333% - 1px), rgba(242,178,62,.28) calc(33.333% - 1px) 33.333%);
+}
+.size-badge {
+  position: absolute; left: 15%; top: calc(15% + 46% + 10px);
+  font-family: var(--mono); font-size: 11px; color: var(--amber);
+  background: rgba(14, 15, 19, .92); border: 1px solid rgba(242, 178, 62, .35);
+  padding: 3px 8px; border-radius: 5px; font-variant-numeric: tabular-nums;
+}
+
+/* 放大镜：HUD 读数 */
+.loupe {
+  position: absolute; left: calc(15% + 54% + 16px); top: 15%;
+  width: 150px; background: var(--hud); border: 1px solid var(--line);
+  border-radius: 8px; overflow: hidden; backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+  box-shadow: 0 14px 40px -12px rgba(0, 0, 0, .7);
+}
+.loupe .grid {
+  height: 150px; position: relative;
+  background:
+    repeating-linear-gradient(90deg, rgba(255,255,255,.07) 0 1px, transparent 1px 10px),
+    repeating-linear-gradient(0deg, rgba(255,255,255,.07) 0 1px, transparent 1px 10px),
+    url(../website/assets/capture-sculpture.jpg) 46% 32% / 520% no-repeat;
+}
+.loupe .grid::after {
+  content: ""; position: absolute; left: 50%; top: 50%; width: 11px; height: 11px;
+  transform: translate(-50%, -50%); border: 1.5px solid var(--amber); background: rgba(242,178,62,.18);
+}
+.loupe .readout {
+  border-top: 1px solid var(--line); padding: 6px 9px; display: flex; align-items: center; gap: 7px;
+  font-family: var(--mono); font-size: 9.5px; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.loupe .readout .sw { width: 9px; height: 9px; border-radius: 2px; background: #c4692f; border: 1px solid rgba(255,255,255,.2); }
+
+/* HUD 工具栏本体 */
+.hud {
+  position: absolute; left: 50%; bottom: 5.5%; transform: translateX(-50%);
+  display: flex; flex-direction: column; border-radius: var(--r-hud);
+  background: var(--hud); border: 1px solid var(--line);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 18px 50px -14px rgba(0, 0, 0, .75);
+  backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px);
+  max-width: 94%;
+}
+.hud-tools { display: flex; align-items: center; gap: 1px; padding: 6px; }
+.tl {
+  position: relative; width: 31px; height: 31px; border-radius: var(--r-ctl);
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #cfcdc7; transition: background .14s var(--ease), color .14s var(--ease), transform .1s var(--ease);
+}
+.tl .i { width: 16px; height: 16px; }
+.tl:hover { background: rgba(255, 255, 255, .07); color: var(--text); }
+.tl:active { transform: scale(.94); }
+.tl .num {
+  position: absolute; top: 2px; right: 3px; font-family: var(--mono); font-size: 7.5px;
+  color: var(--faint); line-height: 1;
+}
+.tl.on { color: var(--amber); background: var(--amber-dim); }
+.tl.on .num { color: var(--amber); }
+.tl.on::after {
+  content: ""; position: absolute; left: 8px; right: 8px; bottom: 2px; height: 1.5px;
+  background: var(--amber); border-radius: 1px;
+}
+.tl:disabled { opacity: .3; pointer-events: none; }
+.hud-sep { width: 1px; height: 18px; background: var(--line); margin: 0 5px; flex: none; }
+.hud-spacer { flex: 1 1 auto; min-width: 10px; }
+.done-btn {
+  display: inline-flex; align-items: center; gap: 8px; height: 31px; padding: 0 13px;
+  margin-left: 7px; border-radius: 7px; background: var(--amber); color: var(--on-amber);
+  font-size: 13px; font-weight: 650; letter-spacing: .01em; white-space: nowrap;
+  transition: transform .1s var(--ease), filter .14s var(--ease);
+}
+.done-btn:hover { filter: brightness(1.07); }
+.done-btn:active { transform: scale(.96); }
+.done-btn .kbd { border-color: rgba(0,0,0,.28); color: rgba(33, 21, 3, .75); background: rgba(0,0,0,.08); font-size: 9px; padding: 1px 4px; }
+.esc-btn { color: var(--muted); }
+.esc-btn:hover { color: var(--text); }
+
+/* 样式行：与主栏同一容器，发丝线分隔（不再游离） */
+.hud-style {
+  display: flex; align-items: center; gap: 7px; padding: 7px 12px 8px;
+  border-top: 1px solid var(--line-soft);
+}
+.sw-dot { width: 14px; height: 14px; border-radius: 50%; position: relative; transition: transform .12s var(--ease); flex: none; }
+.sw-dot:hover { transform: scale(1.15); }
+.sw-dot.on { box-shadow: 0 0 0 2px var(--hud-solid), 0 0 0 3.5px var(--amber); }
+.style-label { font-family: var(--mono); font-size: 9px; color: var(--faint); letter-spacing: .12em; margin: 0 2px; }
+.stk { width: 26px; height: 24px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); }
+.stk:hover { background: rgba(255,255,255,.07); color: var(--text); }
+.stk.on { color: var(--amber); background: var(--amber-dim); }
+.stk i { display: block; background: currentColor; border-radius: 2px; }
+.fill-tg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.fill-tg button { width: 26px; height: 22px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); }
+.fill-tg button.on { background: var(--amber-dim); color: var(--amber); }
+.fill-tg .i { width: 13px; height: 13px; }
+
+/* ============================================================
+   场景 2 — OCR / 翻译卡片
+   ============================================================ */
+.ocr-duo { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 900px) { .ocr-duo { grid-template-columns: 1fr; } }
+.ocr {
+  border-radius: var(--r-hud); background: var(--hud); border: 1px solid var(--line);
+  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.05), 0 16px 44px -16px rgba(0,0,0,.7);
+}
+.ocr-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line-soft); }
+.ocr-head .i { color: var(--amber); width: 15px; height: 15px; }
+.ocr-head .t { font-size: 12.5px; font-weight: 600; }
+.ocr-head .count { font-family: var(--mono); font-size: 10px; color: var(--faint); margin-left: auto; font-variant-numeric: tabular-nums; }
+.ocr-head .x { color: var(--muted); width: 24px; height: 24px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; }
+.ocr-head .x:hover { background: rgba(255,255,255,.07); color: var(--text); }
+.ocr-seg { display: flex; gap: 4px; padding: 8px 14px 0; }
+.ocr-seg button {
+  font-size: 11px; padding: 4px 12px; border-radius: 6px; color: var(--muted);
+  border: 1px solid transparent; transition: all .14s var(--ease);
+}
+.ocr-seg button:hover { color: var(--text); }
+.ocr-seg button.on { color: var(--amber); background: var(--amber-dim); border-color: rgba(242,178,62,.3); }
+.ocr-seg .auto { margin-left: auto; font-family: var(--mono); font-size: 9px; color: var(--faint); align-self: center; }
+.ocr-body { padding: 12px 16px 14px; font-size: 13.5px; line-height: 1.85; min-height: 148px; }
+.ocr-body .ln { padding: 0 6px; margin: 0 -6px; border-radius: 4px; }
+.ocr-body .ln:hover { background: rgba(255,255,255,.045); }
+.ocr-body .ln.hl { background: var(--amber-dim); box-shadow: inset 2px 0 0 var(--amber); }
+.ocr-body .en { color: var(--muted); }
+.ocr-foot { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line-soft); }
+.btn-ghost {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px;
+  border-radius: 6px; border: 1px solid var(--line); color: var(--muted); font-size: 12px;
+  transition: all .14s var(--ease);
+}
+.btn-ghost:hover { color: var(--text); border-color: rgba(255,255,255,.2); background: rgba(255,255,255,.04); }
+.btn-ghost .i { width: 13px; height: 13px; }
+.btn-amber {
+  display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 12px;
+  border-radius: 6px; background: var(--amber); color: var(--on-amber);
+  font-size: 12px; font-weight: 650;
+}
+.btn-amber .kbd { border-color: rgba(0,0,0,.28); color: rgba(33,21,3,.75); background: rgba(0,0,0,.08); }
+.btn-amber:hover { filter: brightness(1.07); }
+.ocr-foot .sp { flex: 1; }
+
+/* ============================================================
+   场景 3 — 完成动作 toast + 菜单栏面板
+   ============================================================ */
+.duo { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+@media (max-width: 900px) { .duo { grid-template-columns: 1fr; } }
+.duo .cap { font-family: var(--mono); font-size: 10px; letter-spacing: .16em; color: var(--faint); margin-bottom: 10px; }
+
+.toast {
+  border-radius: var(--r-hud); background: var(--hud); border: 1px solid var(--line);
+  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); padding: 10px;
+  display: flex; gap: 11px; align-items: center;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.05), 0 16px 44px -14px rgba(0,0,0,.75);
+}
+.toast img { width: 58px; height: 58px; border-radius: 6px; object-fit: cover; border: 1px solid var(--line); }
+.toast .meta { min-width: 0; flex: 1; }
+.toast .meta .t { font-size: 12.5px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.toast .meta .t .i { width: 13px; height: 13px; color: var(--amber); }
+.toast .meta .s { font-family: var(--mono); font-size: 9.5px; color: var(--faint); margin-top: 3px; font-variant-numeric: tabular-nums; }
+.toast .acts { display: flex; gap: 2px; margin-top: 7px; }
+.toast .acts button { font-size: 11px; color: var(--muted); padding: 3px 8px; border-radius: 5px; }
+.toast .acts button:hover { color: var(--amber); background: var(--amber-dim); }
+.toast .x { align-self: flex-start; color: var(--faint); width: 22px; height: 22px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; }
+.toast .x:hover { color: var(--text); background: rgba(255,255,255,.07); }
+
+.menu-panel {
+  width: 268px; border-radius: var(--r-hud); background: var(--hud); border: 1px solid var(--line);
+  backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px); padding: 5px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 18px 50px -14px rgba(0,0,0,.8);
+}
+.mp-row {
+  width: 100%; display: flex; align-items: center; gap: 9px; padding: 6px 9px;
+  border-radius: 6px; font-size: 12.5px; color: #d9d7d2; text-align: left;
+}
+.mp-row:hover { background: rgba(255,255,255,.06); color: var(--text); }
+.mp-row .i { width: 14px; height: 14px; color: var(--muted); }
+.mp-row:hover .i { color: var(--amber); }
+.mp-row kbd { margin-left: auto; }
+.mp-sep { height: 1px; background: var(--line-soft); margin: 5px 8px; }
+.mp-recent { display: flex; gap: 6px; padding: 6px 9px; }
+.mp-recent img { width: 74px; height: 46px; object-fit: cover; border-radius: 5px; border: 1px solid var(--line); opacity: .85; }
+.mp-recent img:hover { opacity: 1; border-color: rgba(242,178,62,.5); }
+
+/* ============================================================
+   场景 4 — 历史窗口
+   ============================================================ */
+.win {
+  border-radius: 12px; overflow: hidden; background: #131419;
+  border: 1px solid var(--page-line); box-shadow: 0 30px 80px -30px rgba(0,0,0,.9);
+}
+.win-bar {
+  display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+  background: var(--hud-solid); border-bottom: 1px solid var(--line-soft);
+}
+.lights { display: flex; gap: 7px; }
+.lights i { width: 11px; height: 11px; border-radius: 50%; background: #34353c; display: block; }
+.win-bar .t { font-size: 12.5px; font-weight: 600; }
+.win-search {
+  margin-left: auto; display: flex; align-items: center; gap: 7px; width: 220px; height: 27px;
+  padding: 0 9px; border-radius: 6px; background: var(--hud-inset); border: 1px solid var(--line-soft);
+  color: var(--faint); font-family: var(--mono); font-size: 10.5px;
+}
+.win-search .i { width: 12px; height: 12px; }
+.win-search kbd { margin-left: auto; }
+.hist-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 14px; }
+.hcard {
+  position: relative; aspect-ratio: 4 / 3; border-radius: 8px; overflow: hidden;
+  border: 1px solid var(--line-soft); cursor: pointer;
+}
+.hcard > img, .hcard > .code { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.hcard .veil {
+  position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: flex-end;
+  padding: 9px; background: linear-gradient(to top, rgba(5,6,9,.92) 0%, rgba(5,6,9,.25) 55%, transparent);
+  opacity: 0; transition: opacity .16s var(--ease);
+}
+.hcard:hover .veil, .hcard.demo .veil { opacity: 1; }
+.hcard.demo { border-color: rgba(242,178,62,.5); }
+.hcard .veil .m { font-family: var(--mono); font-size: 9px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.hcard .veil .m b { color: var(--amber); font-weight: 500; }
+.hcard .veil .a { display: flex; gap: 4px; margin-top: 6px; }
+.hcard .veil .a button {
+  font-size: 10.5px; color: var(--text); background: rgba(255,255,255,.1);
+  border: 1px solid var(--line); padding: 3px 9px; border-radius: 5px;
+}
+.hcard .veil .a button:hover { background: var(--amber); color: var(--on-amber); border-color: transparent; }
+.code {
+  background: #0d0f13; padding: 12px; font-family: var(--mono); font-size: 9.5px; line-height: 1.8;
+  color: #7d8494; white-space: pre; overflow: hidden;
+}
+.code .k { color: #c98a3d; } .code .s { color: #8aa874; } .code .c { color: #4a4d55; }
+.win-foot {
+  display: flex; align-items: center; gap: 14px; padding: 9px 16px;
+  border-top: 1px solid var(--line-soft); background: var(--hud-solid);
+  font-family: var(--mono); font-size: 10px; color: var(--faint);
+}
+.win-foot .r { margin-left: auto; display: flex; gap: 12px; }
+
+/* ============================================================
+   场景 5 — 设置窗口
+   ============================================================ */
+.settings { display: grid; grid-template-columns: 196px minmax(0, 1fr); }
+.st-side { border-right: 1px solid var(--line-soft); background: var(--hud-inset); padding: 12px 8px; }
+.st-side .brand { display: flex; align-items: center; gap: 8px; padding: 2px 9px 14px; font-weight: 700; font-size: 13px; letter-spacing: -.01em; }
+.st-side .brand .mark { width: 18px; height: 18px; }
+.st-nav { display: flex; flex-direction: column; gap: 1px; }
+.st-nav button {
+  display: flex; align-items: center; gap: 9px; padding: 5.5px 9px; border-radius: 6px;
+  font-size: 12px; color: var(--muted); text-align: left; transition: all .13s var(--ease);
+}
+.st-nav button .idx { font-family: var(--mono); font-size: 9px; color: var(--faint); width: 14px; }
+.st-nav button:hover { color: var(--text); background: rgba(255,255,255,.04); }
+.st-nav button.on { color: var(--text); background: rgba(255,255,255,.07); }
+.st-nav button.on .idx { color: var(--amber); }
+.st-nav .grp { font-family: var(--mono); font-size: 8.5px; letter-spacing: .2em; color: var(--faint); padding: 12px 9px 4px; }
+.st-body { padding: 20px 22px 22px; background: #15161b; }
+.st-page-t { font-size: 17px; font-weight: 650; letter-spacing: -.01em; }
+.st-page-s { font-size: 11.5px; color: var(--faint); margin: 3px 0 18px; }
+.st-row { display: flex; align-items: center; gap: 14px; padding: 8px 0; border-top: 1px solid var(--line-soft); }
+.st-row .lb { width: 128px; flex: none; font-size: 12.5px; color: #cfcdc7; }
+.st-row .lb small { display: block; font-size: 10px; color: var(--faint); margin-top: 1px; }
+.st-row .ct { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.seg { display: inline-flex; background: var(--hud-inset); border: 1px solid var(--line-soft); border-radius: 7px; padding: 2px; gap: 1px; }
+.seg button { font-size: 11px; color: var(--muted); padding: 3.5px 11px; border-radius: 5px; }
+.seg button.on { background: var(--hud-raise); color: var(--amber); box-shadow: inset 0 0 0 1px rgba(242,178,62,.35); }
+.field {
+  flex: 1; height: 28px; border-radius: 6px; background: var(--hud-inset);
+  border: 1px solid var(--line-soft); color: var(--faint); font-family: var(--mono);
+  font-size: 11px; display: flex; align-items: center; padding: 0 10px;
+}
+.field:focus-within, .field.focus { border-color: rgba(242,178,62,.55); color: var(--text); }
+.ic-btn { width: 26px; height: 26px; border-radius: 5px; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; }
+.ic-btn:hover { background: rgba(255,255,255,.07); color: var(--text); }
+.ic-btn .i { width: 13px; height: 13px; }
+.st-note { display: flex; gap: 8px; align-items: flex-start; padding: 10px 0 2px 142px; font-size: 10.5px; color: var(--faint); }
+.st-note .i { width: 12px; height: 12px; color: var(--amber); margin-top: 1px; }
+.st-actions { display: flex; gap: 8px; padding: 14px 0 0 142px; }
+.toggle { width: 36px; height: 21px; border-radius: 99px; background: var(--amber); position: relative; flex: none; }
+.toggle::after { content: ""; position: absolute; top: 2px; right: 2px; width: 17px; height: 17px; border-radius: 50%; background: #fff; }
+.toggle.off { background: #33343b; }
+.toggle.off::after { right: auto; left: 2px; }
+
+/* ============================================================
+   场景 6 — 规格
+   ============================================================ */
+.spec-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+@media (max-width: 900px) { .spec-grid { grid-template-columns: 1fr; } }
+.spec { border: 1px solid var(--page-line); border-radius: var(--r-hud); padding: 18px; background: #0e0f13; }
+.spec h3 { font-family: var(--mono); font-size: 10.5px; letter-spacing: .18em; color: var(--amber); font-weight: 500; margin-bottom: 14px; }
+.spec li { list-style: none; display: flex; justify-content: space-between; gap: 10px; padding: 6.5px 0; border-top: 1px solid var(--line-soft); font-size: 12px; color: var(--muted); }
+.spec li:first-of-type { border-top: 0; }
+.spec li span:last-child { font-family: var(--mono); font-size: 10px; color: var(--faint); text-align: right; }
+</style>
+</head>
+<body>
+
+<!-- 图标（Tabler 风格，stroke 1.7，与官网 icons.svg 同源） -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<defs>
+<symbol id="i-rect" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="6" width="16" height="12" rx="1.5"/></symbol>
+<symbol id="i-circle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/></symbol>
+<symbol id="i-line" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19L19 5"/></symbol>
+<symbol id="i-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 7l-10 10"/><path d="M15 7h-7v7" transform="translate(0,0) scale(1)"/><path d="M8 7h9v9"/></symbol>
+<symbol id="i-pen" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L18.5 9.5a2.83 2.83 0 1 0-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></symbol>
+<symbol id="i-marker" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 15L15 5l4 4-10 10H5v-4z"/><path d="M13 7l4 4"/><path d="M4 21h7"/></symbol>
+<symbol id="i-mosaic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/></symbol>
+<symbol id="i-text" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7V5h14v2"/><path d="M12 5v14"/><path d="M9 19h6"/></symbol>
+<symbol id="i-number" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M10.5 9.5L12 8.5V16"/></symbol>
+<symbol id="i-zoom" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L20 20"/><path d="M8 10.5h5"/><path d="M10.5 8v5"/></symbol>
+<symbol id="i-undo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 13.5L4.5 9.5l4-4"/><path d="M4.5 9.5h9a6 6 0 0 1 0 12h-2"/></symbol>
+<symbol id="i-redo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 13.5l4-4-4-4"/><path d="M19.5 9.5h-9a6 6 0 0 0 0 12h2"/></symbol>
+<symbol id="i-scan" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V6a2 2 0 0 1 2-2h2"/><path d="M16 4h2a2 2 0 0 1 2 2v2"/><path d="M20 16v2a2 2 0 0 1-2 2h-2"/><path d="M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></symbol>
+<symbol id="i-lang" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h8"/><path d="M8 4v2c0 4-2.4 6.8-5 8"/><path d="M6 9.5c1 2.4 3 4.4 5.5 5.5"/><path d="M12.5 20l3.7-9 3.8 9"/><path d="M14 17h4.4"/></symbol>
+<symbol id="i-pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4.5L19.5 9.5"/><path d="M15 4l-3.5 3.5L6 9l-1.2 1.2L11 16.5 12.3 15.3l1.5-5.5L17.5 6"/><path d="M9.5 14.5L4 20"/></symbol>
+<symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/><path d="M7 11l5 5 5-5"/><path d="M12 4v12"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+<symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 5.5v-1a2 2 0 0 0-2-2h-9a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h1" transform="translate(1,1)"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L20 20"/></symbol>
+<symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v4.2l3 1.8"/></symbol>
+<symbol id="i-slider" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h9"/><circle cx="16.5" cy="7" r="2.2"/><path d="M19.5 7H20"/><path d="M4 17h3.5"/><circle cx="10.5" cy="17" r="2.2"/><path d="M13.5 17H20"/></symbol>
+<symbol id="i-camera" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h1a2 2 0 0 0 2-2 1 1 0 0 1 1-1h6a1 1 0 0 1 1 1 2 2 0 0 0 2 2h1a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2"/><circle cx="12" cy="13" r="3"/></symbol>
+<symbol id="i-film" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M8 5v14M16 5v14M3.5 10H8M3.5 14H8M16 10h4.5M16 14h4.5"/></symbol>
+<symbol id="i-crop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5v10a1 1 0 0 0 1 1h10"/><path d="M5 8h10a1 1 0 0 1 1 1v10"/></symbol>
+<symbol id="i-keyboard" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h.01M17 14h.01M10 14h4"/></symbol>
+<symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8.2-7 10-4-1.8-7-5.5-7-10V6l7-3z"/><path d="M9.5 12l2 2 3.5-3.5"/></symbol>
+<symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 11v5"/><path d="M12 8h.01"/></symbol>
+<symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14"/><path d="M10 7V5h4v2"/><path d="M7 7l.8 12.2a1 1 0 0 0 1 .8h6.4a1 1 0 0 0 1-.8L17 7"/><path d="M10.2 11v5M13.8 11v5"/></symbol>
+<symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></symbol>
+<symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l8.5 4.7L12 12.9 3.5 8.2 12 3.5z"/><path d="M4 12.5l8 4.4 8-4.4"/></symbol>
+<symbol id="i-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L18.5 9.5a2.83 2.83 0 1 0-4-4L4 16v4z"/></symbol>
+<symbol id="i-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v16M5 4l9 12M19 4v16M14 16l5-12" transform="translate(0,0)"/><path d="M5 20L19 4" opacity="0"/></symbol>
+</defs>
+</svg>
+
+<header class="pg-topbar">
+  <a class="pg-back" href="index.html"><svg class="i" style="width:13px;height:13px"><use href="#i-chevron"/></svg> 方向总览</a>
+  <span class="pg-title">DIRECTION <b>A</b> / INSTRUMENT</span>
+  <div class="pg-chips">
+    <span class="pg-chip"><i class="dot" style="background:#f2b23e"></i>#F2B23E</span>
+    <span class="pg-chip"><i class="dot" style="background:#17181d"></i>HUD 暗色</span>
+    <span class="pg-chip">等宽读数</span>
+    <span class="pg-chip">密度 7</span>
+  </div>
+</header>
+
+<main class="pg-wrap">
+
+  <section class="pg-hero">
+    <div class="no">NIKO-SHOT · UI DIRECTION A</div>
+    <h1>仪器 <em>Instrument</em></h1>
+    <p>把 niko-shot 当作一件精密测量工具：深色 HUD 浮层、等宽字体读数、取景框角标、键盘编号常驻。克制的单一琥珀信号色只在「选中态、读数、完成动作」三处出现，其余全部让位给内容。</p>
+    <div class="pg-principles">
+      <span><b>01</b> 读数即界面 — 尺寸、坐标、色值永远可见</span>
+      <span><b>02</b> 键盘优先 — 编号与快捷键不藏进 tooltip</span>
+      <span><b>03</b> 一个容器 — 工具与样式收进同一块 HUD</span>
+      <span><b>04</b> 品牌取色 — 琥珀来自 N 字取景框标识</span>
+    </div>
+  </section>
+
+  <!-- ============ 01 截图标注 ============ -->
+  <section class="pg-section" id="capture">
+    <div class="pg-sec-head"><span class="no">01 / CAPTURE</span><h2>截图与标注</h2></div>
+    <p class="pg-sec-sub">一块 HUD 装下全部：工具分组用发丝线隔开，样式行与主栏同容器；选区用取景框角标呼应品牌标识；放大镜给 15 × 15 网格与 sRGB 读数。</p>
+    <div class="pg-scene">
+      <div class="stage">
+        <img src="../website/assets/capture-sculpture.jpg" alt="示例桌面内容">
+        <div class="dim"></div>
+        <div class="sel">
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+          <i class="hatch"></i>
+        </div>
+        <div class="size-badge">1,280 × 720</div>
+        <div class="loupe">
+          <div class="grid"></div>
+          <div class="readout"><i class="sw"></i>912, 468 · #C4692F</div>
+        </div>
+        <div class="hud" id="toolbar">
+          <div class="hud-tools">
+            <button class="tl on" data-tool="矩形"><svg class="i"><use href="#i-rect"/></svg><span class="num">1</span></button>
+            <button class="tl" data-tool="椭圆"><svg class="i"><use href="#i-circle"/></svg><span class="num">2</span></button>
+            <button class="tl" data-tool="线段"><svg class="i"><use href="#i-line"/></svg><span class="num">3</span></button>
+            <button class="tl" data-tool="箭头"><svg class="i"><use href="#i-arrow"/></svg><span class="num">4</span></button>
+            <button class="tl" data-tool="涂鸦"><svg class="i"><use href="#i-pen"/></svg><span class="num">5</span></button>
+            <span class="hud-sep"></span>
+            <button class="tl" data-tool="高亮"><svg class="i"><use href="#i-marker"/></svg><span class="num">6</span></button>
+            <button class="tl" data-tool="马赛克"><svg class="i"><use href="#i-mosaic"/></svg><span class="num">7</span></button>
+            <button class="tl" data-tool="文字"><svg class="i"><use href="#i-text"/></svg><span class="num">8</span></button>
+            <button class="tl" data-tool="序号"><svg class="i"><use href="#i-number"/></svg><span class="num">9</span></button>
+            <button class="tl" data-tool="放大镜"><svg class="i"><use href="#i-zoom"/></svg></button>
+            <span class="hud-sep"></span>
+            <button class="tl" data-tool="撤销"><svg class="i"><use href="#i-undo"/></svg></button>
+            <button class="tl" data-tool="重做" disabled><svg class="i"><use href="#i-redo"/></svg></button>
+            <span class="hud-sep"></span>
+            <button class="tl" data-tool="识别文字"><svg class="i"><use href="#i-scan"/></svg></button>
+            <button class="tl" data-tool="翻译"><svg class="i"><use href="#i-lang"/></svg></button>
+            <button class="tl" data-tool="长截图"><svg class="i"><use href="#i-download" style="transform:rotate(0)"/></svg></button>
+            <span class="hud-sep"></span>
+            <button class="tl" data-tool="贴图"><svg class="i"><use href="#i-pin"/></svg></button>
+            <button class="tl" data-tool="保存"><svg class="i"><use href="#i-download"/></svg></button>
+            <button class="tl esc-btn" data-tool="取消"><svg class="i"><use href="#i-x"/></svg></button>
+            <span class="hud-spacer"></span>
+            <button class="done-btn">完成 <span class="kbd">↵</span></button>
+          </div>
+          <div class="hud-style">
+            <span class="style-label">COLOR</span>
+            <button class="sw-dot on" style="background:#e5533d"></button>
+            <button class="sw-dot" style="background:#e8890f"></button>
+            <button class="sw-dot" style="background:#e5c92e"></button>
+            <button class="sw-dot" style="background:#4caf50"></button>
+            <button class="sw-dot" style="background:#3b8ee8"></button>
+            <button class="sw-dot" style="background:#9b5de5"></button>
+            <button class="sw-dot" style="background:#f2f0ea"></button>
+            <button class="sw-dot" style="background:#15161a"></button>
+            <span class="hud-sep"></span>
+            <span class="style-label">WIDTH</span>
+            <button class="stk"><i style="width:12px;height:1.5px"></i></button>
+            <button class="stk on"><i style="width:12px;height:3px"></i></button>
+            <button class="stk"><i style="width:12px;height:5px"></i></button>
+            <span class="hud-sep"></span>
+            <span class="style-label">FILL</span>
+            <span class="fill-tg">
+              <button class="on" title="描边"><svg class="i"><use href="#i-rect"/></svg></button>
+              <button title="填充"><svg class="i" style="fill:currentColor;stroke:none"><use href="#i-rect"/></svg></button>
+            </span>
+          </div>
+        </div>
+      </div>
+      <aside class="pg-notes">
+        <h3>改了什么 / 为什么</h3>
+        <ul>
+          <li><b>样式行并入同一 HUD</b>现在样式条是游离的第二浮层，和工具没有视觉归属；并入后「选中工具 → 调样式」的动线在一臂之内。</li>
+          <li><b>编号 1–9 常驻</b>快捷键不再只藏在悬停提示里，强化肌肉记忆；选中态 = 琥珀图标 + 底部刻度线。</li>
+          <li><b>选区改为取景框角标</b>呼应 N 字取景框标识，四角定位比满圈描边更适合对齐像素。</li>
+          <li><b>完成 = 唯一的实色按钮</b>琥珀只给主动作，取消退为幽灵图标，杜绝现在「蓝完成键 vs 灰图标」的双焦点。</li>
+          <li><b>读数全部等宽 tabular</b>尺寸、坐标、色值跳动时不抖动，工具感来自细节。</li>
+        </ul>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ============ 02 OCR / 翻译 ============ -->
+  <section class="pg-section" id="ocr">
+    <div class="pg-sec-head"><span class="no">02 / TEXT & TRANSLATE</span><h2>识别文字与翻译</h2></div>
+    <p class="pg-sec-sub">卡片沿用同一块 HUD 材质。原文 / 译文用分段切换（现在是上下堆叠一长片），行级悬停高亮暗示「逐段勾选」能力。</p>
+    <div class="pg-scene">
+      <div class="ocr-duo">
+        <div class="ocr">
+          <div class="ocr-head">
+            <svg class="i"><use href="#i-scan"/></svg><span class="t">识别文字</span>
+            <span class="count">104 字</span>
+            <button class="x"><svg class="i" style="width:12px;height:12px"><use href="#i-x"/></svg></button>
+          </div>
+          <div class="ocr-body">
+            <div class="ln en">Project notes</div>
+            <div class="ln en">A small note for the way you work.</div>
+            <div class="ln en hl">Less effort. More clarity.</div>
+            <div class="ln">把想法留在眼前，让工作更从容。</div>
+            <div class="ln">每日を、少しシンプルに。</div>
+          </div>
+          <div class="ocr-foot">
+            <button class="btn-ghost"><svg class="i"><use href="#i-lang"/></svg>配置翻译</button>
+            <span class="sp"></span>
+            <button class="btn-ghost">展开工作区</button>
+            <button class="btn-amber">复制原文 <span class="kbd">⌘C</span></button>
+          </div>
+        </div>
+        <div class="ocr">
+          <div class="ocr-head">
+            <svg class="i"><use href="#i-scan"/></svg><span class="t">识别文字</span>
+            <span class="count">104 字 · 百度</span>
+            <button class="x"><svg class="i" style="width:12px;height:12px"><use href="#i-x"/></svg></button>
+          </div>
+          <div class="ocr-seg">
+            <button class="seg-src">原文</button>
+            <button class="on">译文</button>
+            <span class="auto">AUTO → 简体中文</span>
+          </div>
+          <div class="ocr-body">
+            <div class="ln">项目笔记</div>
+            <div class="ln">一张关于你工作方式的小便签。</div>
+            <div class="ln hl">更少的费力，更多的清晰。</div>
+            <div class="ln">把想法留在眼前，让工作更从容。</div>
+            <div class="ln">让每一天，都更简单一点。</div>
+          </div>
+          <div class="ocr-foot">
+            <button class="btn-ghost"><svg class="i"><use href="#i-copy"/></svg>复制原文</button>
+            <span class="sp"></span>
+            <button class="btn-ghost">展开工作区</button>
+            <button class="btn-amber">复制译文 <span class="kbd">⌘C</span></button>
+          </div>
+        </div>
+      </div>
+      <aside class="pg-notes">
+        <h3>改了什么 / 为什么</h3>
+        <ul>
+          <li><b>原文 / 译文分段切换</b>现在卡片只显示一种文本且标题层级弱；分段控件把两种状态收进同一高度，翻译来源与方向用等宽大写标注。</li>
+          <li><b>行级高亮</b>悬停整行微亮、示例行左侧琥珀刻度，预告「逐段勾选复制」的工作区能力。</li>
+          <li><b>主按钮只有一个</b>「复制译文 / 复制原文」按当前分段决定主按钮，不再两个灰按钮并列猜主次。</li>
+          <li><b>字数与服务名同框</b>104 字 · 百度 —— 一眼确认走的是哪家服务，呼应「失败显示原服务错误」的策略。</li>
+        </ul>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ============ 03 完成动作 ============ -->
+  <section class="pg-section" id="done">
+    <div class="pg-sec-head"><span class="no">03 / AFTER CAPTURE</span><h2>完成之后</h2></div>
+    <p class="pg-sec-sub">右下角缩略图与菜单栏面板遵循同一套 HUD 语法：动作外露、快捷键右对齐、最近项给缩略图而不是文件名。</p>
+    <div class="duo">
+      <div>
+        <div class="cap">缩略图 TOAST · 悬停展开动作</div>
+        <div class="toast">
+          <img src="../website/assets/capture-sculpture-800.jpg" alt="截图缩略图">
+          <div class="meta">
+            <div class="t"><svg class="i"><use href="#i-check"/></svg>已复制到剪贴板</div>
+            <div class="s">1,280 × 720 · PNG · 214 KB</div>
+            <div class="acts">
+              <button>继续编辑</button><button>贴到屏幕</button><button>另存为…</button>
+            </div>
+          </div>
+          <button class="x"><svg class="i" style="width:11px;height:11px"><use href="#i-x"/></svg></button>
+        </div>
+      </div>
+      <div>
+        <div class="cap">菜单栏面板 · 快捷键常驻</div>
+        <div class="menu-panel">
+          <button class="mp-row"><svg class="i"><use href="#i-crop"/></svg>框选截图<kbd>⇧⌘A</kbd></button>
+          <button class="mp-row"><svg class="i"><use href="#i-layers"/></svg>窗口截图<kbd>⇧⌘W</kbd></button>
+          <button class="mp-row"><svg class="i"><use href="#i-download"/></svg>长截图<kbd>⇧⌘S</kbd></button>
+          <button class="mp-row"><svg class="i"><use href="#i-scan"/></svg>识别文字<kbd>⇧⌘O</kbd></button>
+          <button class="mp-row"><svg class="i"><use href="#i-film"/></svg>开始录屏<kbd>⇧⌘R</kbd></button>
+          <div class="mp-sep"></div>
+          <div class="mp-recent">
+            <img src="../website/assets/capture-sculpture-800.jpg" alt="">
+            <img src="../website/assets/capture-sculpture-800.jpg" style="object-position:30% 60%" alt="">
+            <img src="../website/assets/capture-sculpture-800.jpg" style="object-position:70% 20%" alt="">
+          </div>
+          <div class="mp-sep"></div>
+          <button class="mp-row"><svg class="i"><use href="#i-clock"/></svg>截图历史<kbd>⇧⌘H</kbd></button>
+          <button class="mp-row"><svg class="i"><use href="#i-slider"/></svg>设置…<kbd>⌘,</kbd></button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 04 历史 ============ -->
+  <section class="pg-section" id="history">
+    <div class="pg-sec-head"><span class="no">04 / HISTORY</span><h2>截图历史</h2></div>
+    <p class="pg-sec-sub">网格 + 悬停遮罩动作；OCR 命中直接标在卡片上 —— 「搜索文字」是 niko-shot 历史的差异化能力，应该在视觉上被看见。</p>
+    <div class="pg-scene">
+      <div class="win">
+        <div class="win-bar">
+          <span class="lights"><i></i><i></i><i></i></span>
+          <span class="t">截图历史</span>
+          <span class="win-search"><svg class="i"><use href="#i-search"/></svg>搜索识别文字…<kbd>⌘F</kbd></span>
+        </div>
+        <div class="hist-grid">
+          <div class="hcard demo">
+            <img src="../website/assets/capture-sculpture-800.jpg" style="object-position:50% 30%" alt="">
+            <div class="veil">
+              <div class="m">今天 14:32 · 1280×720 · 命中 <b>“clarity”</b></div>
+              <div class="a"><button>再编辑</button><button>复制</button><button>拖出</button></div>
+            </div>
+          </div>
+          <div class="hcard">
+            <div class="code"><span class="c">// capture.swift</span>
+<span class="k">func</span> grab(rect: Rect) {
+  <span class="k">let</span> shot = engine
+    .freeze(rect)
+    .archive(<span class="s">"png"</span>)
+}</div>
+            <div class="veil">
+              <div class="m">今天 11:08 · 860×540</div>
+              <div class="a"><button>再编辑</button><button>复制</button><button>拖出</button></div>
+            </div>
+          </div>
+          <div class="hcard">
+            <img src="../website/assets/capture-sculpture-800.jpg" style="object-position:20% 80%" alt="">
+            <div class="veil">
+              <div class="m">昨天 18:40 · 2560×1440</div>
+              <div class="a"><button>再编辑</button><button>复制</button><button>拖出</button></div>
+            </div>
+          </div>
+          <div class="hcard">
+            <img src="../website/assets/capture-sculpture-800.jpg" style="object-position:80% 10%" alt="">
+            <div class="veil">
+              <div class="m">昨天 09:15 · 1440×900</div>
+              <div class="a"><button>再编辑</button><button>复制</button><button>拖出</button></div>
+            </div>
+          </div>
+          <div class="hcard">
+            <div class="code"><span class="c">; long-scroll session</span>
+stitched: <span class="k">12</span> frames
+size: 1440 × <span class="k">6230</span>
+head/tail dedup: <span class="s">on</span></div>
+            <div class="veil">
+              <div class="m">周一 16:22 · 长截图 ×12</div>
+              <div class="a"><button>再编辑</button><button>复制</button><button>拖出</button></div>
+            </div>
+          </div>
+          <div class="hcard">
+            <img src="../website/assets/capture-sculpture-800.jpg" style="object-position:40% 55%" alt="">
+            <div class="veil">
+              <div class="m">周一 10:03 · 1280×800</div>
+              <div class="a"><button>再编辑</button><button>复制</button><button>拖出</button></div>
+            </div>
+          </div>
+        </div>
+        <div class="win-foot">
+          <span>6 项</span><span>本机存储 · 可 OCR 全文搜索</span>
+          <span class="r"><span>⇧⌘H 开关</span><span>拖出即导出</span></span>
+        </div>
+      </div>
+      <aside class="pg-notes">
+        <h3>改了什么 / 为什么</h3>
+        <ul>
+          <li><b>动作收进悬停遮罩</b>再编辑 / 复制 / 拖出只在需要时出现，网格保持安静；时间、尺寸、长截图帧数用等宽小字。</li>
+          <li><b>OCR 命中前置</b>搜索命中词直接显示在卡片上，回答「为什么我能搜到这张图」。</li>
+          <li><b>底栏状态条</b>数量、存储位置说明、快捷键提示集中一处，替代散落各处的空状态文案。</li>
+        </ul>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ============ 05 设置 ============ -->
+  <section class="pg-section" id="settings">
+    <div class="pg-sec-head"><span class="no">05 / SETTINGS</span><h2>设置</h2></div>
+    <p class="pg-sec-sub">以最复杂的「OCR 与翻译」页为例：左栏等宽编号导航，右侧行高压缩到 28px，凭证字段等宽字体 + 琥珀聚焦环。</p>
+    <div class="pg-scene">
+      <div class="win settings">
+        <div class="st-side">
+          <div class="brand"><svg class="mark" viewBox="0 0 24 24" fill="none" stroke="#f2b23e" stroke-width="2.2" stroke-linecap="round"><path d="M5 5v14M5 5l9 11M19 5v14"/></svg>niko-shot</div>
+          <div class="st-nav">
+            <div class="grp">应用</div>
+            <button><span class="idx">01</span>通用</button>
+            <button><span class="idx">02</span>热键</button>
+            <div class="grp">捕获与处理</div>
+            <button><span class="idx">03</span>截图</button>
+            <button><span class="idx">04</span>标注</button>
+            <button><span class="idx">05</span>输出</button>
+            <button class="on"><span class="idx">06</span>OCR 与翻译</button>
+            <button><span class="idx">07</span>录屏</button>
+            <div class="grp">数据</div>
+            <button><span class="idx">08</span>历史</button>
+            <button><span class="idx">09</span>关于</button>
+          </div>
+        </div>
+        <div class="st-body">
+          <div class="st-page-t">OCR 与翻译</div>
+          <div class="st-page-s">文字识别与翻译服务 · 凭据仅保存在系统钥匙串</div>
+          <div class="st-row" style="border-top:0">
+            <div class="lb">当前服务</div>
+            <div class="ct">
+              <span class="seg" id="provider-seg">
+                <button class="on">百度</button><button>Google</button><button>有道</button><button>DeepL</button><button>REST</button>
+              </span>
+              <button class="btn-ghost" style="margin-left:auto">申请与接入指南</button>
+            </div>
+          </div>
+          <div class="st-row">
+            <div class="lb">识别后自动翻译<small>关闭时使用「翻译」按钮</small></div>
+            <div class="ct"><span class="toggle" role="switch" aria-checked="true"></span></div>
+          </div>
+          <div class="st-row">
+            <div class="lb">APP ID</div>
+            <div class="ct">
+              <span class="field focus">输入 APP ID</span>
+              <button class="ic-btn"><svg class="i"><use href="#i-copy"/></svg></button>
+              <button class="ic-btn"><svg class="i"><use href="#i-trash"/></svg></button>
+            </div>
+          </div>
+          <div class="st-row">
+            <div class="lb">密钥</div>
+            <div class="ct">
+              <span class="field">••••••••••••••••</span>
+              <button class="ic-btn"><svg class="i"><use href="#i-copy"/></svg></button>
+              <button class="ic-btn"><svg class="i"><use href="#i-trash"/></svg></button>
+            </div>
+          </div>
+          <div class="st-note">
+            <svg class="i"><use href="#i-shield"/></svg>
+            <span>钥匙串保存 · •••• 表示已有值 · 留空保留，移除才删除</span>
+          </div>
+          <div class="st-actions">
+            <button class="btn-amber">保存凭据</button>
+            <button class="btn-ghost">测试连接</button>
+          </div>
+        </div>
+      </div>
+      <aside class="pg-notes">
+        <h3>改了什么 / 为什么</h3>
+        <ul>
+          <li><b>编号导航</b>01–09 与全局搜索/热键心智一致，扫读靠编号而不是图标猜测。</li>
+          <li><b>凭证字段等宽字体</b>APP ID / 密钥本质是代码，等宽减少抄错；聚焦时琥珀描边。</li>
+          <li><b>指南入口固定在行尾</b>「申请与接入指南」跟随服务分段出现，不再埋进二级页。</li>
+          <li><b>安全说明图标化</b>盾牌 + 一行小字替代现在三行灰色脚注。</li>
+        </ul>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ============ 06 规格 ============ -->
+  <section class="pg-section" id="spec">
+    <div class="pg-sec-head"><span class="no">06 / SPEC</span><h2>交互规格</h2></div>
+    <p class="pg-sec-sub">落地到 Swift 时照此执行；与现有行为（编号键 1–9、悬停提示、窄屏换行）完全兼容，只是把它们显性化。</p>
+    <div class="spec-grid">
+      <div class="spec">
+        <h3>键盘</h3>
+        <ul>
+          <li><span>工具 1–9 直选</span><span>1…9</span></li>
+          <li><span>完成并复制</span><span>↵ / ⌘C</span></li>
+          <li><span>撤销 · 重做</span><span>⌘Z · ⇧⌘Z</span></li>
+          <li><span>取消截图</span><span>esc</span></li>
+          <li><span>识别文字 / 翻译</span><span>O / T</span></li>
+        </ul>
+      </div>
+      <div class="spec">
+        <h3>动效</h3>
+        <ul>
+          <li><span>悬停淡入</span><span>140ms ease-out</span></li>
+          <li><span>按压缩放</span><span>scale .94 · 100ms</span></li>
+          <li><span>样式行展开</span><span>180ms · 高度动画</span></li>
+          <li><span>历史遮罩</span><span>160ms 渐显</span></li>
+          <li><span>reduce-motion</span><span>全部退化为即时</span></li>
+        </ul>
+      </div>
+      <div class="spec">
+        <h3>可达性</h3>
+        <ul>
+          <li><span>聚焦环</span><span>2px 琥珀 · offset 2</span></li>
+          <li><span>正文对比度</span><span>≥ AA 4.5:1</span></li>
+          <li><span>高对比模式</span><span>发丝线 0.5 → 1px</span></li>
+          <li><span>触控目标</span><span>≥ 26 × 26pt</span></li>
+          <li><span>VoiceOver</span><span>编号读作「工具 3」</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="pg-footer">
+  <span>NIKO-SHOT · DIRECTION A / INSTRUMENT</span>
+  <span><a href="direction-b-atelier.html">对比方向 B →</a> · <a href="index.html">返回总览</a></span>
+</footer>
+
+<script>
+// 工具切换：同一 HUD 内单选
+document.querySelectorAll('#toolbar .tl[data-tool]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (btn.disabled) return;
+    const group = [...btn.parentElement.querySelectorAll('.tl')].slice(0, 10);
+    group.forEach(b => b.classList.remove('on'));
+    btn.classList.add('on');
+  });
+});
+// OCR 分段
+document.querySelectorAll('.ocr-seg').forEach(seg => {
+  seg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+    seg.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+  }));
+});
+// 色板
+document.querySelectorAll('.sw-dot').forEach(d => d.addEventListener('click', () => {
+  d.parentElement.querySelectorAll('.sw-dot').forEach(x => x.classList.remove('on'));
+  d.classList.add('on');
+}));
+// 线宽 / 填充
+document.querySelectorAll('.stk').forEach(s => s.addEventListener('click', () => {
+  s.parentElement.querySelectorAll('.stk').forEach(x => x.classList.remove('on'));
+  s.classList.add('on');
+}));
+document.querySelectorAll('.fill-tg button').forEach(f => f.addEventListener('click', () => {
+  f.parentElement.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+  f.classList.add('on');
+}));
+// 设置：服务分段 / 开关 / 导航
+document.querySelectorAll('#provider-seg button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#provider-seg button').forEach(x => x.classList.remove('on'));
+  b.classList.add('on');
+}));
+document.querySelectorAll('.toggle').forEach(t => t.addEventListener('click', () => t.classList.toggle('off')));
+document.querySelectorAll('.st-nav button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('.st-nav button').forEach(x => x.classList.remove('on'));
+  b.classList.add('on');
+}));
+</script>
+</body>
+</html>

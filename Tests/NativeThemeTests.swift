@@ -9,18 +9,23 @@ final class NativeThemeTests: XCTestCase {
   func testEntirePaletteResolvesOffMainWithLightDarkAndIncreasedContrast() async {
     let swatches: [ThemeSwatch] = [
       ThemeSwatch(name: "canvas", color: NikoTheme.canvas,
-        light: nil, dark: nil, systemReference: .window),
+        light: [0.952941, 0.929412, 0.886275, 1], dark: [0.070588, 0.078431, 0.090196, 1]),
       ThemeSwatch(name: "surface", color: NikoTheme.surface,
-        light: nil, dark: nil, systemReference: .controlBackground),
+        light: [0.984314, 0.972549, 0.949020, 1], dark: [0.117647, 0.133333, 0.149020, 1]),
       ThemeSwatch(name: "raisedSurface", color: NikoTheme.raisedSurface,
-        light: nil, dark: nil, systemReference: .control),
+        light: [1.0, 0.992157, 0.968627, 1], dark: [0.149020, 0.168627, 0.188235, 1]),
       ThemeSwatch(name: "accent", color: NikoTheme.accent,
-        light: [0.620, 0.380, 0.105, 1], dark: [0.955, 0.705, 0.365, 1]),
+        light: [0.784314, 0.250980, 0.184314, 1], dark: [0.949020, 0.701961, 0.239216, 1]),
       ThemeSwatch(name: "onAccent", color: NikoTheme.onAccent,
-        light: [1, 1, 1, 1], dark: [0.115, 0.100, 0.075, 1]),
+        light: [0.992157, 0.968627, 0.941176, 1], dark: [0.133333, 0.094118, 0.015686, 1]),
       ThemeSwatch(name: "selection", color: NikoTheme.selection,
-        light: [0.620, 0.380, 0.105, 0.12], dark: [0.955, 0.705, 0.365, 0.12]),
-      ThemeSwatch(name: "separator", color: NikoTheme.separator, light: nil, dark: nil)
+        light: [0.784314, 0.250980, 0.184314, 0.12], dark: [0.949020, 0.701961, 0.239216, 0.12]),
+      ThemeSwatch(name: "separator", color: NikoTheme.separator,
+        light: [0.886275, 0.850980, 0.776471, 1], dark: [0.164706, 0.176471, 0.196078, 1]),
+      ThemeSwatch(name: "translation", color: NikoTheme.translation,
+        light: [0.184314, 0.364706, 0.384314, 1], dark: [0.372549, 0.701961, 0.631373, 1]),
+      ThemeSwatch(name: "seal", color: NikoTheme.seal,
+        light: [0.784314, 0.250980, 0.184314, 1], dark: [0.807843, 0.207843, 0.152941, 1])
     ]
     let samples = await Task.detached { @Sendable in Self.resolve(swatches) }.value
     XCTAssertEqual(samples.count, swatches.count * 6)
@@ -48,11 +53,11 @@ final class NativeThemeTests: XCTestCase {
       for swatch in swatches {
         // SwiftUI's public resolver invokes the underlying AppKit provider on this drawing thread.
         let value = swatch.color.resolve(in: environment)
-        let expected = swatch.systemReference.map { Color(nsColor: $0.color).resolve(in: environment) }
+        let expected = sampleExpected(swatch, dark: dark, opacity: value.opacity)
         results.append(ThemeResolution(name: swatch.name, dark: dark,
           increasedContrast: false, isBackgroundThread: isBackgroundThread,
           components: [Double(value.red), Double(value.green), Double(value.blue), Double(value.opacity)],
-          systemComponents: expected.map { [Double($0.red), Double($0.green), Double($0.blue), Double($0.opacity)] }))
+          systemComponents: expected))
       }
       for increased in [false, true] {
         let name: NSAppearance.Name = dark
@@ -62,11 +67,10 @@ final class NativeThemeTests: XCTestCase {
         appearance.performAsCurrentDrawingAppearance {
           for swatch in swatches {
             guard let value = NSColor(swatch.color).usingColorSpace(.sRGB) else { continue }
-            let expected = swatch.systemReference?.color.usingColorSpace(.sRGB)
             results.append(ThemeResolution(name: swatch.name, dark: dark,
               increasedContrast: increased, isBackgroundThread: isBackgroundThread,
               components: [value.redComponent, value.greenComponent, value.blueComponent, value.alphaComponent],
-              systemComponents: expected.map { [$0.redComponent, $0.greenComponent, $0.blueComponent, $0.alphaComponent] }))
+              systemComponents: nil))
           }
         }
       }
@@ -80,18 +84,12 @@ private struct ThemeSwatch: Sendable {
   let color: Color
   let light: [Double]?
   let dark: [Double]?
-  var systemReference: SystemThemeColor? = nil
 }
 
-private enum SystemThemeColor: Sendable {
-  case window, controlBackground, control
-  var color: NSColor {
-    switch self {
-    case .window: .windowBackgroundColor
-    case .controlBackground: .controlBackgroundColor
-    case .control: .controlColor
-    }
-  }
+private nonisolated func sampleExpected(_ swatch: ThemeSwatch, dark: Bool, opacity: Float) -> [Double]? {
+  guard var components = dark ? swatch.dark : swatch.light else { return nil }
+  if components.count == 4 { components[3] = Double(opacity) }
+  return components
 }
 
 private struct ThemeResolution: Sendable {

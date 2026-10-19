@@ -1,0 +1,519 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>方向总览 — niko-shot UI 探索 · 第二轮</title>
+<style>
+/* ============================================================
+   INDEX · 第二轮总览
+   C 墨 / D 构成 / E 纸间 —— 依据 huashu-art-motion 色板纪律
+   ============================================================ */
+:root {
+  --page: #101114;
+  --page-line: #1d1e24;
+  --card: #17181d;
+  --text: #f0eee8;
+  --muted: #9a9992;
+  --faint: #63625d;
+  --amber: #f2b33e;
+  --red: #d3262b;
+  --red-e: #c8402f;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", sans-serif;
+  --ease: cubic-bezier(.2, .8, .2, 1);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } html { scroll-behavior: auto; } }
+body { background: var(--page); color: var(--text); font-family: var(--sans); font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+::selection { background: rgba(242, 178, 62, .13); color: var(--amber); }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+a { color: inherit; }
+.i { width: 16px; height: 16px; display: inline-block; flex: none; vertical-align: -3px; }
+.i use { pointer-events: none; }
+
+.pg-topbar {
+  position: sticky; top: 0; z-index: 40; display: flex; align-items: center; gap: 16px;
+  padding: 0 28px; height: 56px; border-bottom: 1px solid var(--page-line);
+  background: rgba(16, 17, 20, .88); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+}
+.pg-title { font-family: var(--mono); font-size: 12px; letter-spacing: .14em; }
+.pg-title b { color: var(--amber); font-weight: 600; }
+.pg-chips { margin-left: auto; display: flex; gap: 8px; }
+.pg-chip {
+  font-family: var(--mono); font-size: 10px; color: var(--muted);
+  border: 1px solid var(--page-line); border-radius: 99px; padding: 3px 10px;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.pg-chip .dot { width: 8px; height: 8px; border-radius: 50%; }
+
+.pg-wrap { max-width: 1180px; margin: 0 auto; padding: 0 28px; }
+
+.pg-hero { padding: 76px 0 44px; border-bottom: 1px solid var(--page-line); }
+.pg-hero .no { font-family: var(--mono); font-size: 11px; letter-spacing: .22em; color: var(--amber); }
+.pg-hero h1 { font-size: clamp(36px, 5vw, 54px); font-weight: 700; letter-spacing: -.03em; line-height: 1.1; margin: 14px 0 16px; }
+.pg-hero p { max-width: 680px; color: var(--muted); font-size: 14.5px; }
+.pg-hero p + p { margin-top: 10px; }
+.pg-hero p b { color: var(--text); font-weight: 600; }
+.laws { display: flex; flex-wrap: wrap; gap: 10px 26px; margin-top: 26px; }
+.laws span { font-family: var(--mono); font-size: 11px; color: var(--muted); display: inline-flex; gap: 8px; align-items: center; }
+.laws b { color: var(--amber); font-weight: 500; }
+
+.dirs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; padding: 52px 0 8px; }
+@media (max-width: 1020px) { .dirs { grid-template-columns: 1fr; } }
+
+.dir { border-radius: 16px; overflow: hidden; display: flex; flex-direction: column; border: 1px solid var(--page-line); transition: transform .18s var(--ease), box-shadow .18s var(--ease); }
+.dir:hover { transform: translateY(-4px); }
+
+/* C 卡：深墨 */
+.dir-c { background: #121417; color: #f2efe8; box-shadow: 0 24px 48px -34px rgba(0,0,0,.95); }
+.dir-c:hover { box-shadow: 0 32px 60px -32px rgba(0,0,0,1); }
+.dir-c .d-head { padding: 22px 22px 0; }
+.dir-c .d-no { font-family: var(--mono); font-size: 10.5px; letter-spacing: .2em; color: #f2b33d; }
+.dir-c h2 { font-size: 27px; font-weight: 700; letter-spacing: -.02em; margin: 8px 0 4px; }
+.dir-c h2 em { font-style: normal; color: #f2b33d; font-family: var(--mono); font-size: 16px; letter-spacing: .1em; }
+.dir-c .d-sub { color: #a39e93; font-size: 13px; padding: 0 22px; }
+
+/* D 卡：构成 */
+.dir-d { background: #efe9dd; color: #161514; box-shadow: 0 24px 48px -34px rgba(0,0,0,.6); }
+.dir-d:hover { box-shadow: 0 32px 60px -30px rgba(0,0,0,.65); }
+.dir-d .d-head { padding: 22px 22px 0; }
+.dir-d .d-no { font-family: var(--mono); font-size: 10.5px; letter-spacing: .22em; color: #d3262b; font-weight: 700; }
+.dir-d h2 { font-size: 27px; font-weight: 900; letter-spacing: -.03em; margin: 8px 0 4px; text-transform: uppercase; }
+.dir-d h2 em { font-style: normal; color: transparent; -webkit-text-stroke: 1.5px #161514; font-size: 16px; letter-spacing: .06em; }
+.dir-d .d-sub { color: #55524c; font-size: 13px; padding: 0 22px; }
+
+/* E 卡：纸间 */
+.dir-e { background: #f3ede2; color: #1b1a17; box-shadow: 0 24px 48px -34px rgba(92, 66, 24, .5); }
+.dir-e:hover { box-shadow: 0 32px 60px -30px rgba(92, 66, 24, .55); }
+.dir-e .d-head { padding: 22px 22px 0; }
+.dir-e .d-no { font-family: var(--mono); font-size: 10.5px; letter-spacing: .24em; color: #c8402f; font-weight: 600; }
+.dir-e h2 { font-size: 27px; font-weight: 650; letter-spacing: -.02em; margin: 8px 0 4px; font-family: "New York", "Iowan Old Style", Georgia, "Songti SC", serif; }
+.dir-e h2 em { font-style: italic; color: #c8402f; font-size: 16px; font-family: inherit; }
+.dir-e .d-sub { color: #6b655b; font-size: 13px; padding: 0 22px; }
+
+/* 样机舞台 */
+.d-stage { margin: 18px 22px 0; border-radius: 10px; position: relative; overflow: hidden; height: 172px; }
+.stage-c {
+  background: #0e0f13; background-image:
+    linear-gradient(rgba(242,239,232,.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(242,239,232,.035) 1px, transparent 1px);
+  background-size: 26px 26px, 26px 26px, auto;
+}
+.stage-d { background: #f2ecdf; border: 3px solid #161514; border-radius: 6px; }
+.stage-e { background: #ece4d4; }
+
+/* C 样机 */
+.stage-c .vf { position: absolute; inset: 44px 60px; }
+.stage-c .vf i { position: absolute; width: 20px; height: 20px; }
+.stage-c .vf i::before, .stage-c .vf i::after { content: ""; position: absolute; background: #f2efe8; opacity: .92; border-radius: 3px; }
+.stage-c .vf i::before { width: 100%; height: 4.5px; }
+.stage-c .vf i::after { width: 4.5px; height: 100%; }
+.stage-c .vf i:nth-child(1) { top: 0; left: 0; }
+.stage-c .vf i:nth-child(1)::before { transform-origin: left; transform: rotate(-8deg); }
+.stage-c .vf i:nth-child(2) { top: 0; right: 0; }
+.stage-c .vf i:nth-child(2)::before { transform-origin: right; transform: rotate(8deg); }
+.stage-c .vf i:nth-child(3) { bottom: 0; left: 0; }
+.stage-c .vf i:nth-child(3)::before { transform-origin: left; transform: rotate(8deg); }
+.stage-c .vf i:nth-child(4) { bottom: 0; right: 0; }
+.stage-c .vf i:nth-child(4)::before { transform-origin: right; transform: rotate(-8deg); }
+.stage-c .rd { position: absolute; top: -30px; left: 0; font-family: var(--mono); font-size: 10.5px; color: #f2b33d; letter-spacing: .08em; }
+.stage-c .rd span { color: #6b665c; margin-left: 10px; }
+.stage-c .seal { position: absolute; right: -6px; bottom: -14px; width: 40px; height: 40px; border-radius: 6px; background: #c4281e; color: #f6ece4; display: grid; place-items: center; font-size: 12px; font-weight: 700; writing-mode: vertical-rl; box-shadow: inset 0 0 0 1.5px rgba(246,236,228,.8); transform: rotate(-3deg); }
+.stage-c .hud-mini {
+  position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 4px; padding: 5px 7px;
+  background: rgba(24, 26, 30, .94); border: 1px solid #2a2d32; border-radius: 9px;
+}
+.stage-c .hud-mini b { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; color: #a39e93; }
+.stage-c .hud-mini b.on { background: rgba(242,179,62,.1); color: #f2b33d; box-shadow: inset 0 -2px 0 #f2b33d; }
+.stage-c .hud-mini b svg { width: 14px; height: 14px; }
+.stage-c .hud-mini .go { font-family: var(--mono); font-size: 9px; color: #221804; background: #f2b33d; border-radius: 5px; padding: 4px 8px; font-weight: 600; margin-left: 3px; }
+
+/* D 样机 */
+.stage-d .rods { position: absolute; inset: 48px 62px; }
+.stage-d .rods i { position: absolute; background: #161514; }
+.stage-d .rods i:nth-child(1) { top: 0; left: 0; width: 40px; height: 4px; }
+.stage-d .rods i:nth-child(2) { top: 0; left: 0; width: 4px; height: 40px; }
+.stage-d .rods i:nth-child(3) { bottom: 0; right: 0; width: 40px; height: 4px; }
+.stage-d .rods i:nth-child(4) { bottom: 0; right: 0; width: 4px; height: 40px; }
+.stage-d .k-r { position: absolute; left: -7px; top: -7px; width: 12px; height: 12px; background: #d3262b; border: 2px solid #161514; }
+.stage-d .k-b { position: absolute; right: -7px; bottom: -7px; width: 12px; height: 12px; border-radius: 50%; background: #2a58b4; border: 2px solid #161514; }
+.stage-d .rd { position: absolute; top: -28px; left: 0; display: inline-flex; font-family: var(--mono); font-size: 9.5px; font-weight: 700; }
+.stage-d .rd span { padding: 3px 7px; border: 2px solid #161514; background: #f7f2e6; }
+.stage-d .rd span.red { background: #d3262b; color: #f7f2e6; }
+.stage-d .gridwin {
+  position: absolute; right: 40px; top: 26px; width: 64px; height: 64px;
+  border: 2.5px solid #161514; background: #f7f2e6;
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; padding: 2px;
+}
+.stage-d .gridwin i { animation: dswap 1.7s steps(1) infinite; }
+.stage-d .gridwin i:nth-child(2) { background: #d3262b; }
+.stage-d .gridwin i:nth-child(7) { background: #2a58b4; animation-delay: .4s; }
+.stage-d .gridwin i:nth-child(9) { background: #efc12f; animation-delay: .8s; }
+.stage-d .gridwin i:nth-child(14) { background: #c6c3bb; animation-delay: .6s; }
+@keyframes dswap { 0%, 52% { opacity: 1; } 53%, 100% { opacity: 0; } }
+.stage-d .tool-mini {
+  position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 4px; padding: 5px 6px;
+  background: #f7f2e6; border: 2.5px solid #161514; box-shadow: 3px 3px 0 rgba(22,21,20,.9);
+}
+.stage-d .tool-mini b { width: 26px; height: 26px; display: grid; place-items: center; color: #161514; border: 2px solid transparent; }
+.stage-d .tool-mini b.on { border-color: #161514; background: #d3262b; color: #f7f2e6; box-shadow: 1.5px 1.5px 0 #161514; }
+.stage-d .tool-mini b svg { width: 14px; height: 14px; }
+.stage-d .tool-mini .go { font-size: 10px; font-weight: 800; letter-spacing: .06em; color: #f7f2e6; background: #161514; border-radius: 0; padding: 5px 9px; box-shadow: 2px 2px 0 #d3262b; text-transform: uppercase; }
+
+/* E 样机 */
+.stage-e .print {
+  position: absolute; left: 44px; top: 24px; width: 130px;
+  background: #fbf8f2; padding: 6px 6px 16px; border-radius: 2px;
+  box-shadow: 0 10px 24px -8px rgba(92,66,24,.3); transform: rotate(-3.5deg);
+}
+.stage-e .print::after { content: ""; position: absolute; top: -6px; left: 50%; width: 40px; height: 13px; transform: translateX(-50%) rotate(-2deg); background: rgba(232,214,158,.68); }
+.stage-e .print img { width: 100%; height: 78px; object-fit: cover; display: block; filter: saturate(.88); }
+.stage-e .string { position: absolute; inset: 0; }
+.stage-e .string path { fill: none; stroke: #c8402f; stroke-width: 1.5; stroke-dasharray: 5 5; opacity: .6; }
+.stage-e .card {
+  position: absolute; right: 40px; top: 38px; width: 128px;
+  background: #fbf8f2; border: 1px solid #e2d9c6; border-radius: 8px; padding: 10px 11px;
+  box-shadow: 0 8px 20px -8px rgba(92,66,24,.28); transform: rotate(1.5deg);
+}
+.stage-e .card .l1 { height: 6px; border-radius: 3px; background: #e2d9c6; margin-bottom: 5px; width: 88%; }
+.stage-e .card .l2 { height: 6px; border-radius: 3px; background: rgba(47,93,98,.3); width: 70%; }
+.stage-e .card .pin { position: absolute; top: -6px; right: 12px; width: 12px; height: 12px; border-radius: 50%; background: #c8402f; box-shadow: 0 2px 4px rgba(92,66,24,.4); }
+.stage-e .tool-mini {
+  position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 5px; padding: 6px 8px;
+  background: #fbf8f2; border: 1px solid #e2d9c6; border-radius: 11px;
+  box-shadow: 0 12px 26px -10px rgba(92,66,24,.35);
+}
+.stage-e .tool-mini b { width: 27px; height: 27px; border-radius: 8px; display: grid; place-items: center; color: #6b655b; }
+.stage-e .tool-mini b.on { color: #c8402f; background: rgba(200,64,47,.08); box-shadow: inset 0 0 0 1.5px rgba(200,64,47,.45); }
+.stage-e .tool-mini b svg { width: 14px; height: 14px; }
+.stage-e .tool-mini .go { font-size: 11px; font-weight: 650; color: #fdf7f0; background: #c8402f; border-radius: 8px; padding: 6px 12px; box-shadow: 0 2px 0 #a33426; }
+
+/* 要点 */
+.d-points { list-style: none; padding: 16px 22px 4px; }
+.d-points li { display: flex; gap: 10px; align-items: baseline; padding: 7px 0; font-size: 12.5px; }
+.dir-c .d-points li { color: #a39e93; border-top: 1px solid rgba(255,255,255,.05); }
+.dir-c .d-points li:first-child { border-top: 0; }
+.dir-c .d-points b { color: #f2b33d; font-family: var(--mono); font-size: 10px; font-weight: 500; letter-spacing: .08em; }
+.dir-c .d-points strong { color: #f2efe8; font-weight: 600; }
+.dir-d .d-points li { color: #55524c; border-top: 1px solid #e4dccb; }
+.dir-d .d-points li:first-child { border-top: 0; }
+.dir-d .d-points b { color: #d3262b; font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: .1em; }
+.dir-d .d-points strong { color: #161514; font-weight: 700; }
+.dir-e .d-points li { color: #6b655b; border-top: 1px solid #ebe3d2; }
+.dir-e .d-points li:first-child { border-top: 0; }
+.dir-e .d-points b { color: #c8402f; font-size: 10px; font-weight: 700; letter-spacing: .14em; }
+.dir-e .d-points strong { color: #1b1a17; font-weight: 650; }
+
+.d-foot { margin-top: auto; padding: 15px 22px 20px; display: flex; align-items: center; gap: 12px; }
+.dir-c .d-foot { border-top: 1px solid rgba(255,255,255,.05); }
+.dir-d .d-foot { border-top: 2px solid #161514; }
+.dir-e .d-foot { border-top: 1px solid #ebe3d2; }
+.d-meta { display: flex; gap: 6px; flex-wrap: wrap; }
+.d-tag { font-size: 9.5px; border-radius: 99px; padding: 2.5px 9px; letter-spacing: .04em; }
+.dir-c .d-tag { font-family: var(--mono); color: #a39e93; border: 1px solid rgba(255,255,255,.12); }
+.dir-d .d-tag { font-family: var(--mono); font-weight: 700; color: #161514; border: 1.5px solid #161514; }
+.dir-e .d-tag { color: #6b655b; border: 1px solid #e2d9c6; background: #fbf8f2; }
+.d-open {
+  margin-left: auto; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 650; border-radius: 8px; padding: 8px 13px;
+  transition: transform .14s var(--ease), filter var(--fast);
+}
+.d-open:active { transform: scale(.95); }
+.dir-c .d-open { color: #221804; background: #f2b33d; }
+.dir-d .d-open { color: #f7f2e6; background: #161514; box-shadow: 2.5px 2.5px 0 #d3262b; }
+.dir-e .d-open { color: #fdf7f0; background: #c8402f; box-shadow: 0 2px 0 #a33426; }
+
+/* 对比 */
+.pg-section { padding: 64px 0 8px; }
+.pg-sec-head { display: flex; align-items: baseline; gap: 18px; margin-bottom: 8px; }
+.pg-sec-head .no { font-family: var(--mono); font-size: 11px; color: var(--amber); letter-spacing: .18em; }
+.pg-sec-head h2 { font-size: 22px; font-weight: 650; letter-spacing: -.02em; }
+.pg-sec-sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; max-width: 680px; }
+
+table.cmp { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+table.cmp th, table.cmp td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--page-line); vertical-align: top; }
+table.cmp thead th { font-family: var(--mono); font-size: 10.5px; letter-spacing: .14em; color: var(--muted); font-weight: 500; border-bottom: 1px solid rgba(255,255,255,.14); }
+table.cmp td.dim { color: var(--muted); white-space: nowrap; }
+table.cmp td { color: #cfcdc6; }
+table.cmp td b { color: var(--text); font-weight: 600; }
+table.cmp td .mk { font-family: var(--mono); font-size: 9px; letter-spacing: .1em; border-radius: 4px; padding: 1px 6px; margin-right: 8px; }
+.mk-c { background: rgba(242,178,62,.14); color: var(--amber); }
+.mk-d { background: rgba(211,38,43,.18); color: #ee7064; }
+.mk-e { background: rgba(200,64,47,.18); color: #e88a70; }
+
+/* 基线 */
+.base-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.base { border: 1px solid var(--page-line); border-radius: 12px; padding: 18px; background: var(--card); }
+.base h3 { font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em; color: var(--amber); font-weight: 500; margin-bottom: 10px; }
+.base ul { list-style: none; }
+.base li { color: var(--muted); font-size: 12.5px; padding: 5px 0; display: flex; justify-content: space-between; gap: 12px; }
+.base li b { color: var(--text); font-weight: 600; white-space: nowrap; font-family: var(--mono); font-size: 11px; }
+
+/* 第一轮归档 */
+.r1 { border: 1px dashed var(--page-line); border-radius: 12px; padding: 20px 22px; display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.r1 .r1-t { font-family: var(--mono); font-size: 10px; letter-spacing: .18em; color: var(--faint); }
+.r1 a { color: var(--muted); text-decoration: none; font-size: 12.5px; padding: 7px 13px; border: 1px solid var(--page-line); border-radius: 8px; transition: color var(--fast), border-color var(--fast); }
+.r1 a:hover { color: var(--amber); border-color: var(--amber); }
+
+.pg-footer { border-top: 1px solid var(--page-line); margin-top: 80px; padding: 28px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; color: var(--faint); font-family: var(--mono); font-size: 11px; }
+.pg-footer a { color: var(--muted); text-decoration: none; }
+.pg-footer a:hover { color: var(--amber); }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-rect" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="4" y="6" width="16" height="12" rx="1.5"/></symbol>
+  <symbol id="i-circle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/></symbol>
+  <symbol id="i-line" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 19L19 5"/></symbol>
+  <symbol id="i-pen" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L18.5 9.5a2.83 2.83 0 1 0-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></symbol>
+  <symbol id="i-marker" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 15L15 5l4 4-10 10H5v-4z"/><path d="M13 7l4 4"/></symbol>
+  <symbol id="i-text" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 7V5h14v2"/><path d="M12 5v14"/><path d="M9 19h6"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></symbol>
+</svg>
+
+<header class="pg-topbar">
+  <span class="pg-title">NIKO-SHOT · <b>UI DIRECTIONS · ROUND 2</b></span>
+  <div class="pg-chips">
+    <span class="pg-chip"><i class="dot" style="background:#f2b33d"></i>C 墨</span>
+    <span class="pg-chip"><i class="dot" style="background:#d3262b"></i>D 构成</span>
+    <span class="pg-chip"><i class="dot" style="background:#c8402f"></i>E 纸间</span>
+  </div>
+</header>
+
+<main class="pg-wrap">
+
+  <section class="pg-hero">
+    <div class="no">NIKO-SHOT · UI EXPLORATION · ROUND 2</div>
+    <h1>三个方向，<br>三套完整的视觉世界</h1>
+    <p>第二轮按 <b>huashu-art-motion</b> 的纪律重做：一支片一套色（3–6 色封顶）、<b>禁蓝紫渐变与霓虹</b>、强调色一屏只指一件事、入场慢退场快落定要停。每个方向都覆盖同样的 6 个场景，交互全部可点。</p>
+    <div class="laws">
+      <span><b>法 1</b> 一套色板贯穿到底 — 底/面/主字/次字/强调</span>
+      <span><b>法 2</b> 层级靠明度阶梯或材质，不靠加色相</span>
+      <span><b>法 3</b> 动效是物理动作 — 盖章/放平/滑出/打孔</span>
+      <span><b>法 4</b> reduce-motion 全部退化为即时</span>
+    </div>
+  </section>
+
+  <section class="dirs">
+
+    <!-- C -->
+    <article class="dir dir-c">
+      <div class="d-head">
+        <div class="d-no">DIRECTION C · DARK</div>
+        <h2>墨 <em>INK</em></h2>
+      </div>
+      <p class="d-sub">截图即落墨：深墨底、墨分五色、笔触取景框、钤印确认。</p>
+      <div class="d-stage stage-c">
+        <div class="vf"><i></i><i></i><i></i><i></i>
+          <div class="rd">W 1,280 × 720<span>X 248 · Y 162</span></div>
+          <div class="seal">墨成</div>
+        </div>
+        <div class="hud-mini">
+          <b class="on"><svg><use href="#i-rect"/></svg></b>
+          <b><svg><use href="#i-circle"/></svg></b>
+          <b><svg><use href="#i-line"/></svg></b>
+          <b><svg><use href="#i-pen"/></svg></b>
+          <b><svg><use href="#i-marker"/></svg></b>
+          <span class="go">↵ COPY</span>
+        </div>
+      </div>
+      <ul class="d-points">
+        <li><b>01</b><span><strong>墨分五色</strong> — 焦浓重淡清做层级</span></li>
+        <li><b>02</b><span><strong>一笔为界</strong> — 选区四角是提按笔触</span></li>
+        <li><b>03</b><span><strong>钤印为凭</strong> — 完成盖印，不弹窗</span></li>
+        <li><b>04</b><span><strong>花青予译</strong> — 翻译是唯一第二色相</span></li>
+      </ul>
+      <div class="d-foot">
+        <div class="d-meta">
+          <span class="d-tag">#F2B33D 藤黄</span>
+          <span class="d-tag">深墨</span>
+          <span class="d-tag">密度 5</span>
+        </div>
+        <a class="d-open" href="direction-c-ink.html">进入 C <svg class="i" style="width:12px;height:12px"><use href="#i-chevron"/></svg></a>
+      </div>
+    </article>
+
+    <!-- D -->
+    <article class="dir dir-d">
+      <div class="d-head">
+        <div class="d-no">DIRECTION D · LIGHT</div>
+        <h2>构成 <em>BAUHAUS</em></h2>
+      </div>
+      <p class="d-sub">工具即海报：纯几何、红蓝黄各司其职、盖章式落定。</p>
+      <div class="d-stage stage-d">
+        <div class="rods"><i></i><i></i><i></i><i></i><span class="k-r"></span><span class="k-b"></span>
+          <div class="rd"><span>1280 × 720</span><span class="red">16:9</span></div>
+        </div>
+        <div class="gridwin"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="tool-mini">
+          <b class="on"><svg><use href="#i-rect"/></svg></b>
+          <b><svg><use href="#i-circle"/></svg></b>
+          <b><svg><use href="#i-line"/></svg></b>
+          <b><svg><use href="#i-pen"/></svg></b>
+          <b><svg><use href="#i-text"/></svg></b>
+          <span class="go">完成 ↵</span>
+        </div>
+      </div>
+      <ul class="d-points">
+        <li><b>红</b><span><strong>主动作</strong> — 完成/删除，一屏只有一个</span></li>
+        <li><b>蓝</b><span><strong>选中态</strong> — 焦点/链接/译文</span></li>
+        <li><b>黄</b><span><strong>悬停态</strong> — 可交互的预告</span></li>
+        <li><b>黑</b><span><strong>结构</strong> — 边框/硬阴影/正文</span></li>
+      </ul>
+      <div class="d-foot">
+        <div class="d-meta">
+          <span class="d-tag">#D3262B</span>
+          <span class="d-tag">米白旧纸</span>
+          <span class="d-tag">密度 6</span>
+        </div>
+        <a class="d-open" href="direction-d-bauhaus.html">进入 D <svg class="i" style="width:12px;height:12px"><use href="#i-chevron"/></svg></a>
+      </div>
+    </article>
+
+    <!-- E -->
+    <article class="dir dir-e">
+      <div class="d-head">
+        <div class="d-no">DIRECTION E · WARM</div>
+        <h2>纸间 <em>Print Shop</em></h2>
+      </div>
+      <p class="d-sub">截图即冲印：白边、胶带、图钉、红绳牵译、灯台印相。</p>
+      <div class="d-stage stage-e">
+        <div class="print"><img src="../website/assets/capture-sculpture.jpg" alt=""></div>
+        <svg class="string" viewBox="0 0 100 172" preserveAspectRatio="none"><path d="M42 66 C 56 74, 58 86, 52 96"/></svg>
+        <div class="card"><span class="pin"></span><div class="l1"></div><div class="l2"></div></div>
+        <div class="tool-mini">
+          <b class="on"><svg><use href="#i-rect"/></svg></b>
+          <b><svg><use href="#i-circle"/></svg></b>
+          <b><svg><use href="#i-line"/></svg></b>
+          <b><svg><use href="#i-pen"/></svg></b>
+          <b><svg><use href="#i-marker"/></svg></b>
+          <span class="go">完成 ↵</span>
+        </div>
+      </div>
+      <ul class="d-points">
+        <li><b>物件</b><span><strong>冲印件语言</strong> — 白边、微倾、胶带、图钉</span></li>
+        <li><b>物理</b><span><strong>滑出、放平、揭起、打孔</strong></span></li>
+        <li><b>红绳</b><span><strong>原文与译文显式连接</strong></span></li>
+        <li><b>朱砂</b><span><strong>唯一强调色</strong> — 只在关键处盖章</span></li>
+      </ul>
+      <div class="d-foot">
+        <div class="d-meta">
+          <span class="d-tag">#C8402F 朱砂</span>
+          <span class="d-tag">暖纸</span>
+          <span class="d-tag">密度 4</span>
+        </div>
+        <a class="d-open" href="direction-e-printshop.html">进入 E <svg class="i" style="width:12px;height:12px"><use href="#i-chevron"/></svg></a>
+      </div>
+    </article>
+
+  </section>
+
+  <!-- ============ 对比 ============ -->
+  <section class="pg-section" id="compare">
+    <div class="pg-sec-head"><span class="no">CMP</span><h2>一屏对比</h2></div>
+    <p class="pg-sec-sub">三个方向共用同一套行为骨架（键盘、可达性、6 场景），分歧只在「世界是什么做的」。</p>
+    <table class="cmp">
+      <thead>
+        <tr><th>维度</th><th><span class="mk mk-c">C</span>墨 Ink</th><th><span class="mk mk-d">D</span>构成 Bauhaus</th><th><span class="mk mk-e">E</span>纸间 Print Shop</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="dim">世界隐喻</td><td><b>文房</b> — 落笔、洇墨、盖印</td><td><b>印刷海报</b> — 几何、套色、盖章</td><td><b>冲印桌面</b> — 照片、胶带、红绳</td></tr>
+        <tr><td class="dim">明暗</td><td>深墨底 <b>#121417</b></td><td>米白旧纸 <b>#EFE9DD</b></td><td>暖纸 <b>#F3EDE2</b> 三层纸</td></tr>
+        <tr><td class="dim">强调色</td><td>藤黄 <b>#F2B33D</b>（选中/读数/完成）</td><td>红 <b>#D3262B</b>（主动作专色）</td><td>朱砂 <b>#C8402F</b>（唯一强调）</td></tr>
+        <tr><td class="dim">第二色相</td><td>花青 <b>#5FB3A1</b> 仅译文</td><td>蓝 <b>#2A58B4</b> 选中、黄 <b>#EFC12F</b> 悬停</td><td>青瓷 <b>#2F5D62</b> 仅译文</td></tr>
+        <tr><td class="dim">选区语言</td><td>提按笔触四角 + 飞白</td><td>黑杆直角 + 三原色把手</td><td>裁切标记 + 红图钉</td></tr>
+        <tr><td class="dim">完成反馈</td><td><b>钤印</b> 盖章后随 Toast 淡出</td><td><b>盖章</b> 红块落下 + 位移吃影</td><td><b>打孔</b> 圆章旋转落下</td></tr>
+        <tr><td class="dim">历史隐喻</td><td>墨册 — 悬停「回焦」</td><td>目录页 — 半调网点，悬停显影</td><td>灯台接触印相 — 悬停「揭起」</td></tr>
+        <tr><td class="dim">动效性格</td><td>缓出 + 洇开（blur 洗出）</td><td>干脆（steps 步进 + 硬阴影）</td><td>回弹（settle 曲线 + 影子）</td></tr>
+        <tr><td class="dim">适合</td><td>爱夜屏、重键盘、要沉浸</td><td>要记忆点、爱海报感、快节奏</td><td>爱手作温度、低频从容使用</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ============ 基线 ============ -->
+  <section class="pg-section" id="baseline">
+    <div class="pg-sec-head"><span class="no">BASE</span><h2>三个方向都不变的</h2></div>
+    <p class="pg-sec-sub">皮肤在变，骨架不动 — 三套 demo 的交互逻辑完全一致，可直接对照 SwiftUI 实现。</p>
+    <div class="base-grid">
+      <div class="base">
+        <h3>键盘核心</h3>
+        <ul>
+          <li>完成并复制<b>↵ / ⌘C</b></li>
+          <li>撤销 · 重做<b>⌘Z · ⇧⌘Z</b></li>
+          <li>取消截图<b>esc</b></li>
+          <li>工具直选<b>1 … 9</b></li>
+          <li>识别 / 翻译<b>O / T</b></li>
+          <li>色 · 宽 · 法<b>Q/W/E · [ ] · 空格</b></li>
+        </ul>
+      </div>
+      <div class="base">
+        <h3>两层意图</h3>
+        <ul>
+          <li>历史单击<b>选中</b></li>
+          <li>历史双击<b>进标注</b></li>
+          <li>删除<b>Toast 撤销 5s</b></li>
+          <li>复制撤销<b>⌘Z 10s 内</b></li>
+          <li>OCR 点块<b>列表同步滚动</b></li>
+          <li>设置「当前/编辑中」<b>分离</b></li>
+        </ul>
+      </div>
+      <div class="base">
+        <h3>可达性</h3>
+        <ul>
+          <li>焦点环<b>2–3px 强调色</b></li>
+          <li>正文对比<b>≥ AA 4.5:1</b></li>
+          <li>触控目标<b>≥ 30 × 30pt</b></li>
+          <li>色板确认<b>双环 + 名称</b></li>
+          <li>reduce-motion<b>退化为即时</b></li>
+          <li>VoiceOver<b>读「工具 · 键」</b></li>
+        </ul>
+      </div>
+      <div class="base">
+        <h3>实现约束</h3>
+        <ul>
+          <li>框架<b>SwiftUI + AppKit</b></li>
+          <li>图标<b>SF Symbols</b></li>
+          <li>运行时依赖<b>零新增</b></li>
+          <li>P0 功能<b>全部保留</b></li>
+          <li>动效曲线<b>spring / settle</b></li>
+          <li>色板纪律<b>3–6 色封顶</b></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 第一轮归档 ============ -->
+  <section class="pg-section">
+    <div class="r1">
+      <span class="r1-t">ROUND 1 · 2026-10-19 上午</span>
+      <a href="direction-a-instrument.html">A · 仪器 Instrument</a>
+      <a href="direction-b-atelier.html">B · 暖纸工坊 Atelier</a>
+      <span style="font-size:12px;color:var(--faint)">第一轮两方向仍可查看，作为对照基线保留。</span>
+    </div>
+  </section>
+
+</main>
+
+<footer class="pg-footer">
+  <span>NIKO-SHOT · DIRECTION OVERVIEW · ROUND 2</span>
+  <span><a href="direction-c-ink.html">C 墨 →</a> · <a href="direction-d-bauhaus.html">D 构成 →</a> · <a href="direction-e-printshop.html">E 纸间 →</a></span>
+</footer>
+
+<script>
+// 样机内工具按钮可点击切换
+document.querySelectorAll('.hud-mini b, .tool-mini b').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (btn.tagName !== 'B') return;
+    btn.parentElement.querySelectorAll('b').forEach(x => x.classList.remove('on'));
+    btn.classList.add('on');
+  });
+});
+</script>
+</body>
+</html>

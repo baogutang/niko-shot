@@ -649,7 +649,7 @@ private final class AnnotationOverlayView: NSView {
         for item in split.live { AnnotationRenderer.draw(item, in: context, effects: canvas.effects) }
         guard let chrome = canvas.selectionChrome else { return }
         context.saveGState()
-        let accent = NSColor.controlAccentColor.cgColor
+        let accent = NikoAccent.nsColor.cgColor
         context.setStrokeColor(accent); context.setLineWidth(1)
         context.setLineDash(phase: 0, lengths: [4, 3])
         context.stroke(chrome.bounds)
@@ -715,7 +715,7 @@ final class AnnotationTextEditor: NSView, NSTextViewDelegate {
         layer?.cornerRadius = 6
         layer?.backgroundColor = note ? (NSColor(cgColor: item.color.cgColor) ?? .systemYellow).withAlphaComponent(0.95).cgColor : NSColor.clear.cgColor
         layer?.borderWidth = note ? 0 : 1
-        layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.8).cgColor
+        layer?.borderColor = NikoAccent.nsColor.withAlphaComponent(0.8).cgColor
     }
 
     func layoutForText() {
@@ -768,7 +768,7 @@ final class AnnotationStageView: NSView {
         dim.frame = CGRect(origin: .zero, size: frame.size)
         let border = CAShapeLayer()
         border.path = CGPath(rect: selection.insetBy(dx: -0.5 / max(1, scale), dy: -0.5 / max(1, scale)), transform: nil)
-        border.strokeColor = NSColor.controlAccentColor.cgColor
+        border.strokeColor = NikoAccent.nsColor.cgColor
         border.fillColor = NSColor.clear.cgColor
         border.lineWidth = 1 / max(1, scale)
         border.frame = dim.frame

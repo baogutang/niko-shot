@@ -65,7 +65,7 @@ final class SelectionView: NSView {
         layer?.contentsGravity = .resize
         dim.fillColor = NSColor.black.withAlphaComponent(Self.dimAlpha).cgColor
         dim.fillRule = .evenOdd
-        border.strokeColor = NSColor.controlAccentColor.cgColor
+        border.strokeColor = NikoAccent.nsColor.cgColor
         border.fillColor = NSColor.clear.cgColor
         border.lineWidth = 1 / frameInfo.screen.scale
         badge.fontSize = 12
@@ -76,11 +76,11 @@ final class SelectionView: NSView {
         badge.contentsScale = frameInfo.screen.scale
         [dim, border, badge].forEach { layer?.addSublayer($0) }
         handlesLayer.fillColor = NSColor.white.cgColor
-        handlesLayer.strokeColor = NSColor.controlAccentColor.cgColor
-        hoverLayer.fillColor = NSColor.controlAccentColor.withAlphaComponent(0.06).cgColor
-        hoverLayer.strokeColor = NSColor.controlAccentColor.cgColor
+        handlesLayer.strokeColor = NikoAccent.nsColor.cgColor
+        hoverLayer.fillColor = NikoAccent.nsColor.withAlphaComponent(0.06).cgColor
+        hoverLayer.strokeColor = NikoAccent.nsColor.cgColor
         hoverLayer.lineWidth = 1 / frameInfo.screen.scale
-        hoverLayer.shadowColor = NSColor.controlAccentColor.cgColor
+        hoverLayer.shadowColor = NikoAccent.nsColor.cgColor
         hoverLayer.shadowOpacity = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.7
         hoverLayer.shadowRadius = 5
         let side = Self.loupeSide, cell = side / CGFloat(Self.loupePixels)

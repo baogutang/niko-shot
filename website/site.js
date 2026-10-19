@@ -252,9 +252,10 @@
     context.fillRect(0, 0, width, y * height); context.fillRect(0, (y + h) * height, width, (1 - y - h) * height);
     context.fillRect(0, y * height, x * width, h * height); context.fillRect((x + w) * width, y * height, (1 - x - w) * width, h * height);
     annotations.forEach(stroke => drawStroke(context, stroke, width, height)); drawStroke(context, currentStroke, width, height);
-    context.strokeStyle = "#e8a333"; context.lineWidth = 2; context.strokeRect(x * width, y * height, w * width, h * height);
-    context.fillStyle = "#f9d999";
-    [[x,y],[x+w,y],[x,y+h],[x+w,y+h]].forEach(([cx,cy]) => context.fillRect(cx * width - 4, cy * height - 4, 8, 8));
+    const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#c8402f";
+    context.strokeStyle = accent; context.lineWidth = 2; context.strokeRect(x * width, y * height, w * width, h * height);
+    context.fillStyle = accent;
+    [[x,y],[x+w,y],[x,y+h],[x+w,y+h]].forEach(([cx,cy]) => { const px = cx * width, py = cy * height; context.fillRect(px - 4, py - 4, 8, 8); context.strokeStyle = "rgba(255,255,255,.85)"; context.lineWidth = 1; context.strokeRect(px - 4, py - 4, 8, 8); });
     if (document.activeElement === canvas && tool !== "crop") {
       context.strokeStyle = "#332b1d"; context.lineWidth = 1.5; const cx = keyboardPoint.x * width; const cy = keyboardPoint.y * height;
       context.beginPath(); context.moveTo(cx - 9, cy); context.lineTo(cx + 9, cy); context.moveTo(cx, cy - 9); context.lineTo(cx, cy + 9); context.stroke();

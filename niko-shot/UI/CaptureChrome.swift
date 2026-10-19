@@ -8,9 +8,9 @@ enum CaptureChrome {
     static let cornerRadius: CGFloat = 12
     static let buttonSize: CGFloat = 30
     static let buttonRadius: CGFloat = 7
-    /// Follows the user's system accent so selection, active tools and primary actions feel native.
-    static var accent: NSColor { .controlAccentColor }
-    static var accentColor: Color { Color(nsColor: .controlAccentColor) }
+    /// Brand accent (朱砂 in light, 藤黄 in dark); the HUD stays dark over frozen content.
+    static var accent: NSColor { NikoAccent.nsColor }
+    static var accentColor: Color { Color(nsColor: accent) }
     static let surfaceTint = NSColor(calibratedWhite: 0.08, alpha: 1)
     static let border = NSColor.white.withAlphaComponent(0.13)
     static let hover = NSColor.white.withAlphaComponent(0.09)
@@ -122,7 +122,7 @@ struct CaptureHUDButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .foregroundStyle(prominent ? Color.white : selected ? CaptureChrome.accentColor : Color.white.opacity(0.92))
+            .foregroundStyle(prominent ? NikoTheme.onAccent : selected ? CaptureChrome.accentColor : Color.white.opacity(0.92))
             .background(background(configuration.isPressed), in: RoundedRectangle(cornerRadius: CaptureChrome.buttonRadius, style: .continuous))
             .opacity(isEnabled ? 1 : 0.4)
             .contentShape(RoundedRectangle(cornerRadius: CaptureChrome.buttonRadius, style: .continuous))

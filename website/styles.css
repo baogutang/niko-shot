@@ -1,18 +1,18 @@
 /* Original NIKO site. One system-aware palette; layers: header 10, skip link 20. */
 :root {
   color-scheme: light dark;
-  --canvas: #f8f7f4;
-  --surface: #efede7;
-  --elevated: #fffefa;
-  --text: #22221f;
-  --muted: #66645e;
-  --line: #dcd8cf;
-  --accent: #e8a333;
-  --accent-text: #895108;
-  --on-accent: #1e1c17;
-  --tint: #f5e5c7;
-  --header: rgba(248, 247, 244, .92);
-  --shadow: rgba(49, 41, 25, .12);
+  --canvas: #f3ede2;
+  --surface: #ece4d4;
+  --elevated: #fbf8f2;
+  --text: #1b1a17;
+  --muted: #6b655b;
+  --line: #e2d9c6;
+  --accent: #c8402f;
+  --accent-text: #a33426;
+  --on-accent: #fdf7f0;
+  --tint: #f6ddd4;
+  --header: rgba(243, 237, 226, .92);
+  --shadow: rgba(92, 66, 24, .12);
   --radius: 20px;
   --ease: cubic-bezier(.2, .8, .2, 1);
 }
@@ -20,30 +20,34 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --canvas: #09090d;
-    --surface: #131317;
-    --elevated: #1c1c20;
-    --text: #f6f3eb;
-    --muted: #aaa69d;
-    --line: #303034;
-    --accent-text: #f0ac32;
-    --tint: #342815;
-    --header: rgba(9, 9, 13, .9);
-    --shadow: rgba(2, 2, 5, .55);
+    --canvas: #121417;
+    --surface: #1e2226;
+    --elevated: #262b30;
+    --text: #f2efe8;
+    --muted: #a39e93;
+    --line: #2a2d32;
+    --accent: #f2b33d;
+    --accent-text: #f2b33d;
+    --on-accent: #221804;
+    --tint: #342a10;
+    --header: rgba(18, 20, 23, .9);
+    --shadow: rgba(0, 0, 0, .6);
   }
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --canvas: #09090d;
-  --surface: #131317;
-  --elevated: #1c1c20;
-  --text: #f6f3eb;
-  --muted: #aaa69d;
-  --line: #303034;
-  --accent-text: #f0ac32;
-  --tint: #342815;
-  --header: rgba(9, 9, 13, .9);
-  --shadow: rgba(2, 2, 5, .55);
+  --canvas: #121417;
+  --surface: #1e2226;
+  --elevated: #262b30;
+  --text: #f2efe8;
+  --muted: #a39e93;
+  --line: #2a2d32;
+  --accent: #f2b33d;
+  --accent-text: #f2b33d;
+  --on-accent: #221804;
+  --tint: #342a10;
+  --header: rgba(18, 20, 23, .9);
+  --shadow: rgba(0, 0, 0, .6);
 }
 *, *::before, *::after { box-sizing: border-box; }
 html { scroll-behavior: smooth; scroll-padding-top: 100px; }

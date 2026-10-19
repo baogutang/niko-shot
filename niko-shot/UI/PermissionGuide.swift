@@ -308,11 +308,11 @@ final class AppIconDragView: NSView, NSDraggingSource {
     override func draw(_ dirtyRect: NSRect) {
         let tile = bounds.insetBy(dx: 2, dy: 2)
         let path = NSBezierPath(roundedRect: tile, xRadius: 16, yRadius: 16)
-        NSColor.controlAccentColor.withAlphaComponent(hovering ? 0.16 : 0.09).setFill()
+        NikoAccent.nsColor.withAlphaComponent(hovering ? 0.16 : 0.09).setFill()
         path.fill()
         path.lineWidth = 1.5
         path.setLineDash([5, 4], count: 2, phase: 0)
-        NSColor.controlAccentColor.withAlphaComponent(0.65).setStroke()
+        NikoAccent.nsColor.withAlphaComponent(0.65).setStroke()
         path.stroke()
         let side = min(tile.width, tile.height) - 18
         icon.draw(in: CGRect(x: tile.midX - side / 2, y: tile.midY - side / 2, width: side, height: side))

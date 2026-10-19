@@ -125,7 +125,7 @@ private struct RecordingControlBar: View {
         VStack(spacing: 8) {
             HStack(spacing: 4) {
                 HStack(spacing: 8) {
-                    Circle().fill(session.state == .paused ? Color.orange : interactive ? Color.red : Color.secondary).frame(width: 7, height: 7)
+                    Circle().fill(session.state == .paused ? Color.orange : interactive ? NikoTheme.seal : Color.secondary).frame(width: 7, height: 7)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(durationLabel).font(.system(size: 16, weight: .semibold)).monospacedDigit()
@@ -139,7 +139,7 @@ private struct RecordingControlBar: View {
                                    symbol: session.state == .paused ? "play.fill" : "pause.fill", selected: session.state == .paused, enabled: interactive) {
                     if session.state == .paused { session.resume() } else { session.pause() }
                 }.keyboardShortcut(.space, modifiers: [])
-                RecordingHUDButton(title: "停止录制并保存", symbol: "stop.fill", tint: .red, enabled: interactive, action: onStop)
+                RecordingHUDButton(title: "停止录制并保存", symbol: "stop.fill", tint: NikoTheme.seal, enabled: interactive, action: onStop)
                     .keyboardShortcut(.return, modifiers: .command)
                 RecordingHUDButton(title: session.cameraSession == nil ? "开启摄像头画中画" : "关闭摄像头画中画",
                                    symbol: session.cameraSession == nil ? "video" : "video.fill", selected: session.cameraSession != nil, enabled: interactive) {

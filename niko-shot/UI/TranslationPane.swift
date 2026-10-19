@@ -188,7 +188,7 @@ struct TranslationPane: View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Text(title).font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(isResult ? NikoTheme.accent : .secondary)
+                    .foregroundStyle(isResult ? NikoTheme.translation : .secondary)
                     .accessibilityAddTraits(.isHeader)
                 if isTranslationConfigured {
                     if isResult { targetPicker.frame(maxWidth: 160) }
