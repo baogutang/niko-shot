@@ -15,6 +15,8 @@ struct ScrollFrame: Sendable {
     let detail: [Int32]
     /// Per-row luminance sum, used by the coarse shift search.
     let mean: [Int32]
+    /// Absolute pixel x of each sampled column, for mapping sample ranges back to pixels.
+    let sampleX: [Int]
 
     /// Samples an image of any 8-bit RGB layout without changing its color space.
     init(_ image: CGImage, pixelsPerPoint: CGFloat = 2) throws {
@@ -32,6 +34,7 @@ struct ScrollFrame: Sendable {
         var luma = [UInt8](repeating: 0, count: height * samples)
         var detail = [Int32](repeating: 0, count: height)
         var mean = [Int32](repeating: 0, count: height)
+        var sampleX = [Int](repeating: 0, count: samples)
         try Self.withBGRA(image) { base, bytesPerRow in
             luma.withUnsafeMutableBufferPointer { output in
                 for row in 0..<height {
@@ -40,6 +43,7 @@ struct ScrollFrame: Sendable {
                     var sum: Int32 = 0, energy: Int32 = 0, previous: Int32 = -1
                     for index in 0..<samples {
                         let pixel = line.advanced(by: columns[index] * 4)
+                        sampleX[index] = columns[index]
                         let value = (Int32(pixel[0]) * 29 + Int32(pixel[1]) * 150 + Int32(pixel[2]) * 77 + 128) >> 8
                         output[target + index] = UInt8(truncatingIfNeeded: value)
                         sum += value
@@ -51,7 +55,7 @@ struct ScrollFrame: Sendable {
             }
         }
         self.image = image; self.width = width; self.height = height; self.samples = samples
-        self.luma = luma; self.detail = detail; self.mean = mean
+        self.luma = luma; self.detail = detail; self.mean = mean; self.sampleX = sampleX
     }
 
     /// Provides tightly addressed BGRA bytes, copying only when the source layout differs.
@@ -131,6 +135,8 @@ struct ScrollStitcher {
     private(set) var anchor: ScrollFrame?
     /// Accepted rows, top to bottom; each is an independent copy that never retains a whole viewport.
     private(set) var segments: [CGImage] = []
+    /// Viewport row each segment was copied from, for mapping overlay blocks back onto output.
+    private(set) var segmentOrigins: [Int] = []
     private(set) var contentHeight = 0
     private(set) var frames = 0
     /// Fixed footer rows trimmed from every viewport and appended once from the newest frame.
@@ -139,6 +145,17 @@ struct ScrollStitcher {
     private var bandsLocked = false
     /// Row in `anchor` matching the last accepted output row.
     private var tailRow = 0
+    /// Floating-overlay removal: blocks that stay put on screen while content moves underneath.
+    /// A block votes when it matches the previous frame at the same screen position while
+    /// differing from the document-aligned position; after enough votes it is erased from output.
+    var overlayVotes: [Int: Int] = [:]   // internal for diagnostics
+    private var overlayFills: [Int: (red: UInt8, green: UInt8, blue: UInt8)] = [:]
+    /// Overlay grid width: samples per strip (≈ 90 px at the default 512-sample sampling).
+    static let overlayStripSamples = 64
+    /// Screen-still rows only vote when the content actually moved by this many rows.
+    static let overlayMinimumShift = 8
+    /// Distinct votes (accepted frames) before a row strip is treated as a floating overlay.
+    static let overlayVoteThreshold = 3
     /// Set when early segments were rewritten (fixed footer discovered), so previews must rebuild.
     private(set) var didRewriteSegments = false
 
@@ -164,7 +181,7 @@ struct ScrollStitcher {
         didRewriteSegments = false
         guard let anchor else {
             let copy = try Self.copyRows(frame.image, from: 0, count: frame.height)
-            segments = [copy]; contentHeight = frame.height; tailRow = frame.height - 1
+            segments = [copy]; segmentOrigins = [0]; contentHeight = frame.height; tailRow = frame.height - 1
             self.anchor = frame; frames = 1
             return .appended(rows: frame.height)
         }
@@ -208,8 +225,12 @@ struct ScrollStitcher {
         if contentHeight + count > rowLimit {
             count = max(0, rowLimit - contentHeight); limited = true
         }
+        // 悬浮层投票要在 anchor 还未被替换时做：同一屏幕位置仍在、文档对齐位置已变。
+        Self.accumulateOverlayVotes(anchor: anchor, frame: frame, shift: shift, top: top, bottom: bottom,
+                                    votes: &overlayVotes)
         if count > 0 {
             segments.append(try Self.copyRows(frame.image, from: first, count: count))
+            segmentOrigins.append(first)
             contentHeight += count
         }
         self.anchor = frame
@@ -218,7 +239,8 @@ struct ScrollStitcher {
         return limited ? .limitReached : .appended(rows: count)
     }
 
-    /// Draws the accepted rows and the single fixed footer into one image.
+    /// Draws the accepted rows and the single fixed footer into one image, erasing confirmed
+    /// floating overlays (e.g. a chat app's "scroll to bottom" pill) with their surrounding fill.
     func makeImage() throws -> CGImage {
         guard let anchor, contentHeight > 0 else { throw ScrollCaptureError.noFrames }
         let total = outputHeight, width = anchor.width
@@ -230,9 +252,11 @@ struct ScrollStitcher {
         context.interpolationQuality = .none
         context.setBlendMode(.copy)
         var offset = 0
-        for segment in segments {
+        for (index, segment) in segments.enumerated() {
             try Task.checkCancellation()
-            context.draw(segment, in: CGRect(x: 0, y: total - offset - segment.height, width: width, height: segment.height))
+            let segmentY = total - offset - segment.height
+            context.draw(segment, in: CGRect(x: 0, y: segmentY, width: width, height: segment.height))
+            drawOverlayErasures(in: context, segmentIndex: index, segmentY: segmentY, offset: offset, total: total)
             offset += segment.height
         }
         if footerRows > 0 {
@@ -241,6 +265,111 @@ struct ScrollStitcher {
         }
         guard let image = context.makeImage() else { throw ScrollCaptureError.image }
         return image
+    }
+
+    // MARK: - Floating overlays
+
+    private typealias OverlayKey = Int
+
+    private static func overlayKey(row: Int, strip: Int) -> OverlayKey { row << 8 | strip }
+
+    /// Compares one strip (row × stripSamples) between two frames with the standard outlier budget.
+    private static func stripMatches(_ a: ScrollFrame, _ rowA: Int, _ stripA: Int,
+                                     _ b: ScrollFrame, _ rowB: Int, _ stripB: Int) -> Bool {
+        let width = Self.overlayStripSamples
+        let allowed = max(2, width / 5)
+        let tolerance = ScrollMatchParameters().tolerance
+        let ia = (rowA * a.samples) + stripA * width
+        let ib = (rowB * b.samples) + stripB * width
+        var outliers = 0
+        for s in 0..<width {
+            if abs(Int32(a.luma[ia + s]) - Int32(b.luma[ib + s])) > tolerance {
+                outliers += 1
+                if outliers > allowed { return false }
+            }
+        }
+        return true
+    }
+
+    /// 对每个「行 × 条带」投票：同一屏幕位置仍然相同（悬浮物没动），而文档对齐位置已经不同
+    /// （内容在动）—— 判定为浮层。像素级重复的内容（如相同的头像）在文档对齐位置也相同，
+    /// 不会被误判。这是逐行比较，对齐行是单行，不存在越界歧义。
+    static func accumulateOverlayVotes(anchor: ScrollFrame, frame: ScrollFrame, shift: Int, top: Int, bottom: Int,
+                                       votes: inout [Int: Int]) {
+        guard shift >= Self.overlayMinimumShift else { return }
+        let strips = anchor.samples / Self.overlayStripSamples
+        guard strips > 0 else { return }
+        // 固定带边缘 8 行内的静止条（阴影、分隔线）容易连续假匹配，不参与投票。
+        for row in max(top, 0) + 8..<(frame.height - max(bottom, 0) - 8) {
+            let aligned = row + shift
+            guard aligned >= 0, aligned < frame.height else { continue }
+            for strip in 0..<strips {
+                let key = overlayKey(row: row, strip: strip)
+                // 无对比度的空白条带不参与投票：它没有浮层证据，误票只会污染拼接结果。
+                let s0 = strip * Self.overlayStripSamples
+                var lo = Int32.max, hi = Int32.min
+                for s in 0..<Self.overlayStripSamples {
+                    let v = Int32(frame.luma[row * frame.samples + s0 + s])
+                    lo = min(lo, v); hi = max(hi, v)
+                }
+                guard hi - lo >= 24 else { continue }
+                guard Self.stripMatches(anchor, row, strip, frame, row, strip) else { continue }
+                guard !Self.stripMatches(anchor, aligned, strip, frame, row, strip) else { continue }
+                votes[key, default: 0] += 1
+            }
+        }
+    }
+
+    /// 把确认的浮层条带从输出里抹除：用条带上下若干行的逐通道中位色填充（保持背景色调）。
+    private func drawOverlayErasures(in context: CGContext, segmentIndex: Int, segmentY: Int,
+                                     offset: Int, total: Int) {
+        guard !overlayVotes.isEmpty, segmentIndex < segmentOrigins.count else { return }
+        guard let anchor, let data = context.data else { return }
+        let origin = segmentOrigins[segmentIndex]
+        let segmentHeight = segments[segmentIndex].height
+        let strip = Self.overlayStripSamples
+        let strips = anchor.samples / strip
+        let bytesPerRow = context.bytesPerRow
+        let base = data.assumingMemoryBound(to: UInt8.self)
+        let threshold = Self.overlayVoteThreshold
+        // 确认行 ±2 膨胀：pill 上下抗锯齿边缘行的票数偶有不足，由相邻确认行带掉。
+        var bands = Set<Int>()
+        for (key, voteCount) in overlayVotes where voteCount >= threshold {
+            for spread in -2...2 { bands.insert(key + spread) }
+        }
+        for key in bands {
+            let row = key >> 8, stripIndex = key & 0xFF
+            guard stripIndex < strips else { continue }
+            let localRow = row - origin                     // segment-local, top-based
+            guard localRow >= 0, localRow < segmentHeight else { continue }
+            let outRow = offset + localRow                  // output-local, top-based
+            let firstSample = stripIndex * strip
+            let x = anchor.sampleX[min(firstSample, anchor.sampleX.count - 1)]
+            let endX = anchor.sampleX[min(firstSample + strip, anchor.sampleX.count) - 1]
+            let stripWidth = max(1, endX - x)
+            // 采样环带：条带上下 ±6/±12/±18/±24 行，中位数落在背景上的概率才够。
+            var reds: [Int] = [], greens: [Int] = [], blues: [Int] = []
+            for distance in [6, 12, 18, 24] {
+                for ringRow in [outRow - distance, outRow + distance] where ringRow >= 0 && ringRow < total {
+                    for px in x..<(x + stripWidth) {
+                        let p = ringRow * bytesPerRow + px * 4   // BGRA，小端
+                        blues.append(Int(base[p])); greens.append(Int(base[p + 1])); reds.append(Int(base[p + 2]))
+                    }
+                }
+            }
+            guard reds.count >= 8 else { continue }
+            func median(_ values: inout [Int]) -> CGFloat {
+                values.sort(); return CGFloat(values[values.count / 2]) / 255
+            }
+            // CGContext 原点在左下：输出第 r 行（自顶部）的底边 y = total - r。
+            // 抹除矩形钳制在内容区内，不侵入上/下固定带。
+            let bandTop = headerRows, bandBottom = total - footerRows
+            let eraseTop = max(outRow - 3, bandTop), eraseBottom = min(outRow + 3, bandBottom)
+            guard eraseBottom > eraseTop else { continue }
+            let rect = CGRect(x: x - 3, y: total - eraseBottom, width: stripWidth + 6, height: eraseBottom - eraseTop)
+            context.setFillColor(CGColor(srgbRed: median(&reds), green: median(&greens), blue: median(&blues), alpha: 1))
+            context.fill(rect)
+        }
     }
 
     // MARK: - Matching

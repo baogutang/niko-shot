@@ -18,9 +18,18 @@ actor ScrollImageFixture {
         try Self.document(width: width, height: height, sparse: sparse)
     }
 
-    nonisolated static func document(width: Int, height: Int, sparse: Bool = false) throws -> CGImage {
+    nonisolated static func document(width: Int, height: Int, sparse: Bool = false, badges: Bool = false) throws -> CGImage {
         let context = try context(width: width, height: height)
         context.setFillColor(CGColor(gray: 0.985, alpha: 1)); context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        if badges {
+            // 内容锚定的重复徽标（比如列表里相同的头像）：像素级相同、随内容滚动，不能被当成浮层抹掉。
+            var y = 20
+            while y + 30 <= height {
+                context.setFillColor(CGColor(red: 0.2, green: 0.55, blue: 0.3, alpha: 1))
+                context.fill(CGRect(x: 24, y: height - y - 30, width: 30, height: 30))
+                y += 120
+            }
+        }
         let font = CTFontCreateWithName("Helvetica" as CFString, 22, nil)
         let small = CTFontCreateWithName("Helvetica" as CFString, 15, nil)
         var y = 40
@@ -46,7 +55,8 @@ actor ScrollImageFixture {
 
     /// One viewport of `document` starting at `offset`, optionally wrapped in fixed chrome and overlays.
     nonisolated static func viewport(_ document: CGImage, offset: Int, height: Int, header: Int = 0, footer: Int = 0,
-                                     scrollbarAt thumb: Int? = nil, noise: UInt8 = 0, seed: UInt64 = 1) throws -> CGImage {
+                                     scrollbarAt thumb: Int? = nil, noise: UInt8 = 0, seed: UInt64 = 1,
+                                     floatingPill: Bool = false) throws -> CGImage {
         let body = height - header - footer
         guard offset >= 0, offset + body <= document.height,
               let slice = document.cropping(to: CGRect(x: 0, y: offset, width: document.width, height: body)) else {
@@ -70,6 +80,14 @@ actor ScrollImageFixture {
         if let thumb {
             context.setFillColor(CGColor(gray: 0.45, alpha: 0.8))
             context.fill(CGRect(x: width - 14, y: height - header - thumb - 90, width: 8, height: 90))
+        }
+        // 聊天应用的「回到底部」悬浮按钮：固定在视口底部中央，随每一帧一起被捕获。
+        if floatingPill {
+            let pillRect = CGRect(x: width / 2 - 32, y: 100, width: 64, height: 32)
+            context.setFillColor(CGColor(red: 0.95, green: 0.45, blue: 0.15, alpha: 1))
+            context.fillEllipse(in: pillRect)
+            context.setFillColor(CGColor(gray: 1, alpha: 1))
+            context.fill(CGRect(x: width / 2 - 6, y: 76, width: 12, height: 3))
         }
         guard var image = context.makeImage() else { throw ScrollCaptureError.image }
         if noise > 0 { image = try addNoise(image, amplitude: noise, seed: seed) }

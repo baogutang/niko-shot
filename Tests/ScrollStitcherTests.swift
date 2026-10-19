@@ -48,19 +48,58 @@ final class ScrollStitcherTests: XCTestCase {
         XCTAssertEqual(Array(pixels[(header * rowBytes)..<((header + offset + body) * rowBytes)]), documentPixels)
     }
 
-    /// Overlay scroll bars move with every frame and rendering adds small noise; matching still holds.
-    func testScrollBarOverlayAndRenderingNoiseDoNotBreakAlignment() throws {
-        let document = try ScrollImageFixture.document(width: 900, height: 3_200)
+    /// A chat app's floating "scroll to bottom" pill is screen-still; it must be erased from the
+    /// stitched output instead of being baked in once per screen.
+    func testFloatingOverlayIsErasedFromOutput() throws {
+        let document = try ScrollImageFixture.document(width: 800, height: 3_000)
         var stitcher = ScrollStitcher(pixelsPerPoint: 2)
         var offset = 0
-        _ = try stitcher.add(ScrollImageFixture.viewport(document, offset: 0, height: viewportHeight, scrollbarAt: 0, noise: 3, seed: 1))
-        for (index, step) in [150, 75, 220, 140, 310, 95].enumerated() {
-            offset += step
-            let frame = try ScrollImageFixture.viewport(document, offset: offset, height: viewportHeight,
-                                                         scrollbarAt: offset * viewportHeight / document.height, noise: 3, seed: UInt64(index + 2))
-            XCTAssertEqual(try stitcher.add(frame), .appended(rows: step), "step \(index)")
+        _ = try stitcher.add(ScrollImageFixture.viewport(document, offset: 0, height: viewportHeight, floatingPill: true))
+        for step in [40, 60, 45, 80, 50] {
+            offset = min(document.height - viewportHeight, offset + step)
+            let result = try stitcher.add(ScrollImageFixture.viewport(document, offset: offset, height: viewportHeight, floatingPill: true),
+                                          hint: step)
+            guard case .appended = result else { return XCTFail("step \(step): \(result)") }
         }
-        XCTAssertEqual(stitcher.outputHeight, offset + viewportHeight)
+        let image = try stitcher.makeImage()
+        let pixels = try ScrollImageFixture.pixels(image)
+        var pillPixels = 0
+        var index = 0
+        while index < pixels.count {
+            let b = Int(pixels[index]), g = Int(pixels[index + 1]), r = Int(pixels[index + 2])
+            if r > 200, 90..<140 ~= g, b < 70 { pillPixels += 1 }
+            index += 4
+        }
+        XCTAssertEqual(pillPixels, 0, "floating pill must be erased everywhere")
+        XCTAssertGreaterThan(image.height, offset + 200)
+    }
+
+    /// Content-anchored repeats (like identical avatars in a list) move with the document and
+    /// must survive; only screen-still blocks get erased.
+    func testRepeatedContentIsNotMistakenForOverlay() throws {
+        let document = try ScrollImageFixture.document(width: 800, height: 3_000, badges: true)
+        var stitcher = ScrollStitcher(pixelsPerPoint: 2)
+        var offset = 0
+        _ = try stitcher.add(ScrollImageFixture.viewport(document, offset: 0, height: viewportHeight))
+        for step in [60, 80, 70, 50, 90] {
+            offset = min(document.height - viewportHeight, offset + step)
+            let result = try stitcher.add(ScrollImageFixture.viewport(document, offset: offset, height: viewportHeight),
+                                          hint: step)
+            guard case .appended = result else { return XCTFail("step \(step): \(result)") }
+        }
+        let image = try stitcher.makeImage()
+        let pixels = try ScrollImageFixture.pixels(image)
+        var badgePixels = 0
+        var index = 0
+        while index < pixels.count {
+            let b = Int(pixels[index]), g = Int(pixels[index + 1]), r = Int(pixels[index + 2])
+            if 35..<70 ~= r, 115..<165 ~= g, 45..<105 ~= b { badgePixels += 1 }
+            index += 4
+        }
+        let badgesInOutput = (offset + viewportHeight) / 120 + 1
+        let expected = badgesInOutput * 30 * 30
+        XCTAssertGreaterThan(Double(badgePixels), Double(expected) * 0.85,
+            "badge pixels \(badgePixels) should be near \(expected)")
     }
 
     /// Scrolling up shows already captured content: nothing is appended and the tail is preserved.

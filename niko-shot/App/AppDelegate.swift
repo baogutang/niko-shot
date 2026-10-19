@@ -128,6 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.onClose = { [weak self] in self?.settingsWindow = nil }
             settingsWindow = window
         }
+        rememberActiveApp()
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -138,11 +139,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showSettings()
     }
 
+    /// 打开辅助窗口前记住用户所在的前台应用：激活 niko-shot 会停用它，macOS 之后只会重新激活
+    /// 「上一个活跃应用」而不是用户原来置顶的那个窗口所属应用，导致小窗口被压到后面。
+    private var previouslyActiveApp: NSRunningApplication?
+
+    /// 截图会话开始时把用户送回原来的窗口层级，保证冻结画面、窗口列表和真实 z-order 一致。
+    func restorePreviouslyActiveApp() {
+        guard let app = previouslyActiveApp, !app.isTerminated else { previouslyActiveApp = nil; return }
+        previouslyActiveApp = nil
+        if app != NSWorkspace.shared.frontmostApplication { app.activate() }
+    }
+
+    /// 辅助窗口前置前记住用户所在的前台应用（niko-shot 自身活跃时不覆盖记录）。
+    private func rememberActiveApp() {
+        if let current = NSWorkspace.shared.frontmostApplication,
+           current.bundleIdentifier != Bundle.main.bundleIdentifier, !current.isTerminated {
+            previouslyActiveApp = current
+        }
+    }
+
     func perform(_ action: CaptureAction) {
         guard !isTerminating else { return }
         if action == .pins { showPins(); return }
         if action == .togglePins { pinManager.toggleVisibility(); return }
         guard captureTask == nil, automationTask == nil, selectionSession.state == .idle, !recording.isBusy, !scrolling.isBusy else { return }
+        restorePreviouslyActiveApp()
         CapturePreviewController.shared.dismiss(animated: false)
         installApplicationMenu()
         if action == .record { recording.showSetup(); return }
@@ -296,6 +317,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return image
                 }
                 guard !isTerminating else { return }
+                rememberActiveApp()
                 NSApp.activate(ignoringOtherApps: true)
                 let router = SavePanelRouter()
                 outputPanels[taskID] = router
@@ -326,7 +348,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 window.onClose = { [weak self] in self?.historyWindow = nil }
                 historyWindow = window
             }
-            historyWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+            rememberActiveApp()
+        historyWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         } catch { ErrorPresenter.show(error) }
     }
     func showPins() {
@@ -334,6 +357,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installApplicationMenu()
         pinManager.load()
         if pinsWindow == nil { let window = makeUtilityWindow(title: "贴图库"); window.contentView = NSHostingView(rootView: PinLibraryView(manager: pinManager)); window.onClose = { [weak self] in self?.pinsWindow = nil }; pinsWindow = window }
+        rememberActiveApp()
         pinsWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
     private func makeUtilityWindow(title: String) -> UtilityWindow {
@@ -399,6 +423,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.onClose = { [weak self] in self?.ocrWindow = nil }; ocrWindow = window
         }
         ocrWindow?.contentView = NSHostingView(rootView: OCRView(model: model, translationModel: translationModel))
+        rememberActiveApp()
         ocrWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
     private func reOCR(_ record: HistoryRecord) {
