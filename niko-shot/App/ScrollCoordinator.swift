@@ -49,6 +49,11 @@ final class ScrollCoordinator {
     private var hintPoints: CGFloat = 0
     private var hintPrecise = true
     private var unmatchedStreak = 0
+    private var lastScrollInput: ContinuousClock.Instant = .now
+    /// Quiet time after the last scroll input before an unmatched frame counts as real;
+    /// momentum frames render at sub-pixel offsets and fail row equality while still moving.
+    /// Internal so tests can pin the boundary deterministically.
+    var mismatchSettle: Duration = .milliseconds(300)
     private var stalledDownward = 0
     private var screenObserver: NSObjectProtocol?
     private var automationID: UUID?
@@ -241,6 +246,7 @@ final class ScrollCoordinator {
             return
         }
         if let points = activity.preciseDownwardPoints { hintPoints += points } else { hintPrecise = false }
+        lastScrollInput = .now
         requestCapture()
         settleTask?.cancel()
         let delays = workflow.settleDelays
@@ -332,7 +338,10 @@ final class ScrollCoordinator {
             unmatchedStreak = 0
             setStatus("正在向上浏览", "不会重复拼接；回到末尾后继续向下即可")
         case .unmatched:
-            unmatchedStreak += 1
+            // 惯性滚动尚未平息时的失配帧不计入警告；等稳定后的帧仍对不上才提示。
+            if automatic || ContinuousClock.now - lastScrollInput >= mismatchSettle {
+                unmatchedStreak += 1
+            }
             if unmatchedStreak >= 2 {
                 setStatus("画面没对上", "滚动太快或内容在变化，请向上回滚一点再继续", tone: .warning)
             }

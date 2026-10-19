@@ -104,6 +104,18 @@ struct ScrollMatchParameters: Sendable {
     var outlierFraction = 0.012
     /// Largest share of informative overlap rows that may disagree at the true shift.
     var maximumMismatchRatio = 0.12
+    /// Mismatch share allowed by the momentum-rescue pass. Sub-pixel scrolling renders rows
+    /// resampled (soft), which fails strict row equality; only a precise scroll hint plus a
+    /// lone winner may accept this wider ratio.
+    var relaxedMismatchRatio = 0.38
+    /// Smallest informative overlap for the momentum-rescue pass, as a share of the overlap.
+    var relaxedMinimumEvidenceFraction = 0.16
+    /// Absolute floor for that share, in rows.
+    var relaxedMinimumEvidenceRows = 14
+    /// How far the relaxed winner may sit from the precise scroll hint, in rows.
+    var relaxedHintTolerance = 8
+    /// A relaxed rival within this ratio margin makes the winner ambiguous.
+    var relaxedRivalMargin = 0.06
     /// Smallest overlap, as a share of the scrolling body, accepted as evidence.
     var minimumOverlapFraction = 0.1
     /// Absolute smallest overlap in pixels.
@@ -312,6 +324,28 @@ struct ScrollStitcher {
             // 周期内容没有速度线索时，取最小位移：用户通常每次只滚动一小段。
             return all.min { abs($0.shift) < abs($1.shift) }?.shift
         }
+        // 惯性滚动中的帧常在亚像素偏移上渲染，行被重采样后逐行一致率下降，严格验证会全部落选。
+        // 只有精确位移线索背书、胜者唯一且重叠证据充分时，才允许更宽的失配率；周期内容仍然拒绝。
+        if verified.isEmpty, let hint {
+            var relaxed: [Verified] = []
+            for candidate in refined {
+                guard abs(candidate - hint) <= parameters.relaxedHintTolerance,
+                      let result = verify(anchor: anchor, frame: frame, shift: candidate, top: top, end: end,
+                                          parameters: parameters, ratioLimit: parameters.relaxedMismatchRatio)
+                else { continue }
+                let start = top + max(0, -candidate), stop = end - max(0, candidate)
+                let minimumEvidence = max(parameters.relaxedMinimumEvidenceRows,
+                                          Int(Double(stop - start) * parameters.relaxedMinimumEvidenceFraction))
+                if result.evidence >= minimumEvidence {
+                    relaxed.append(Verified(shift: candidate, ratio: result.ratio, evidence: result.evidence))
+                }
+            }
+            relaxed.sort { $0.ratio != $1.ratio ? $0.ratio < $1.ratio : $0.evidence > $1.evidence }
+            if let best = relaxed.first,
+               !relaxed.dropFirst().contains(where: { $0.ratio <= best.ratio + parameters.relaxedRivalMargin }) {
+                return best.shift
+            }
+        }
         // 大段空白没有图像证据；只有真实触控板位移可信时才沿用它，且重叠部分必须完全一致。
         if let hint, hint != 0, abs(hint) <= limit,
            let blank = verify(anchor: anchor, frame: frame, shift: hint, top: top, end: end, parameters: parameters),
@@ -323,11 +357,11 @@ struct ScrollStitcher {
 
     /// Mismatch ratio over rows that carry information at a given shift.
     static func verify(anchor: ScrollFrame, frame: ScrollFrame, shift: Int, top: Int, end: Int,
-                       parameters: ScrollMatchParameters) -> (ratio: Double, evidence: Int, mismatches: Int)? {
+                       parameters: ScrollMatchParameters, ratioLimit: Double? = nil) -> (ratio: Double, evidence: Int, mismatches: Int)? {
         let start = top + max(0, -shift), stop = end - max(0, shift)
         guard stop > start else { return nil }
         let flat = Int32(frame.samples)
-        let budget = Int(Double(stop - start) * parameters.maximumMismatchRatio) + 4
+        let budget = Int(Double(stop - start) * (ratioLimit ?? parameters.maximumMismatchRatio)) + 4
         var mismatches = 0, matches = 0
         for row in start..<stop {
             let other = row + shift

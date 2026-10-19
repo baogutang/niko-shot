@@ -27,11 +27,12 @@ final class ScrollCoordinatorTests: XCTestCase {
     private var permissionRequests = 0
 
     private func makeCoordinator(target: FakeTarget, selection: SelectionSession,
-                                 onCapture: @escaping (CGImage, CaptureContext) -> Void) -> ScrollCoordinator {
+                                 onCapture: @escaping (CGImage, CaptureContext) -> Void,
+                                 settleDelays: [Duration] = []) -> ScrollCoordinator {
         var workflow = ScrollCaptureWorkflow(freezeScreens: { [] }, windows: { [] },
             prepareSource: { context, _ in RegionSnapshot(capture: { try target.frame() }, validate: { context }) })
         workflow.activate = { _ in }
-        workflow.settleDelays = []
+        workflow.settleDelays = settleDelays
         workflow.activationDelay = .zero
         workflow.isAutoScrollAuthorized = { false }
         workflow.requestAutoScrollPermission = { [weak self] in self?.permissionRequests += 1 }
@@ -118,6 +119,55 @@ final class ScrollCoordinatorTests: XCTestCase {
         try await waitUntil { coordinator.state.title == "正在向上浏览" }
         XCTAssertEqual(coordinator.state.height, 800)
         await coordinator.cancel()
+    }
+
+    /// With the settle threshold pinned to zero every unmatched frame counts, so two jumps warn;
+    /// with a huge threshold momentum frames never count and the status stays quiet.
+    func testSettledMismatchesWarnWhileMomentumMismatchesStayQuiet() async throws {
+        let document = try ScrollImageFixture.document(width: 800, height: 6_000)
+        let selection = SelectionSession()
+        defer { selection.finish() }
+
+        func jump(_ coordinator: ScrollCoordinator, _ target: FakeTarget, _ offset: Int) {
+            target.offset = offset
+            coordinator.receive(ScrollActivity(preciseDownwardPoints: CGFloat(offset)))
+        }
+        func waitForCaptures(_ target: FakeTarget, _ count: Int) async throws {
+            let deadline = ContinuousClock.now + .seconds(8)
+            while target.captures < count, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertGreaterThanOrEqual(target.captures, count)
+        }
+
+        // Branch 1: threshold zero — two unmatched jumps warn immediately.
+        let warnTarget = FakeTarget(document: document, height: 500)
+        var output: CGImage?
+        let warner = makeCoordinator(target: warnTarget, selection: selection, onCapture: { image, _ in output = image },
+                                     settleDelays: [.milliseconds(20), .milliseconds(40)])
+        warner.mismatchSettle = .zero
+        warner.continueFromSelection(context: context(width: 800, height: 500))
+        try await waitUntil { warner.state.frames == 1 }
+        jump(warner, warnTarget, 1_400)
+        try await waitForCaptures(warnTarget, 4)
+        jump(warner, warnTarget, 2_600)
+        try await waitUntil { warner.state.title == "画面没对上" }
+        XCTAssertNil(output)
+
+        // Branch 2: threshold far above the test duration — the same jumps stay quiet.
+        let quietTarget = FakeTarget(document: document, height: 500)
+        let quieter = makeCoordinator(target: quietTarget, selection: selection, onCapture: { _, _ in },
+                                      settleDelays: [.milliseconds(20), .milliseconds(40)])
+        quieter.mismatchSettle = .seconds(10)
+        quieter.continueFromSelection(context: context(width: 800, height: 500))
+        try await waitUntil { quieter.state.frames == 1 }
+        jump(quieter, quietTarget, 1_400)
+        try await waitForCaptures(quietTarget, 4)
+        jump(quieter, quietTarget, 2_600)
+        // The settle chain (immediate, +20 ms, +60 ms) and well beyond it: quiet throughout.
+        try await Task.sleep(for: .milliseconds(900))
+        XCTAssertNotEqual(quieter.state.title, "画面没对上", "momentum-window mismatches must stay quiet")
+        XCTAssertEqual(quieter.state.phase, .capturing)
     }
 
     private func waitUntil(_ condition: () -> Bool) async throws {

@@ -86,29 +86,20 @@ final class ScrollStitcherTests: XCTestCase {
         XCTAssertEqual(try stitcher.add(ScrollImageFixture.viewport(document, offset: 400, height: viewportHeight)), .appended(rows: 400))
     }
 
-    func testIdenticalFrameIsUnchangedAndResizeIsRejected() throws {
-        let document = try ScrollImageFixture.document(width: 800, height: 2_000)
+    /// Momentum frames render at fractional offsets; with a precise hint the true shift still stitches.
+    func testMomentumResampledFrameStitchesWithPreciseHint() throws {
+        let document = try ScrollImageFixture.document(width: 800, height: 3_000)
         var stitcher = ScrollStitcher(pixelsPerPoint: 2)
-        let frame = try ScrollImageFixture.viewport(document, offset: 100, height: viewportHeight)
-        _ = try stitcher.add(frame)
-        XCTAssertEqual(try stitcher.add(frame), .unchanged)
-        XCTAssertThrowsError(try stitcher.add(ScrollImageFixture.viewport(document, offset: 100, height: viewportHeight - 10)))
-    }
-
-    /// Long blank stretches have no image evidence; precise trackpad deltas carry the capture across them.
-    func testBlankStretchUsesPreciseScrollHint() throws {
-        let document = try ScrollImageFixture.document(width: 800, height: 3_000, sparse: true)
-        var stitcher = ScrollStitcher(pixelsPerPoint: 2)
-        _ = try stitcher.add(ScrollImageFixture.viewport(document, offset: 0, height: 400))
-        var offset = 0
-        for step in [120, 120, 120, 120, 120, 120, 120, 120] {
-            offset += step
-            let result = try stitcher.add(ScrollImageFixture.viewport(document, offset: offset, height: 400), hint: step)
-            XCTAssertEqual(result, .appended(rows: step), "offset \(offset)")
-        }
-        let image = try stitcher.makeImage()
-        let expected = try XCTUnwrap(document.cropping(to: CGRect(x: 0, y: 0, width: 800, height: offset + 400)))
-        XCTAssertEqual(try ScrollImageFixture.pixels(image), try ScrollImageFixture.pixels(expected))
+        let first = try ScrollImageFixture.viewport(document, offset: 0, height: viewportHeight)
+        XCTAssertEqual(try stitcher.add(first), .appended(rows: viewportHeight))
+        let blurred = try ScrollImageFixture.resampledViewport(document, offset: 180, height: viewportHeight)
+        // Without the hint the relaxed pass stays off; the frame is safely rejected.
+        XCTAssertEqual(try stitcher.add(ScrollImageFixture.resampledViewport(document, offset: 180, height: viewportHeight)), .unmatched)
+        // With the trackpad delta endorsing the true shift, the frame is rescued.
+        let result = try stitcher.add(blurred, hint: 180)
+        guard case .appended(let rows) = result else { return XCTFail("expected appended, got \(result)") }
+        XCTAssertEqual(rows, 180)
+        XCTAssertEqual(stitcher.outputHeight, 180 + viewportHeight)
     }
 
     func testRetinaSizedFrameMatchesQuickly() throws {

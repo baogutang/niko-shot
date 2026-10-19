@@ -76,6 +76,35 @@ actor ScrollImageFixture {
         return image
     }
 
+    /// Simulates a frame captured mid-momentum: the compositor renders at a fractional scroll
+    /// offset, so every row is a vertical mix of its neighbours and text edges no longer agree
+    /// crisply with the previous frame. Strict row equality fails; the true shift still ranks.
+    nonisolated static func resampledViewport(_ document: CGImage, offset: Int, height: Int) throws -> CGImage {
+        let base = try viewport(document, offset: offset, height: height, noise: 2, seed: 9)
+        let bytes = try pixels(base)
+        let width = base.width, rows = base.height, rowBytes = width * 4
+        var mixed = bytes
+        for row in 1..<(rows - 1) {
+            let middle = row * rowBytes, stop = middle + rowBytes
+            var index = middle
+            while index < stop {
+                // 3:1 vertical mix toward the next row; enough to break ±10 luminance
+                // equality on text edges, like a real fractional-offset render.
+                mixed[index] = UInt8(clamping: (Int(bytes[index]) * 3 + Int(bytes[index + rowBytes]) + 2) >> 2)
+                index += 1
+            }
+        }
+        let image = mixed.withUnsafeMutableBytes { raw -> CGImage? in
+            guard let context = CGContext(data: raw.baseAddress, width: width, height: rows,
+                bitsPerComponent: 8, bytesPerRow: rowBytes, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+            else { return nil }
+            return context.makeImage()
+        }
+        guard let image else { throw ScrollCaptureError.image }
+        return image
+    }
+
     nonisolated static func context(width: Int, height: Int) throws -> CGContext {
         guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
             space: CGColorSpace(name: CGColorSpace.sRGB)!,
