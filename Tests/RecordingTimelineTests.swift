@@ -42,4 +42,17 @@ final class RecordingTimelineTests: XCTestCase {
         XCTAssertEqual(RecordingOptions(fps: 17, quality: .nan).fps, 30)
         XCTAssertEqual(RecordingOptions(quality: .nan).quality, 0.65)
     }
+
+    func testH264OutputFitsTheHardwareEncoderLimitWithEvenAspectPreservingSize() {
+        let h264 = RecordingOptions(codec: "h264"), hevc = RecordingOptions(codec: "hevc")
+        XCTAssertTrue(h264.encodedSize(width: 5_120, height: 2_880) == (4_096, 2_304))
+        let retina = h264.encodedSize(width: 4_112, height: 2_658)
+        XCTAssertEqual(retina.height, 2_304); XCTAssertLessThanOrEqual(retina.width, 4_096); XCTAssertEqual(retina.width % 2, 0)
+        XCTAssertEqual(Double(retina.width) / Double(retina.height), 4_112.0 / 2_658, accuracy: 0.002)
+        XCTAssertTrue(h264.encodedSize(width: 1_200, height: 5_000) == (552, 2_304))
+        XCTAssertTrue(h264.encodedSize(width: 4_096, height: 2_304) == (4_096, 2_304))
+        XCTAssertTrue(h264.encodedSize(width: 1_919, height: 1_081) == (1_918, 1_080))
+        XCTAssertTrue(h264.encodedSize(width: 2.4, height: 2) == (2, 2))
+        XCTAssertTrue(hevc.encodedSize(width: 5_120, height: 2_880) == (5_120, 2_880), "HEVC keeps full resolution")
+    }
 }

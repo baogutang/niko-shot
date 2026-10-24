@@ -14,6 +14,16 @@ struct RecordingPCMFrame: Sendable {
     var channels: Int
     var samples: [Float]
     var frameCount: Int { samples.count / max(1, channels) }
+
+    /// AVAudioFormat needs an explicit channel layout above two channels, so multi-input devices keep their first pair.
+    var leadingStereo: RecordingPCMFrame {
+        guard channels > 2 else { return self }
+        var pair = [Float](repeating: 0, count: frameCount * 2)
+        for frame in 0..<frameCount {
+            pair[frame * 2] = samples[frame * channels]; pair[frame * 2 + 1] = samples[frame * channels + 1]
+        }
+        return RecordingPCMFrame(sourceTime: sourceTime, sampleRate: sampleRate, channels: 2, samples: pair)
+    }
 }
 
 struct MixedRecordingAudio: Sendable {
@@ -134,6 +144,7 @@ final class AudioRouter {
 
     /// Converts one owned PCM frame and aligns it to the pause-free output timeline.
     func append(_ frame: RecordingPCMFrame, at presentationTime: Double, source: RecordingAudioSource) throws {
+        let frame = frame.leadingStereo
         guard frame.frameCount > 0, presentationTime >= 0 else { return }
         let start = Int((presentationTime * Self.sampleRate).rounded())
         if frame.sampleRate == Self.sampleRate, frame.channels == 2 {

@@ -27,7 +27,8 @@ struct TranslationPane: View {
                 Image(systemName: isTranslationConfigured ? "character.bubble" : "text.viewfinder")
                     .foregroundStyle(NikoTheme.accent).accessibilityHidden(true)
                 if isTranslationConfigured {
-                    TranslationServicePicker(settings: settings).labelsHidden().frame(maxWidth: 210)
+                    TranslationServicePicker(settings: settings, configuredOnly: true).id(credentialRevision)
+                        .labelsHidden().frame(maxWidth: 210)
                     Button(action: openTranslationSettings) { Label("配置当前翻译服务", systemImage: "slider.horizontal.3").labelStyle(.iconOnly).frame(width: 26, height: 26) }
                         .buttonStyle(.borderless).help("配置翻译服务")
                 } else {
@@ -228,39 +229,64 @@ struct TranslationPane: View {
 
 }
 
-/// Shared provider picker listing the five peer types and each configured custom instance.
+/// Picker tags shared by every service menu: built-in providers by raw value, custom instances as `instance.<UUID>`.
+enum TranslationServiceChoice {
+    static func tag(_ id: UUID) -> String { "instance.\(id.uuidString)" }
+
+    @MainActor static func tag(_ settings: AppSettings) -> String {
+        if settings.translationProvider == .custom, let id = settings.selectedCustomTranslationID,
+           settings.customTranslationServices.contains(where: { $0.id == id }) {
+            return tag(id)
+        }
+        return settings.translationProvider.rawValue
+    }
+
+    /// Ready services only. The generic custom entry has no instance, so concrete instances stand in for it.
+    @MainActor static func configured(_ settings: AppSettings, credentials: KeychainStore = KeychainStore())
+        -> (providers: [TranslationProviderID], custom: [CustomRESTConfiguration]) {
+        let providers = TranslationProviderID.allCases.filter {
+            $0 != .custom && TranslationConfiguration.service(provider: $0, credentials: credentials)?.credentialsStatus() == .ready
+        }
+        let custom = settings.customTranslationServices.filter {
+            TranslationConfiguration.service(provider: .custom, custom: $0, credentials: credentials)?.credentialsStatus() == .ready
+        }
+        return (providers, custom)
+    }
+
+    /// Applies a picker tag; an instance tag must still name a saved instance.
+    @MainActor static func select(_ tag: String, in settings: AppSettings) {
+        if tag.hasPrefix("instance.") {
+            guard let id = UUID(uuidString: String(tag.dropFirst("instance.".count))),
+                  settings.customTranslationServices.contains(where: { $0.id == id }) else { return }
+            settings.translationProvider = .custom
+            settings.selectedCustomTranslationID = id
+        } else if let provider = TranslationProviderID(rawValue: tag) {
+            settings.translationProvider = provider
+            if provider == .custom { settings.selectedCustomTranslationID = nil }
+        }
+    }
+}
+
+/// Shared provider picker. Settings lists every service so any can be chosen and then configured; inline pickers
+/// pass `configuredOnly`, because picking an unready service there would switch translation off and hide the picker.
 @MainActor
 struct TranslationServicePicker: View {
     @Bindable var settings: AppSettings
+    var configuredOnly = false
 
     var body: some View {
-        Picker("当前翻译服务", selection: selection) {
-            ForEach(TranslationProviderID.allCases, id: \.rawValue) { provider in
+        let ready = configuredOnly ? TranslationServiceChoice.configured(settings) : nil
+        let providers = ready?.providers ?? TranslationProviderID.allCases
+        let custom = ready?.custom ?? settings.customTranslationServices
+        Picker("当前翻译服务", selection: Binding(get: { TranslationServiceChoice.tag(settings) },
+                                            set: { TranslationServiceChoice.select($0, in: settings) })) {
+            ForEach(providers, id: \.rawValue) { provider in
                 Text(provider.displayName).tag(provider.rawValue)
             }
-            if !settings.customTranslationServices.isEmpty { Divider() }
-            ForEach(settings.customTranslationServices) { configuration in
-                Text(configuration.name).tag("instance.\(configuration.id.uuidString)")
+            if !providers.isEmpty && !custom.isEmpty { Divider() }
+            ForEach(custom) { configuration in
+                Text(configuration.name).tag(TranslationServiceChoice.tag(configuration.id))
             }
         }
-    }
-
-    private var selection: Binding<String> {
-        Binding(get: {
-            if settings.translationProvider == .custom,
-               let id = settings.selectedCustomTranslationID,
-               settings.customTranslationServices.contains(where: { $0.id == id }) {
-                return "instance.\(id.uuidString)"
-            }
-            return settings.translationProvider.rawValue
-        }, set: { value in
-            if value.hasPrefix("instance."), let id = UUID(uuidString: String(value.dropFirst("instance.".count))) {
-                settings.translationProvider = .custom
-                settings.selectedCustomTranslationID = id
-            } else if let provider = TranslationProviderID(rawValue: value) {
-                settings.translationProvider = provider
-                if provider == .custom { settings.selectedCustomTranslationID = nil }
-            }
-        })
     }
 }

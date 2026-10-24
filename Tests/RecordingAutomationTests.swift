@@ -143,6 +143,47 @@ final class RecordingAutomationTests: XCTestCase {
         catch { XCTAssertFalse(error is CancellationError) }
     }
 
+    func testSaveMovesTheRecordingInsteadOfCopyingAndNeverReplacesADirectory() async throws {
+        let directory = try makeDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("recording.mp4"), output = directory.appendingPathComponent("nested/user.mp4")
+        try Data("first".utf8).write(to: source)
+        try await RecordingAutomationFiles.move(source, to: output)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path), "Saving must not leave a copy in app data")
+        XCTAssertEqual(try Data(contentsOf: output), Data("first".utf8))
+        try Data("second".utf8).write(to: source)
+        try await RecordingAutomationFiles.move(source, to: output)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        XCTAssertEqual(try Data(contentsOf: output), Data("second".utf8))
+        let folder = directory.appendingPathComponent("user-folder")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        try Data("third".utf8).write(to: source)
+        do { try await RecordingAutomationFiles.move(source, to: folder); XCTFail("A directory cannot be replaced as a recording file") }
+        catch { XCTAssertFalse(error is CancellationError) }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path), [])
+    }
+
+    func testSweepRemovesOnlyWeekOldFilesAndDiscardTouchesOnlyOwnedRecordings() throws {
+        let owned = try makeDirectory(), user = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: owned); try? FileManager.default.removeItem(at: user) }
+        let old = owned.appendingPathComponent("old.mp4"), fresh = owned.appendingPathComponent("fresh.mp4")
+        let stage = owned.appendingPathComponent(".stage"), nested = stage.appendingPathComponent("old.mp4")
+        let kept = user.appendingPathComponent("kept.mp4")
+        try FileManager.default.createDirectory(at: stage, withIntermediateDirectories: false)
+        for file in [old, fresh, nested, kept] { try Data("video".utf8).write(to: file) }
+        let lastWeek = Date(timeIntervalSinceNow: -8 * 86_400)
+        for item in [old, nested, stage, kept] { try FileManager.default.setAttributes([.modificationDate: lastWeek], ofItemAtPath: item.path) }
+        RecordingAutomationFiles.sweep(owned)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: old.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fresh.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: nested.path), "Only files directly in Recordings are swept")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: kept.path))
+        RecordingAutomationFiles.discardOwned(kept, in: owned)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: kept.path), "A user file outside Recordings is never deleted")
+        RecordingAutomationFiles.discardOwned(fresh, in: owned)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fresh.path))
+    }
+
     private func makeCoordinator() -> RecordingCoordinator {
         RecordingCoordinator(engine: CaptureEngine(), selection: SelectionSession(), windows: WindowList())
     }

@@ -17,6 +17,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var captureTask: Task<Void, Never>?
     private var outputTasks: [UUID: Task<Void, Never>] = [:]
     private var outputPanels: [UUID: SavePanelRouter] = [:]
+    /// Captures headed for a save panel; focus stays here until the panel has been answered.
+    private var pendingSaves: Set<UUID> = []
     private var ocrTasks: [UUID: Task<Void, Never>] = [:]
     private var automationTask: Task<AutomationResponse, Error>?
     private var automationRequestID: UUID?
@@ -51,6 +53,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var scrolling = ScrollCoordinator(engine: captureEngine, selection: selectionSession, windows: windowList,
                                                    onCapture: { [weak self] image, context in self?.handleCapture(image, context: context) })
     private let launchLog = OSLog(subsystem: "com.n1ko.niko-shot", category: "Lifecycle")
+    private var focusReturn: FocusReturn?
+    private var windowCloseObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
@@ -60,6 +64,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.scrolling.continueFromSelection(context: context)
         }
         selectionSession.onRecognizedText = { [weak self] in self?.rememberOCRText($0) }
+        focusReturn = FocusReturn()
+        selectionSession.onSessionEnd = { [weak self] in self?.returnFocusWhenIdle() }
+        windowCloseObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { [weak self] note in
+            let window = note.object as? NSWindow
+            MainActor.assumeIsolated {
+                if window?.styleMask.contains(.titled) == true { self?.returnFocusWhenIdle() }
+            }
+        }
         CapturePreviewController.shared.onEdit = { [weak self] record in self?.openHistoryImage(record, pin: false) }
         CapturePreviewController.shared.onPin = { [weak self] record in self?.openHistoryImage(record, pin: true) }
         CapturePreviewController.shared.onSave = { [weak self] record in self?.saveHistoryImage(record) }
@@ -73,7 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.installApplicationMenu()
             Task { [weak self] in
                 guard let self, !self.isTerminating else { return }
-                do { self.menuModel.recents = try await self.getHistoryStore().list(limit: 3) }
+                do { self.menuModel.recents = try await self.getHistoryStore().list(limit: 5) }
                 catch { if !self.isTerminating { ErrorPresenter.show(error) } }
             }
         }
@@ -83,7 +95,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu = MainMenuExtra(model: menuModel, hotkeys: hotkeys, action: { [weak self] id in
             if id == "history" { self?.showHistory(); return }
             if let action = CaptureAction(rawValue: id) { self?.perform(action) }
-        }, settings: { [weak self] in self?.showSettings() })
+        }, settings: { [weak self] in self?.showSettings() },
+        openRecent: { [weak self] record, pin in self?.openHistoryImage(record, pin: pin) })
         LaunchDiagnostics.record("status-and-hotkeys")
         os_signpost(.event, log: launchLog, name: "MenuReady")
         if let metricsPath = ProcessInfo.processInfo.environment["NIKO_STARTUP_METRICS"] {
@@ -110,51 +123,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func showSettings() {
         installApplicationMenu()
-        if settingsWindow == nil {
-            let window = UtilityWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: 600), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
-            window.title = "niko-shot 设置"
-            window.toolbarStyle = .unified
-            window.titlebarAppearsTransparent = true
-            window.isReleasedWhenClosed = false
-            window.contentMinSize = CGSize(width: 780, height: 540)
-            window.titlebarSeparatorStyle = .line
-            let restoredFrame = window.setFrameUsingName("NikoSettingsWorkspace")
-            window.setFrameAutosaveName("NikoSettingsWorkspace")
-            if let hotkeys {
-                window.contentView = NSHostingView(rootView: SettingsView(hotkeys: hotkeys,
-                    onShowWizard: { [weak self] in self?.showWizard() }))
-            }
-            if !restoredFrame { window.center() }
+        if settingsWindow == nil, let hotkeys {
+            let window = SettingsWindowFactory.makeWindow(hotkeys: hotkeys, onShowWizard: { [weak self] in self?.showWizard() })
             window.onClose = { [weak self] in self?.settingsWindow = nil }
             settingsWindow = window
         }
-        rememberActiveApp()
         settingsWindow?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
     }
 
     /// Opens the translation preferences directly without recreating an existing settings workspace.
     @objc func showTranslationSettings() {
-        SettingsNavigation.shared.opensTranslation = true
         showSettings()
+        (settingsWindow?.contentViewController as? SettingsTabController)?.select(.translation, animated: true)
     }
 
-    /// 打开辅助窗口前记住用户所在的前台应用：激活 niko-shot 会停用它，macOS 之后只会重新激活
-    /// 「上一个活跃应用」而不是用户原来置顶的那个窗口所属应用，导致小窗口被压到后面。
-    private var previouslyActiveApp: NSRunningApplication?
-
-    /// 截图会话开始时把用户送回原来的窗口层级，保证冻结画面、窗口列表和真实 z-order 一致。
-    func restorePreviouslyActiveApp() {
-        guard let app = previouslyActiveApp, !app.isTerminated else { previouslyActiveApp = nil; return }
-        previouslyActiveApp = nil
-        if app != NSWorkspace.shared.frontmostApplication { app.activate() }
-    }
-
-    /// 辅助窗口前置前记住用户所在的前台应用（niko-shot 自身活跃时不覆盖记录）。
-    private func rememberActiveApp() {
-        if let current = NSWorkspace.shared.frontmostApplication,
-           current.bundleIdentifier != Bundle.main.bundleIdentifier, !current.isTerminated {
-            previouslyActiveApp = current
+    /// Once a capture or the last niko-shot window closes, the app the user came from gets focus back,
+    /// along with any floating panels it only shows while active. Capture start never touches activation:
+    /// re-activating another app there raced the overlay for key status in 0.5.2.
+    private func returnFocusWhenIdle() {
+        focusReturn?.returnSoon { [weak self] in
+            guard let self, !self.isTerminating else { return false }
+            return self.captureTask == nil && self.automationTask == nil && self.selectionSession.state == .idle
+                && self.pendingSaves.isEmpty && !self.recording.isBusy && !self.scrolling.isBusy
         }
     }
 
@@ -163,7 +154,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if action == .pins { showPins(); return }
         if action == .togglePins { pinManager.toggleVisibility(); return }
         guard captureTask == nil, automationTask == nil, selectionSession.state == .idle, !recording.isBusy, !scrolling.isBusy else { return }
-        restorePreviouslyActiveApp()
         CapturePreviewController.shared.dismiss(animated: false)
         installApplicationMenu()
         if action == .record { recording.showSetup(); return }
@@ -231,11 +221,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         CaptureFeedback.playShutter()
         let previewScreen = context.screen.id != 0 ? context.screen.frame : (NSScreen.main?.frame ?? .zero)
         let previewScale = NSScreen.screens.first { $0.frame == previewScreen }?.backingScaleFactor ?? 2
+        // Files carry the display's pixel density so a Retina capture opens at its on-screen size.
+        let pixelScale = context.screen.id != 0 ? context.screen.scale : selectionSession.editorPixelScale
         let taskID = UUID()
+        // Marked before the session-end focus check runs, since storing a large capture outlasts it.
+        if action == .save { pendingSaves.insert(taskID) }
+        // The folder copy is the user's own record; it does not wait on, or depend on, the history archive.
+        let autoSaves = action != .save && !AppSettings.shared.autoSaveFolder.isEmpty
+        if autoSaves { autoSave(image, date: date, scale: pixelScale) }
         outputTasks[taskID] = Task {
-            defer { outputTasks[taskID] = nil }
+            defer { outputTasks[taskID] = nil; pendingSaves.remove(taskID) }
             do {
-                let saved = try await storeCapture(image, context: context, id: id, date: date) { png, file in
+                let saved = try await storeCapture(image, context: context, id: id, date: date, scale: pixelScale) { png, file in
                     if copies { ClipboardWriter.publish(id, png: png, image: image, date: date, file: file) }
                 }
                 let record = saved.record
@@ -246,15 +243,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if AppSettings.shared.autoOCR || interactiveOCR || context.kind == "ocr" {
                     recognizeCapture(image, record: record, show: interactiveOCR)
                 }
-                if action == .pin { pinManager.pin(image: image, url: file, thumbnail: record.thumbnail); return }
+                if action == .pin { pinManager.pin(image: image, url: file, thumbnail: record.thumbnail, scale: pixelScale); return }
                 if action == .save {
                     let router = SavePanelRouter()
                     outputPanels[taskID] = router
                     defer { outputPanels[taskID] = nil }
-                    guard let (url, format, quality) = withExtendedLifetime(router, { router.destination() }) else { return }
+                    NSApp.activate()
+                    let destination = withExtendedLifetime(router, { router.destination() })
+                    // The panel's close hands focus back once nothing else is pending.
+                    pendingSaves.remove(taskID)
+                    guard let (url, format, quality) = destination else { return }
                     try Task.checkCancellation()
                     try await Self.imageWork {
-                        let encoded = try Exporters.encode(image, format: format, quality: quality, date: date)
+                        let encoded = try Exporters.encode(image, format: format, quality: quality, date: date, scale: pixelScale)
                         try Task.checkCancellation()
                         try encoded.write(to: url, options: .atomic)
                     }
@@ -264,9 +265,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard action == .copy, AppSettings.shared.showsCapturePreview, selectionSession.state == .idle else { return }
                 let thumbnail = try await Self.imageWork { CapturePreviewController.makeThumbnail(image, backingScale: previewScale) }
                 guard let thumbnail, !isTerminating, selectionSession.state == .idle, captureTask == nil else { return }
-                CapturePreviewController.shared.show(record: record, thumbnail: thumbnail, screenFrame: previewScreen, status: "已复制")
+                CapturePreviewController.shared.show(record: record, thumbnail: thumbnail, screenFrame: previewScreen,
+                    status: autoSaves ? "已复制并保存" : "已复制")
             } catch is CancellationError {}
             catch { if !isTerminating, !Task.isCancelled { ErrorPresenter.show(error) } }
+        }
+    }
+
+    /// Writes the capture into the auto-save folder off the main thread. Failure is reported but never
+    /// costs the user the clipboard copy, preview or history entry that already happened.
+    private func autoSave(_ image: CGImage, date: Date, scale: CGFloat) {
+        let settings = AppSettings.shared
+        let folder = URL(fileURLWithPath: settings.autoSaveFolder, isDirectory: true)
+        let format = ExportFormat(rawValue: settings.exportFormatRaw) ?? .png, quality = settings.jpegQuality
+        let sequence = UserDefaults.standard.integer(forKey: "filenameSequence") + 1
+        UserDefaults.standard.set(sequence, forKey: "filenameSequence")
+        let name = Exporters.filename(template: settings.filenameTemplate, date: date, sequence: sequence, format: format)
+        let taskID = UUID()
+        outputTasks[taskID] = Task {
+            defer { outputTasks[taskID] = nil }
+            do {
+                try await Self.imageWork(priority: .utility) {
+                    let encoded = try Exporters.encode(image, format: format, quality: quality, date: date, scale: scale)
+                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                    // Two captures in the same second can race for one name; the loser takes the next one.
+                    for attempt in 1... {
+                        do { try encoded.write(to: Exporters.uniqueURL(in: folder, filename: name), options: .withoutOverwriting); break }
+                        catch let error as CocoaError where error.code == .fileWriteFileExists && attempt < 20 {}
+                    }
+                }
+            } catch is CancellationError {}
+            catch {
+                if !isTerminating { ErrorPresenter.show(AppError.file("没能保存到「\(folder.lastPathComponent)」：\(error.localizedDescription)")) }
+            }
         }
     }
 
@@ -277,11 +308,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Archives a capture: the PNG first (reported through `onArchived` with its file, or with no file
     /// when writing it failed), then its thumbnail and history row.
-    private func storeCapture(_ image: CGImage, context: CaptureContext, id: UUID = UUID(), date: Date = .now,
+    private func storeCapture(_ image: CGImage, context: CaptureContext, id: UUID = UUID(), date: Date = .now, scale: CGFloat,
                               onArchived: @MainActor (Data, URL?) -> Void = { _, _ in }) async throws -> SavedCapture {
         let file = AppPaths.captures.appendingPathComponent("\(id.uuidString).png")
         let (png, writeError) = try await Self.imageWork { () -> (Data, (any Error)?) in
-            let png = try Exporters.encode(image, format: .png, date: date)
+            let png = try Exporters.encode(image, format: .png, date: date, scale: scale)
             try Task.checkCancellation()
             do {
                 try FileManager.default.createDirectory(at: AppPaths.captures, withIntermediateDirectories: true)
@@ -293,14 +324,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         catch { try? FileManager.default.removeItem(at: file); throw error }
         if let writeError { onArchived(png, nil); throw writeError }
         onArchived(png, file)
-        let thumbnail = try await Self.imageWork { try Exporters.thumbnail(from: png) }
+        let record: HistoryRecord
+        do {
+            // Any failure before the row exists would leave a PNG that history can never show or prune.
+            let thumbnail = try await Self.imageWork { try Exporters.thumbnail(from: png) }
+            record = HistoryRecord(id: id, createdAt: date, path: file.path, thumbnail: thumbnail,
+                width: image.width, height: image.height, appBundleID: context.appBundleID, captureKind: context.kind)
+            try await getHistoryStore().insert(record)
+        } catch {
+            // Cancelled means quitting; the clipboard may already point at this file, so it stays.
+            if !(error is CancellationError) { try? FileManager.default.removeItem(at: file) }
+            throw error
+        }
         let store = try getHistoryStore()
-        let record = HistoryRecord(id: id, createdAt: date, path: file.path, thumbnail: thumbnail,
-            width: image.width, height: image.height, appBundleID: context.appBundleID, captureKind: context.kind)
-        do { try await store.insert(record) }
-        catch { try? FileManager.default.removeItem(at: file); throw error }
         try await store.prune(days: AppSettings.shared.historyRetention)
-        menuModel.recents = try await store.list(limit: 3)
+        menuModel.recents = try await store.list(limit: 5)
         return SavedCapture(record: record, png: png)
     }
 
@@ -311,21 +349,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         outputTasks[taskID] = Task {
             defer { outputTasks[taskID] = nil }
             do {
-                let image = try await Self.imageWork { () -> CGImage in
-                    guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: record.path) as CFURL, nil),
+                let (image, scale) = try await Self.imageWork { () -> (CGImage, CGFloat) in
+                    let url = URL(fileURLWithPath: record.path)
+                    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
                           let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { throw AppError.imageCreation }
-                    return image
+                    return (image, PinWindowManager.pixelScale(of: url) ?? 1)
                 }
                 guard !isTerminating else { return }
-                rememberActiveApp()
-                NSApp.activate(ignoringOtherApps: true)
+                NSApp.activate()
                 let router = SavePanelRouter()
                 outputPanels[taskID] = router
                 defer { outputPanels[taskID] = nil }
                 guard let (url, format, quality) = withExtendedLifetime(router, { router.destination() }) else { return }
                 let date = record.createdAt
                 try await Self.imageWork {
-                    let encoded = try Exporters.encode(image, format: format, quality: quality, date: date)
+                    let encoded = try Exporters.encode(image, format: format, quality: quality, date: date, scale: scale)
                     try encoded.write(to: url, options: .atomic)
                 }
                 UserDefaults.standard.set(UserDefaults.standard.integer(forKey: "filenameSequence") + 1, forKey: "filenameSequence")
@@ -348,8 +386,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 window.onClose = { [weak self] in self?.historyWindow = nil }
                 historyWindow = window
             }
-            rememberActiveApp()
-        historyWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+            historyWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         } catch { ErrorPresenter.show(error) }
     }
     func showPins() {
@@ -357,7 +394,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installApplicationMenu()
         pinManager.load()
         if pinsWindow == nil { let window = makeUtilityWindow(title: "贴图库"); window.contentView = NSHostingView(rootView: PinLibraryView(manager: pinManager)); window.onClose = { [weak self] in self?.pinsWindow = nil }; pinsWindow = window }
-        rememberActiveApp()
         pinsWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
     private func makeUtilityWindow(title: String) -> UtilityWindow {
@@ -374,13 +410,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         outputTasks[taskID] = Task {
             defer { outputTasks[taskID] = nil }
             do {
-                let image = try await Self.imageWork { () -> CGImage in
-                    guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: record.path) as CFURL, nil), let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { throw AppError.imageCreation }; return image
+                let (image, scale) = try await Self.imageWork { () -> (CGImage, CGFloat) in
+                    let url = URL(fileURLWithPath: record.path)
+                    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil), let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { throw AppError.imageCreation }
+                    return (image, PinWindowManager.pixelScale(of: url) ?? 1)
                 }
                 try Task.checkCancellation()
                 guard !isTerminating, selectionSession.state == .idle else { return }
-                if pin { pinManager.pin(image: image, url: URL(fileURLWithPath: record.path), thumbnail: record.thumbnail) }
-                else { selectionSession.edit(image: image, pointSize: CGSize(width: image.width, height: image.height)) { [weak self] image, context in self?.handleCapture(image, context: context) } }
+                if pin { pinManager.pin(image: image, url: URL(fileURLWithPath: record.path), thumbnail: record.thumbnail, scale: scale) }
+                else { selectionSession.edit(image: image, pointSize: CGSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)) { [weak self] image, context in self?.handleCapture(image, context: context) } }
             } catch is CancellationError {}
             catch { if !isTerminating, !Task.isCancelled { ErrorPresenter.show(error) } }
         }
@@ -423,7 +461,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.onClose = { [weak self] in self?.ocrWindow = nil }; ocrWindow = window
         }
         ocrWindow?.contentView = NSHostingView(rootView: OCRView(model: model, translationModel: translationModel))
-        rememberActiveApp()
         ocrWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
     private func reOCR(_ record: HistoryRecord) {
@@ -455,8 +492,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installApplicationMenu()
         if wizard == nil {
             let essentials: [CaptureAction] = [.region, .window, .scroll, .ocr, .record, .repeatRegion]
-            let shortcuts = essentials.map { action in
-                (action.title, (hotkeys?.shortcut(for: action) ?? action.defaultShortcut).displayString)
+            let shortcuts = essentials.compactMap { action in
+                hotkeys?.shortcut(for: action).map { (action.title, $0.displayString) }
             }
             wizard = WelcomeWindowController(onDemo: { [weak self] in
                 guard let self, self.captureTask == nil, self.automationTask == nil,
@@ -616,7 +653,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         try Task.checkCancellation()
-        let saved = try await storeCapture(captured.0, context: captured.1)
+        // Editor results (long screenshots) report the fit-to-window canvas, not the display's density.
+        let pixelScale = captured.1.screen.id != 0 ? captured.1.screen.scale : selectionSession.editorPixelScale
+        let saved = try await storeCapture(captured.0, context: captured.1, scale: pixelScale)
         var text: String?
         if command.autoOCR || command.action == .ocr {
             let blocks = try await ocrEngine.recognize(captured.0, languages: AppSettings.shared.ocrLanguages,
@@ -631,7 +670,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let requestedOutput {
             let format = try imageFormat(for: requestedOutput), date = saved.record.createdAt, quality = AppSettings.shared.jpegQuality
             try await Self.imageWork {
-                let encoded = try Exporters.encode(captured.0, format: format, quality: quality, date: date)
+                let encoded = try Exporters.encode(captured.0, format: format, quality: quality, date: date, scale: pixelScale)
                 try Task.checkCancellation()
                 try FileManager.default.createDirectory(at: requestedOutput.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try encoded.write(to: requestedOutput, options: .atomic)
@@ -709,6 +748,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         hotkeys?.stop()
+        focusReturn?.stop()
+        if let windowCloseObserver { NotificationCenter.default.removeObserver(windowCloseObserver) }
         captureTask?.cancel()
         countdown.cancel()
         selectionSession.finish()
@@ -725,7 +766,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let path = ProcessInfo.processInfo.environment["NIKO_TEARDOWN_METRICS"] {
             let metrics: [String: Any] = [
                 "selectionWindows": selectionSession.windowCount, "selectionMonitors": selectionSession.monitorCount,
-                "displayLinks": selectionSession.displayLinkCount, "countdownWindows": countdown.windowCount,
+                "countdownWindows": countdown.windowCount,
                 "countdownMonitors": countdown.monitorCount, "hotkeyHandlers": hotkeys?.isRunning == true ? 1 : 0,
                 "registeredHotkeys": hotkeys?.registeredActions.count ?? 0,
                 "automationObservers": stoppedServer?.observerCount ?? 0,

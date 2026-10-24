@@ -51,7 +51,7 @@ final class WelcomeWindowController {
 
     func show() {
         if let window { window.makeKeyAndOrderFront(nil); status.refresh(); return }
-        let window = UtilityWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 640),
+        let window = UtilityWindow(contentRect: CGRect(x: 0, y: 0, width: 520, height: 480),
                                    styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = "欢迎使用 niko-shot"
         window.titlebarAppearsTransparent = true
@@ -67,7 +67,7 @@ final class WelcomeWindowController {
         self.window = window
         status.startUpdating()
         window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
     }
 
     func close() {
@@ -95,92 +95,68 @@ private struct WelcomeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 10) {
+            VStack(spacing: 8) {
                 Image(nsImage: NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath))
-                    .resizable().frame(width: 76, height: 76)
-                    .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
-                    .accessibilityHidden(true)
-                Text("欢迎使用 niko-shot").font(.system(size: 26, weight: .bold))
-                Text("截图、标注、长截图、文字识别与录屏，都在菜单栏里随叫随到。")
-                    .font(.system(size: 13)).foregroundStyle(.secondary)
+                    .resizable().frame(width: 72, height: 72).accessibilityHidden(true)
+                Text("欢迎使用 niko-shot").font(.system(size: 22, weight: .semibold))
+                Text(intro).font(.system(size: 13)).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 48)
             }
-            .padding(.top, 44).padding(.bottom, 22)
+            .padding(.top, 40).padding(.bottom, 8)
 
-            VStack(alignment: .leading, spacing: 10) {
-                Text("权限").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
-                ForEach(PermissionKind.allCases) { kind in permissionCard(kind) }
-                Text("麦克风和摄像头只在你开启对应的录制选项时才会询问。")
-                    .font(.system(size: 11)).foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, 36)
-
-            if !shortcuts.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("常用快捷键").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
-                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 8) {
-                        ForEach(shortcuts, id: \.0) { item in
-                            HStack {
-                                Text(item.0).font(.system(size: 12))
-                                Spacer(minLength: 6)
-                                Text(item.1).font(.system(size: 12, weight: .medium, design: .rounded)).monospacedDigit()
-                                    .padding(.horizontal, 7).padding(.vertical, 3)
-                                    .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-                            }
-                        }
-                    }
+            Form {
+                Section {
+                    ForEach(PermissionKind.allCases) { kind in permissionRow(kind) }
+                } footer: {
+                    Text("麦克风和摄像头只在录屏时打开对应选项才会询问。")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(.horizontal, 36).padding(.top, 22)
             }
+            .formStyle(.grouped).scrollDisabled(true).scrollContentBackground(.hidden)
+            .frame(height: 190)
 
-            Spacer(minLength: 16)
+            Spacer(minLength: 0)
             Divider()
             HStack(spacing: 10) {
-                Button("试截一张", action: demo).controlSize(.large)
+                Button("试截一张", action: demo)
                     .disabled(status.granted[.screenRecording] != true)
-                    .help(status.granted[.screenRecording] == true ? "拖动框选一块区域，按 ↩ 复制" : "先授予屏幕录制权限")
+                    .help(status.granted[.screenRecording] == true ? "框选一块区域，按 ↩ 复制" : "先允许屏幕录制")
                 Spacer()
-                Button("开始使用", action: finish).controlSize(.large).buttonStyle(.borderedProminent)
+                Button("完成", action: finish).buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
             }
-            .padding(.horizontal, 24).padding(.vertical, 16)
+            .controlSize(.large)
+            .padding(.horizontal, 20).padding(.vertical, 14)
         }
-        .frame(width: 600, height: 640)
+        .frame(width: 520, height: 480)
+        .tint(NikoTheme.accent)
     }
 
-    private func permissionCard(_ kind: PermissionKind) -> some View {
-        let granted = status.granted[kind] == true
-        return HStack(spacing: 14) {
-            Image(systemName: kind.symbol).font(.system(size: 18, weight: .medium))
-                .foregroundStyle(granted ? Color.green : Color.accentColor)
-                .frame(width: 40, height: 40)
-                .background((granted ? Color.green : Color.accentColor).opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(kind.title).font(.system(size: 13, weight: .semibold))
-                    Text(kind.isRequired ? "必需" : "推荐").font(.system(size: 10, weight: .medium))
-                        .padding(.horizontal, 6).padding(.vertical, 1.5)
-                        .foregroundStyle(kind.isRequired ? Color.accentColor : .secondary)
-                        .background((kind.isRequired ? Color.accentColor : Color.secondary).opacity(0.12), in: Capsule())
-                }
-                Text(kind.purpose).font(.system(size: 11)).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 8)
-            if granted {
-                Label("已授权", systemImage: "checkmark.circle.fill").font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.green).labelStyle(.titleAndIcon)
-            } else if status.states[kind] == .grantedNeedsRelaunch {
-                Button("重新打开以生效") { AppRelauncher.relaunch() }
-                    .controlSize(.regular).buttonStyle(.borderedProminent)
-                    .help("已在系统设置中授权；屏幕录制在重新打开 niko-shot 后生效")
-            } else {
-                Button("授权…") { authorize(kind) }.controlSize(.regular)
-                    .accessibilityLabel("授权\(kind.title)")
-            }
+    private var intro: String {
+        if let region = shortcuts.first(where: { $0.0 == CaptureAction.region.title }) {
+            return "按 \(region.1) 框选截图。其他功能都在菜单栏图标里，也可以在设置中为它们指定快捷键。"
         }
-        .padding(12)
-        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.07), lineWidth: 0.5))
+        return "点按菜单栏图标开始截图。可以在设置中为常用功能指定快捷键。"
+    }
+
+    private func permissionRow(_ kind: PermissionKind) -> some View {
+        let granted = status.granted[kind] == true
+        return LabeledContent {
+            if granted {
+                Label("已允许", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.secondary).symbolRenderingMode(.multicolor)
+            } else if status.states[kind] == .grantedNeedsRelaunch {
+                Button("重新打开") { AppRelauncher.relaunch() }
+                    .help("屏幕录制权限在重新打开 niko-shot 后生效")
+            } else {
+                Button("去授权…") { authorize(kind) }
+            }
+        } label: {
+            Text(kind.isRequired ? kind.title : "\(kind.title)（可选）")
+            Text(kind.purpose)
+        }
         .animation(.easeOut(duration: 0.2), value: granted)
     }
 }

@@ -96,12 +96,11 @@ final class ScreenshotTextModel {
 
     var canRetryRecognition: Bool { isActive && !ocr.isRecognizing && ocr.errorMessage != nil }
 
-    var providerSelection: String {
-        if settings.translationProvider == .custom, let id = settings.selectedCustomTranslationID,
-           settings.customTranslationServices.contains(where: { $0.id == id }) {
-            return "instance.\(id.uuidString)"
-        }
-        return settings.translationProvider.rawValue
+    var providerSelection: String { TranslationServiceChoice.tag(settings) }
+
+    /// The inline picker offers only ready services; any other pick would turn translation off in every window.
+    var availableServices: (providers: [TranslationProviderID], custom: [CustomRESTConfiguration]) {
+        TranslationServiceChoice.configured(settings)
     }
 
     /// Displays pending work before the selection has finished exporting its pixels.
@@ -226,15 +225,9 @@ final class ScreenshotTextModel {
     }
 
     func selectProvider(_ value: String) {
-        guard isActive, value != providerSelection else { return }
-        if value.hasPrefix("instance."), let id = UUID(uuidString: String(value.dropFirst("instance.".count))),
-           settings.customTranslationServices.contains(where: { $0.id == id }) {
-            settings.translationProvider = .custom
-            settings.selectedCustomTranslationID = id
-        } else if let provider = TranslationProviderID(rawValue: value) {
-            settings.translationProvider = provider
-            if provider == .custom { settings.selectedCustomTranslationID = nil }
-        }
+        // The generic custom entry names no instance, so it can never translate.
+        guard isActive, value != providerSelection, value != TranslationProviderID.custom.rawValue else { return }
+        TranslationServiceChoice.select(value, in: settings)
         providerConfigurationChanged()
     }
 

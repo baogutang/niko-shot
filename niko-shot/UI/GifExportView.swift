@@ -35,10 +35,10 @@ struct GifExportView: View {
                         formRow("宽度") {
                             HStack(spacing: 12) {
                                 if maximumWidth > minimumWidth {
-                                    Slider(value: widthBinding, in: Double(minimumWidth)...Double(maximumWidth), step: 1)
+                                    Slider(value: widthBinding, in: Double(minimumWidth)...Double(maximumWidth))
                                         .accessibilityLabel("GIF 输出宽度")
                                 }
-                                Text("\(outputWidth) px").monospacedDigit()
+                                Text(verbatim: "\(outputWidth) px").monospacedDigit()
                                     .foregroundStyle(.secondary).frame(width: 68, alignment: .trailing)
                             }
                         }
@@ -47,7 +47,7 @@ struct GifExportView: View {
                                 ForEach([5, 10, 15, 24, 30], id: \.self) { Text("\($0)").tag($0) }
                             }.pickerStyle(.segmented).labelsHidden().accessibilityLabel("GIF 帧率，每秒帧数")
                         }
-                        Text("默认 800 px · 降低尺寸或帧率可减小文件")
+                        Text("尺寸或帧率越低，文件越小。")
                             .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }.disabled(isExporting)
                     Divider()
@@ -63,7 +63,7 @@ struct GifExportView: View {
                             metric("时长", value: "\(safeDuration.formatted(.number.precision(.fractionLength(1)))) 秒")
                             metric("帧数", value: "\(Int(ceil(safeDuration * Double(outputFPS))))")
                         }
-                        Label("循环播放 · 实际体积随画面内容变化", systemImage: "repeat")
+                        Label("循环播放。实际大小取决于画面内容。", systemImage: "repeat")
                             .font(.system(size: 12)).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }

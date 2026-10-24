@@ -56,10 +56,10 @@ final class AnnotationCanvasView: NSView {
     private var keyboardEndpoint: CGPoint?
     private var syncingStyle = false
     private var isFinishing = false
-    private var previewJobs: [UUID: Task<CGImage, Error>] = [:]
-    private var previewGeneration = UUID()
+    /// At most one effect render runs; a change while it runs queues exactly one more with the latest marks.
+    private var previewJob: (token: UUID, task: Task<CGImage, Error>)?
     private var requestedPreview: [AnnotationItem] = []
-    fileprivate private(set) var renderedPreview: CGImage?
+    private(set) var renderedPreview: CGImage?
     private var textEditor: AnnotationTextEditor?
     private var hiddenItemID: UUID?
     /// The item last changed by a repeatable gesture; repeats within a second extend that undo step.
@@ -77,7 +77,7 @@ final class AnnotationCanvasView: NSView {
     override var acceptsFirstResponder: Bool { true }
 
     var resourceCounts: [String: Int] {
-        ["pendingGesture": pending == nil ? 0 : 1, "preview": previewJobs.count, "textAlert": textEditor == nil ? 0 : 1]
+        ["pendingGesture": pending == nil ? 0 : 1, "preview": previewJob == nil ? 0 : 1, "textAlert": textEditor == nil ? 0 : 1]
     }
     var isEditingText: Bool { textEditor != nil }
 
@@ -108,26 +108,27 @@ final class AnnotationCanvasView: NSView {
         let items = renderSplit.rendered
         guard items != requestedPreview else { return }
         requestedPreview = items
-        previewGeneration = UUID()
-        for job in previewJobs.values { job.cancel() }
-        guard !items.isEmpty else {
-            renderedPreview = nil
-            return
-        }
-        let token = previewGeneration, base = base
-        var snapshot = document
-        snapshot = AnnotationDocument(canvasSize: document.canvasSize)
+        if items.isEmpty { renderedPreview = nil }
+        else if previewJob == nil { startPreview(items) }
+    }
+
+    /// Renders on a worker and shows each result even if the marks moved on meanwhile: cancelling on every
+    /// mouse move left large captures without any mosaic or blur until the pointer stopped.
+    private func startPreview(_ items: [AnnotationItem]) {
+        let token = UUID(), base = base
+        var snapshot = AnnotationDocument(canvasSize: document.canvasSize)
         for item in items { snapshot.append(item) }
         let scale = CGFloat(base.width) / max(1, document.canvasSize.width)
         let job = Task.detached(priority: .userInitiated) { try AnnotationRenderer.render(base: base, document: snapshot, scale: scale) }
-        previewJobs[token] = job
+        previewJob = (token, job)
         Task { [weak self] in
             let image = try? await job.value
-            guard let self else { return }
-            self.previewJobs[token] = nil
-            guard !self.isFinishing, self.previewGeneration == token else { return }
+            guard let self, self.previewJob?.token == token else { return }
+            self.previewJob = nil
+            guard !self.isFinishing, !self.requestedPreview.isEmpty else { return }
             self.renderedPreview = image
             self.overlay.needsDisplay = true
+            if self.requestedPreview != items { self.startPreview(self.requestedPreview) }
         }
     }
     func undo() { guard !isFinishing else { return }; amendable = nil; commitTextEditing(); clearPending(); document.undo(); refresh() }
@@ -146,7 +147,7 @@ final class AnnotationCanvasView: NSView {
     /// Stops input and removes the inline editor before the owning session closes.
     func prepareForFinish() {
         isFinishing = true
-        for job in previewJobs.values { job.cancel() }
+        previewJob?.task.cancel()
         renderedPreview = nil
         clearPending()
         textEditor?.removeFromSuperview(); textEditor = nil; hiddenItemID = nil
@@ -154,9 +155,8 @@ final class AnnotationCanvasView: NSView {
 
     func finishAndDrain() async {
         prepareForFinish()
-        let jobs = Array(previewJobs.values)
-        for job in jobs { _ = try? await job.value }
-        previewJobs.removeAll()
+        if let job = previewJob { _ = try? await job.task.value }
+        previewJob = nil
     }
 
     // MARK: - Drawing support for the overlay
@@ -509,6 +509,9 @@ final class AnnotationCanvasView: NSView {
         var item = editor.item
         item.text = text
         item.rect.size = textSize(for: item)
+        // Removing the focused editor hands first responder to the window, which would leave Escape, Return,
+        // Command-Z and the arrows unanswered until the next click.
+        let editorHadFocus = window?.firstResponder === editor.textView
         editor.removeFromSuperview()
         if text.isEmpty {
             if !editor.isNew { document.remove(id: item.id) }
@@ -517,7 +520,7 @@ final class AnnotationCanvasView: NSView {
         } else {
             commit(item)
         }
-        if window?.firstResponder === editor.textView || window?.firstResponder == nil { window?.makeFirstResponder(self) }
+        if editorHadFocus || window?.firstResponder == nil { window?.makeFirstResponder(self) }
         refresh()
         updateAccessibility()
     }

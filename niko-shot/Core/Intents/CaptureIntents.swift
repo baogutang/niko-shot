@@ -21,7 +21,7 @@ public struct CaptureRegionIntent: AppIntent {
     public static var openAppWhenRun: Bool { true }
     /// Whole seconds before capture.
     @Parameter(title: "延时（秒）", default: 0, inclusiveRange: (0, 10)) public var delay: Int
-    /// Optional file destination; tilde and relative paths are supported.
+    /// Optional file destination; `~` expands and relative paths resolve against the Desktop.
     @Parameter(title: "输出路径") public var outputPath: String?
     /// Whether the captured image should be recognized for searchable history.
     @Parameter(title: "自动 OCR", default: true) public var autoOCR: Bool

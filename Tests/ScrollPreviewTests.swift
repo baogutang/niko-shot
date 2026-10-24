@@ -59,7 +59,7 @@ final class ScrollPreviewTests: XCTestCase {
 
     func testHUDPlacementPrefersBelowThenAbove() {
         let visible = CGRect(x: 0, y: 0, width: 1_440, height: 900)
-        let size = CGSize(width: 520, height: 56)
+        let size = CGSize(width: 600, height: 56)
         let below = ScrollControlBarController.placement(size: size, near: CGRect(x: 400, y: 300, width: 500, height: 400), visible: visible)
         XCTAssertEqual(below.maxY, 288)
         let above = ScrollControlBarController.placement(size: size, near: CGRect(x: 400, y: 20, width: 500, height: 400), visible: visible)

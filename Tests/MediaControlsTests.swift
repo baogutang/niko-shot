@@ -40,6 +40,14 @@ final class MediaControlsTests: XCTestCase {
         XCTAssertEqual(session.state, .idle)
     }
 
+    func testShortOrInactiveRecordingCancelsWithoutConfirmation() {
+        var cancels = 0
+        let controller = RecordingControlBarController(session: RecordingSession(), onStop: {}, onCancel: { cancels += 1 }, onCamera: { _ in })
+        controller.requestCancel()
+        XCTAssertEqual(cancels, 1, "Only recordings longer than five seconds ask before discarding")
+        controller.close()
+    }
+
     func testEmptyCameraPreviewClosesAndReleasesControllerWithoutStartingSession() throws {
         let session = AVCaptureSession()
         let existingWindows = Set(NSApplication.shared.windows.map(ObjectIdentifier.init))

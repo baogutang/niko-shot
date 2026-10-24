@@ -100,12 +100,43 @@ final class ScrollSelectionOverlayTests: XCTestCase {
         controller.update(context: context)
         XCTAssertEqual(controller.windowCount, 1)
         XCTAssertFalse(removed.isVisible); XCTAssertNil(removed.contentView)
+        // A display change re-lays the overlay out instead of closing it; the live window stays the same.
+        let number = controller.windowNumbers
         NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        XCTAssertEqual(controller.windowCount, 1); XCTAssertEqual(controller.observerCount, 2)
+        XCTAssertEqual(controller.windowNumbers, number)
+        controller.show(context: CaptureContext(screen: screen, localRect: .zero))
         XCTAssertEqual(controller.windowCount, 0); XCTAssertEqual(controller.observerCount, 0)
         controller.update(context: context)
         XCTAssertEqual(controller.windowCount, 0)
-        controller.show(context: CaptureContext(screen: screen, localRect: .zero))
-        XCTAssertEqual(controller.windowCount, 0); XCTAssertEqual(controller.observerCount, 0)
+    }
+
+    /// Region capture uses an overlay window number as its "below this window" reference, so display
+    /// reconfiguration must move the existing panels, keep their numbers and keep updates working.
+    func testDisplayReconfigurationRepositionsPanelsAndKeepsWindowNumbers() throws {
+        let screen = ScreenGeometry(id: 76, frame: CGRect(x: 0, y: 0, width: 400, height: 300), scale: 1)
+        let side = CGRect(x: 400, y: 0, width: 300, height: 300)
+        let screens = ScrollOverlayScreenFixture(frames: [screen.frame, side])
+        let controller = ScrollSelectionOverlayController(screenFrames: { screens.frames })
+        defer { controller.close() }
+        controller.show(context: CaptureContext(screen: screen, localRect: CGRect(x: 40, y: 40, width: 200, height: 150)))
+        let target = try XCTUnwrap(controller.frames.first { $0.screenFrame == screen.frame }).windowNumber
+        let numbers = Set(controller.windowNumbers)
+        // The side display moves; the target display is untouched.
+        let moved = CGRect(x: -300, y: 0, width: 300, height: 300)
+        screens.frames = [screen.frame, moved]
+        NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        XCTAssertEqual(Set(controller.windowNumbers), numbers, "panels are moved, not recreated")
+        XCTAssertEqual(controller.frames.first { $0.screenFrame == screen.frame }?.windowNumber, target)
+        XCTAssertEqual(controller.frames.map(\.screenFrame), [screen.frame, moved])
+        let movedPanel = try XCTUnwrap(try panels(for: controller).first { $0.frame == moved })
+        XCTAssertTrue(movedPanel.isVisible)
+        XCTAssertEqual(movedPanel.contentView?.frame.size, moved.size)
+        // Updates keep working after the change.
+        controller.update(context: CaptureContext(screen: screen, localRect: CGRect(x: 100, y: 60, width: 120, height: 90)))
+        XCTAssertEqual(controller.frames.first { $0.screenFrame == screen.frame }?.localSelection,
+                       CGRect(x: 100, y: 150, width: 120, height: 90))
+        XCTAssertTrue(controller.windowNumbers.contains(target))
     }
 
     private func panels(for controller: ScrollSelectionOverlayController) throws -> [NSWindow] {

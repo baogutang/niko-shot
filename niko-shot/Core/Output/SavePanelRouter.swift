@@ -16,6 +16,8 @@ final class SavePanelRouter: NSObject {
         let stack = NSStackView(views: [NSTextField(labelWithString: "格式"), formatMenu, NSTextField(labelWithString: "质量"), quality])
         stack.frame.size = CGSize(width: 400, height: 32)
         panel.accessoryView = stack; panel.canCreateDirectories = true
+        let n = UserDefaults.standard.integer(forKey: "filenameSequence") + 1
+        panel.nameFieldStringValue = Exporters.filename(template: AppSettings.shared.filenameTemplate, date: .now, sequence: n, format: selectedFormat)
         formatChanged()
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
         return (url, selectedFormat, quality.doubleValue)
@@ -26,7 +28,13 @@ final class SavePanelRouter: NSObject {
     @objc private func formatChanged() {
         panel.allowedContentTypes = [selectedFormat.type]
         quality.isEnabled = selectedFormat == .jpeg || selectedFormat == .heif
-        let n = UserDefaults.standard.integer(forKey: "filenameSequence") + 1
-        panel.nameFieldStringValue = Exporters.filename(template: AppSettings.shared.filenameTemplate, date: .now, sequence: n, format: selectedFormat)
+        panel.nameFieldStringValue = Self.name(panel.nameFieldStringValue, withExtensionOf: selectedFormat)
+    }
+    /// Swaps only a known image extension, so a typed name (even one with dots in it) survives a format change.
+    nonisolated static func name(_ name: String, withExtensionOf format: ExportFormat) -> String {
+        let known: Set<String> = ["png", "jpg", "jpeg", "heic", "heif", "tif", "tiff"]
+        let ext = (name as NSString).pathExtension
+        let stem = known.contains(ext.lowercased()) ? (name as NSString).deletingPathExtension : name
+        return (stem.isEmpty ? "niko-shot" : stem) + "." + format.fileExtension
     }
 }

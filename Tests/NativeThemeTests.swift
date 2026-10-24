@@ -6,26 +6,32 @@ import XCTest
 
 @MainActor
 final class NativeThemeTests: XCTestCase {
+  func testCaptureChromeUsesTheIconAmberInEveryAppearance() throws {
+    for name in [NSAppearance.Name.aqua, .darkAqua] {
+      let appearance = try XCTUnwrap(NSAppearance(named: name))
+      appearance.performAsCurrentDrawingAppearance {
+        let color = CaptureChrome.accent.usingColorSpace(.sRGB)
+        XCTAssertEqual(color?.redComponent ?? 0, 0.909804, accuracy: 0.0001)
+        XCTAssertEqual(color?.greenComponent ?? 0, 0.639216, accuracy: 0.0001)
+      }
+    }
+  }
+
   func testEntirePaletteResolvesOffMainWithLightDarkAndIncreasedContrast() async {
+    let amberLight: [Double] = [0.678431, 0.443137, 0.066667, 1], amberDark: [Double] = [0.909804, 0.639216, 0.2, 1]
+    let ink: [Double] = [0.109804, 0.090196, 0.062745, 1]
+    // System surfaces only need to resolve off main; their values belong to macOS.
     let swatches: [ThemeSwatch] = [
-      ThemeSwatch(name: "canvas", color: NikoTheme.canvas,
-        light: [0.952941, 0.929412, 0.886275, 1], dark: [0.070588, 0.078431, 0.090196, 1]),
-      ThemeSwatch(name: "surface", color: NikoTheme.surface,
-        light: [0.984314, 0.972549, 0.949020, 1], dark: [0.117647, 0.133333, 0.149020, 1]),
-      ThemeSwatch(name: "raisedSurface", color: NikoTheme.raisedSurface,
-        light: [1.0, 0.992157, 0.968627, 1], dark: [0.149020, 0.168627, 0.188235, 1]),
-      ThemeSwatch(name: "accent", color: NikoTheme.accent,
-        light: [0.784314, 0.250980, 0.184314, 1], dark: [0.949020, 0.701961, 0.239216, 1]),
-      ThemeSwatch(name: "onAccent", color: NikoTheme.onAccent,
-        light: [0.992157, 0.968627, 0.941176, 1], dark: [0.133333, 0.094118, 0.015686, 1]),
+      ThemeSwatch(name: "canvas", color: NikoTheme.canvas, light: nil, dark: nil),
+      ThemeSwatch(name: "surface", color: NikoTheme.surface, light: nil, dark: nil),
+      ThemeSwatch(name: "raisedSurface", color: NikoTheme.raisedSurface, light: nil, dark: nil),
+      ThemeSwatch(name: "accent", color: NikoTheme.accent, light: amberLight, dark: amberDark),
+      ThemeSwatch(name: "onAccent", color: NikoTheme.onAccent, light: ink, dark: ink),
       ThemeSwatch(name: "selection", color: NikoTheme.selection,
-        light: [0.784314, 0.250980, 0.184314, 0.12], dark: [0.949020, 0.701961, 0.239216, 0.12]),
-      ThemeSwatch(name: "separator", color: NikoTheme.separator,
-        light: [0.886275, 0.850980, 0.776471, 1], dark: [0.164706, 0.176471, 0.196078, 1]),
-      ThemeSwatch(name: "translation", color: NikoTheme.translation,
-        light: [0.184314, 0.364706, 0.384314, 1], dark: [0.372549, 0.701961, 0.631373, 1]),
-      ThemeSwatch(name: "seal", color: NikoTheme.seal,
-        light: [0.784314, 0.250980, 0.184314, 1], dark: [0.807843, 0.207843, 0.152941, 1])
+        light: Array(amberLight.prefix(3)) + [0.14], dark: Array(amberDark.prefix(3)) + [0.14]),
+      ThemeSwatch(name: "separator", color: NikoTheme.separator, light: nil, dark: nil),
+      ThemeSwatch(name: "translation", color: NikoTheme.translation, light: nil, dark: nil),
+      ThemeSwatch(name: "seal", color: NikoTheme.seal, light: nil, dark: nil)
     ]
     let samples = await Task.detached { @Sendable in Self.resolve(swatches) }.value
     XCTAssertEqual(samples.count, swatches.count * 6)

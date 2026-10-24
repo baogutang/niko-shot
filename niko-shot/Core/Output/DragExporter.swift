@@ -1,40 +1,67 @@
-// Uses NSFilePromiseProvider to deliver native files to Finder and other drag destinations.
+// Drags an archived capture out as a real file URL plus PNG data, under a readable name instead of its UUID.
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-final class FilePromiseDelegate: NSObject, NSFilePromiseProviderDelegate, Sendable {
-    let source: URL
-    init(source: URL) { self.source = source }
-    func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider, fileNameForType fileType: String) -> String { source.lastPathComponent }
-    func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider, writePromiseTo url: URL, completionHandler: @escaping ((any Error)?) -> Void) {
-        do { try FileManager.default.copyItem(at: source, to: url); completionHandler(nil) } catch { completionHandler(error) }
+enum DragExport {
+    /// "niko-shot 2026-10-24 13.05.12.png": the name a dropped capture lands under.
+    static func fileName(for date: Date, pathExtension: String = "png") -> String {
+        let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH.mm.ss"
+        return "niko-shot " + formatter.string(from: date) + "." + (pathExtension.isEmpty ? "png" : pathExtension)
+    }
+
+    static var stagingRoot: URL { FileManager.default.temporaryDirectory.appendingPathComponent("niko-shot-drag", isDirectory: true) }
+
+    /// Clones the archive under its readable name into a folder of its own; on APFS the clone is instant.
+    /// The copy outlives the drop because Terminal pastes its path and uploaders read it later.
+    static func stagedFile(for source: URL, date: Date?, in root: URL = stagingRoot) throws -> URL {
+        let created = date ?? (try? source.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? .now
+        let folder = root.appendingPathComponent(source.deletingPathExtension().lastPathComponent, isDirectory: true)
+        let target = folder.appendingPathComponent(fileName(for: created, pathExtension: source.pathExtension))
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? FileManager.default.removeItem(at: target)
+        try FileManager.default.copyItem(at: source, to: target)
+        return target
+    }
+
+    /// The file URL serves Finder, Terminal and web upload areas; PNG serves targets that take only images.
+    /// Both are plain data: the file already exists, so nothing is encoded or promised on the main thread.
+    static func pasteboardItem(for file: URL) -> NSPasteboardItem {
+        let item = NSPasteboardItem()
+        item.setString(file.absoluteString, forType: .fileURL)
+        if UTType(filenameExtension: file.pathExtension)?.conforms(to: .png) == true,
+           let png = try? Data(contentsOf: file, options: .mappedIfSafe) { item.setData(png, forType: .png) }
+        return item
+    }
+
+    @MainActor static func draggingItem(for source: URL, date: Date?, frame: CGRect, image: NSImage) -> NSDraggingItem {
+        let file = (try? stagedFile(for: source, date: date)) ?? source
+        let item = NSDraggingItem(pasteboardWriter: pasteboardItem(for: file))
+        item.setDraggingFrame(frame, contents: image)
+        return item
     }
 }
 
 @MainActor
 final class FileDragView: NSImageView {
     var source: URL?
-    private var promiseDelegate: FilePromiseDelegate?
+    var date: Date?
     override func mouseDragged(with event: NSEvent) {
         guard let source, let image else { return }
-        let delegate = FilePromiseDelegate(source: source)
-        promiseDelegate = delegate
-        let provider = NSFilePromiseProvider(fileType: UTType(filenameExtension: source.pathExtension)?.identifier ?? UTType.png.identifier, delegate: delegate)
-        let item = NSDraggingItem(pasteboardWriter: provider)
-        item.setDraggingFrame(bounds, contents: image)
-        beginDraggingSession(with: [item], event: event, source: self)
+        beginDraggingSession(with: [DragExport.draggingItem(for: source, date: date, frame: bounds, image: image)], event: event, source: self)
     }
 }
 
 extension FileDragView: NSDraggingSource {
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
-    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) { promiseDelegate = nil }
 }
 
 struct FileDragPreview: NSViewRepresentable {
     let url: URL
     let image: NSImage
+    /// Capture time for the dragged file's name; without it the file's creation date is used.
+    var date: Date? = nil
     func makeNSView(context: Context) -> FileDragView {
         let view = FileDragView()
         view.imageScaling = .scaleProportionallyUpOrDown
@@ -49,5 +76,5 @@ struct FileDragPreview: NSViewRepresentable {
               width.isFinite, height.isFinite, width > 0, height > 0 else { return nil }
         return CGSize(width: width, height: height)
     }
-    func updateNSView(_ view: FileDragView, context: Context) { view.source = url; view.image = image }
+    func updateNSView(_ view: FileDragView, context: Context) { view.source = url; view.date = date; view.image = image }
 }

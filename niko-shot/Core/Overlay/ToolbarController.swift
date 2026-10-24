@@ -69,6 +69,8 @@ final class ToolbarController {
     private var preferredTextResultHeight: CGFloat = 280
 
     var windowCount: Int { panel == nil ? 0 : 1 }
+    var isVisible: Bool { panel?.isVisible == true }
+    var panelWindow: NSWindow? { panel }
     var panelFrame: CGRect? { panel?.frame }
     var isPropertyBarVisible: Bool { stack?.properties != nil }
     /// Retained transient controls; the redesigned bars own none.
@@ -96,6 +98,13 @@ final class ToolbarController {
         stack.main.setScrollAvailability(enabled: scrollEnabled, explanation: scrollExplanation)
         relayout()
         CaptureChrome.present(panel, content: stack)
+    }
+
+    /// Steps out of the way while the selection is being dragged; `show` brings it back in place.
+    func hide() {
+        guard let panel, panel.isVisible else { return }
+        HUDTooltip.shared.hide()
+        panel.orderOut(nil)
     }
 
     private func makePanel() {

@@ -34,6 +34,23 @@ final class RecordingAudioTests: XCTestCase {
         XCTAssertEqual(block.samples[200], 0.25, accuracy: 0.01)
     }
 
+    func testMicrophoneWithMoreThanTwoChannelsKeepsItsFirstPair() throws {
+        // AVAudioFormat(commonFormat:channels:) returns nil above two channels without a layout.
+        let router = try AudioRouter(systemAudio: false, microphone: true)
+        var samples: [Float] = []
+        for _ in 0..<4_410 { samples += [0.25, -0.25, 0.9, -0.9] }
+        try router.append(RecordingPCMFrame(sourceTime: 0, sampleRate: 44_100, channels: 4, samples: samples), at: 0, source: .microphone)
+        try router.flushConverters()
+        XCTAssertGreaterThan(router.mixer.latestFrame, 4_700)
+        let block = try XCTUnwrap(router.consume(until: router.readyThroughFrame))
+        XCTAssertEqual(block.samples[400], 0.25, accuracy: 0.01)
+        XCTAssertEqual(block.samples[401], -0.25, accuracy: 0.01)
+        let direct = try AudioRouter(systemAudio: false, microphone: true)
+        try direct.append(RecordingPCMFrame(sourceTime: 0, sampleRate: 48_000, channels: 3, samples: [0.1, 0.2, 0.9, 0.3, 0.4, 0.9]),
+                          at: 0, source: .microphone)
+        XCTAssertEqual(try XCTUnwrap(direct.consume(until: 2)).samples, [0.1, 0.2, 0.3, 0.4])
+    }
+
     func testResamplingKeepsContiguousOutputAcrossInputCallbacksAndDrainsTail() throws {
         let router = try AudioRouter(systemAudio: false, microphone: true)
         for callback in 0..<10 {

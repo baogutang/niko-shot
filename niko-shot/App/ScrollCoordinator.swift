@@ -44,10 +44,15 @@ final class ScrollCoordinator {
     private var captureTask: Task<Void, Never>?
     private var settleTask: Task<Void, Never>?
     private var autoTask: Task<Void, Never>?
+    private var autoRun = UUID()
     private var finishTask: Task<Void, Never>?
     private var capturePending = false
+    /// Precise downward points and imprecise inputs since the last accepted frame: the stitcher
+    /// measures shift from that frame, not from the previous capture.
     private var hintPoints: CGFloat = 0
-    private var hintPrecise = true
+    private var hintImprecise = 0
+    /// Downward input since the previous capture, for the bottom-stall heuristic only.
+    private var freshInput = false
     private var unmatchedStreak = 0
     private var lastScrollInput: ContinuousClock.Instant = .now
     /// Quiet time after the last scroll input before an unmatched frame counts as real;
@@ -184,7 +189,7 @@ final class ScrollCoordinator {
                 try await Task.sleep(for: self.workflow.activationDelay)
                 guard self.generation == token else { return }
                 self.state.phase = .capturing
-                self.setStatus("正在长截图", "向下滚动内容，自动拼接；完成后点「完成」或按 ↩")
+                self.setStatus("正在长截图", "向下滚动即可自动拼接，按 ↩ 完成")
                 self.startInputs(token: token)
                 self.requestCapture()
             } catch is CancellationError {
@@ -225,7 +230,7 @@ final class ScrollCoordinator {
             MainActor.assumeIsolated {
                 guard let self, self.state.phase == .capturing else { return }
                 self.stopAutomatic()
-                self.setStatus("显示器已变化", "已保留拼好的内容，可点「完成」或重新开始", tone: .warning)
+                self.setStatus("显示器已变化", "已拼好的内容保留，可点「完成」", tone: .warning)
             }
         }
     }
@@ -242,10 +247,11 @@ final class ScrollCoordinator {
     func receive(_ activity: ScrollActivity) {
         guard state.phase == .capturing else { return }
         if state.isAutomatic {
-            if !activity.isSynthetic { stopAutomatic(); setStatus("已切换为手动", "检测到手动滚动，继续向下滚动即可") }
+            if !activity.isSynthetic { stopAutomatic(); setStatus("已切换为手动", "检测到手动滚动，继续向下即可") }
             return
         }
-        if let points = activity.preciseDownwardPoints { hintPoints += points } else { hintPrecise = false }
+        if let points = activity.preciseDownwardPoints { hintPoints += points } else { hintImprecise += 1 }
+        if (activity.preciseDownwardPoints ?? 1) > 0 { freshInput = true }
         lastScrollInput = .now
         requestCapture()
         settleTask?.cancel()
@@ -279,14 +285,22 @@ final class ScrollCoordinator {
     @discardableResult
     private func captureOnce(token: UUID) async -> ScrollStitchResult? {
         guard let source, let worker else { return nil }
-        let hint = takeHint()
+        let hint = currentHint(), points = hintPoints, imprecise = hintImprecise
+        let fresh = freshInput; freshInput = false
         do {
-            try refreshGeometry()
             let image = try await source.capture()
             guard generation == token, !Task.isCancelled else { return nil }
+            refreshGeometry(source.context)
             let update = try await worker.add(image, hint: hint)
             guard generation == token else { return nil }
-            apply(update, hint: hint)
+            switch update.result {
+            case .appended, .limitReached:
+                // 只扣掉这一帧已经用掉的位移；抓图期间新到的滚动留给下一帧。
+                hintPoints -= points; hintImprecise -= imprecise
+            case .unchanged, .reversed, .unmatched:
+                break
+            }
+            apply(update, freshInput: fresh)
             return update.result
         } catch is CancellationError {
             return nil
@@ -297,15 +311,15 @@ final class ScrollCoordinator {
         }
     }
 
-    private func takeHint() -> Int? {
-        defer { hintPoints = 0; hintPrecise = true }
-        guard hintPrecise, hintPoints != 0, let scale = context?.screen.scale else { return nil }
+    /// Expected shift in pixels from the last accepted frame; nil once an imprecise input made it unknowable.
+    private func currentHint() -> Int? {
+        guard hintImprecise == 0, hintPoints != 0, let scale = context?.screen.scale else { return nil }
         return Int((hintPoints * scale).rounded())
     }
 
-    private func refreshGeometry() throws {
-        guard let current = try source?.validatedContext(), let previous = context,
-              current.globalRect != previous.globalRect else { return }
+    /// Follows the geometry the source validated with its last frame, without another compositor query.
+    private func refreshGeometry(_ current: CaptureContext?) {
+        guard let current, let previous = context, current.globalRect != previous.globalRect else { return }
         context = current
         monitor.update(viewport: current.globalRect)
         overlay?.update(context: current)
@@ -313,7 +327,7 @@ final class ScrollCoordinator {
         if state.showsPreview { preview?.show(near: current.globalRect, avoiding: controls?.panelFrame) }
     }
 
-    private func apply(_ update: ScrollStitchUpdate, hint: Int?) {
+    private func apply(_ update: ScrollStitchUpdate, freshInput: Bool) {
         state.width = update.width; state.height = update.height; state.frames = update.frames
         if let preview = update.preview { state.preview = preview }
         guard state.phase == .capturing else { return }
@@ -322,28 +336,28 @@ final class ScrollCoordinator {
         case .appended:
             unmatchedStreak = 0; stalledDownward = 0
             if update.firstFrameUniform {
-                setStatus("选区几乎是纯色", "请确认选中的是可滚动的内容区域", tone: .warning)
+                setStatus("选区几乎是纯色", "请选中可以滚动的内容区域", tone: .warning)
             } else if automatic {
                 setStatus("正在自动滚动", "到底后自动完成，可随时暂停")
             } else {
-                setStatus("正在长截图", "继续向下滚动；完成后点「完成」或按 ↩")
+                setStatus("正在长截图", "继续向下滚动，按 ↩ 完成")
             }
         case .unchanged:
             unmatchedStreak = 0
-            if !automatic, (hint ?? 0) > 0 || !hintPrecise {
+            if !automatic, freshInput {
                 stalledDownward += 1
                 if stalledDownward >= 3 { setStatus("似乎已到底部", "点「完成」结束，或继续滚动", tone: .success) }
             }
         case .reversed:
             unmatchedStreak = 0
-            setStatus("正在向上浏览", "不会重复拼接；回到末尾后继续向下即可")
+            setStatus("正在向上浏览", "不会重复拼接，回到末尾后继续")
         case .unmatched:
             // 惯性滚动尚未平息时的失配帧不计入警告；等稳定后的帧仍对不上才提示。
             if automatic || ContinuousClock.now - lastScrollInput >= mismatchSettle {
                 unmatchedStreak += 1
             }
             if unmatchedStreak >= 2 {
-                setStatus("画面没对上", "滚动太快或内容在变化，请向上回滚一点再继续", tone: .warning)
+                setStatus("画面没对上", "滚得太快或内容在变，请回滚一点", tone: .warning)
             }
         case .limitReached:
             setStatus("已达到长图上限", "正在生成长图…", tone: .success)
@@ -368,21 +382,25 @@ final class ScrollCoordinator {
         guard state.phase == .capturing else { return }
         if state.isAutomatic {
             stopAutomatic()
-            setStatus("已暂停自动滚动", "可以手动继续滚动，或点「完成」")
+            setStatus("已暂停自动滚动", "可以手动滚动，或点「完成」")
             return
         }
         guard workflow.isAutoScrollAuthorized() else {
             workflow.requestAutoScrollPermission()
-            setStatus("需要辅助功能权限", "授权后再点「自动」；也可以直接手动滚动", tone: .warning)
+            setStatus("需要辅助功能权限", "授权后再点「自动」，或手动滚动", tone: .warning)
             return
         }
         state.isAutomatic = true
         settleTask?.cancel(); settleTask = nil
         setStatus("正在自动滚动", "到底后自动完成，可随时暂停")
-        let token = generation
+        let token = generation, run = UUID(), previous = autoTask
+        autoRun = run
         autoTask = Task { [weak self] in
+            // 快速「暂停→自动」时等旧循环完全退出，两个循环不会交替派发滚动。
+            await previous?.value
             await self?.runAutomatic(token: token)
-            if self?.generation == token { self?.autoTask = nil }
+            // 只清理自己的句柄：旧循环晚于新循环结束时不能把新句柄置空。
+            if let self, self.generation == token, self.autoRun == run { self.autoTask = nil }
         }
     }
 
@@ -394,47 +412,60 @@ final class ScrollCoordinator {
     private func runAutomatic(token: UUID) async {
         await captureTask?.value
         var factor: CGFloat = 0.42, stalls = 0
-        while generation == token, state.isAutomatic, state.phase == .capturing, !Task.isCancelled {
-            guard let context, let source else { return }
-            let points = max(24, context.localRect.height * factor)
+        func running() -> Bool { generation == token && state.isAutomatic && state.phase == .capturing && !Task.isCancelled }
+        /// Every synthetic event, including the corrective back-scroll, re-validates the target first.
+        func step(_ points: CGFloat) -> Bool {
+            guard running(), let context, let source else { return false }
             do {
                 _ = try source.validatedContext(forAutomaticScroll: true)
                 let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
                 let point = CGPoint(x: context.globalRect.midX, y: CoordinateSpace.flippedY(context.globalRect.midY, primaryTop: primaryTop))
                 try workflow.scroll(points, point)
+                hintPoints += points
+                return true
             } catch {
-                guard generation == token else { return }
+                guard generation == token else { return false }
                 stopAutomatic()
                 setStatus("自动滚动已停止", error.localizedDescription, tone: .warning)
-                return
+                return false
             }
-            hintPoints = points; hintPrecise = true
+        }
+        while running() {
+            guard let context else { return }
+            let points = max(24, context.localRect.height * factor)
+            guard step(points) else { return }
             try? await Task.sleep(for: .milliseconds(170))
-            guard generation == token, state.isAutomatic, !Task.isCancelled else { return }
-            switch await captureOnce(token: token) {
+            guard running() else { return }
+            let result = await captureOnce(token: token)
+            switch result {
             case .appended?:
                 stalls = 0; factor = min(0.42, factor * 1.25)
-            case .unchanged?:
+                continue
+            case .unchanged?, .unmatched?:
                 stalls += 1
-                if stalls >= 3 {
-                    setStatus("已到底部", "正在生成长图…", tone: .success)
-                    state.isAutomatic = false
-                    finish()
-                    return
-                }
-            case .unmatched?:
-                // 应用把像素步长放大时会丢失重叠：退回一点，并缩小后续步长。
-                factor = max(0.12, factor * 0.5)
-                let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
-                let point = CGPoint(x: context.globalRect.midX, y: CoordinateSpace.flippedY(context.globalRect.midY, primaryTop: primaryTop))
-                try? workflow.scroll(-points * 0.6, point)
-                try? await Task.sleep(for: .milliseconds(170))
-                _ = await captureOnce(token: token)
             case .reversed?, nil:
-                break
+                continue
             case .limitReached?:
                 return
             }
+            guard running() else { return }
+            if stalls >= 3 {
+                state.isAutomatic = false
+                if result == .unchanged {
+                    setStatus("已到底部", "正在生成长图…", tone: .success)
+                    finish()
+                } else {
+                    setStatus("自动滚动已停止", "画面对不上，可手动滚动或点「完成」", tone: .warning)
+                }
+                return
+            }
+            guard result == .unmatched else { continue }
+            // 应用把像素步长放大时会丢失重叠：退回一点，并缩小后续步长。
+            factor = max(0.12, factor * 0.5)
+            guard step(-points * 0.6) else { return }
+            try? await Task.sleep(for: .milliseconds(170))
+            guard running() else { return }
+            if case .appended? = await captureOnce(token: token) { stalls = 0 }
         }
     }
 
@@ -454,7 +485,7 @@ final class ScrollCoordinator {
             await self.autoTask?.value
             await self.captureTask?.value
             guard self.generation == token, let worker = self.worker, let source = self.source else { return }
-            if let image = try? await source.capture(), let update = try? await worker.add(image, hint: self.takeHint()) {
+            if let image = try? await source.capture(), let update = try? await worker.add(image, hint: self.currentHint()) {
                 self.state.width = update.width; self.state.height = update.height; self.state.frames = update.frames
             }
             do {
@@ -533,7 +564,7 @@ final class ScrollCoordinator {
     private func reset() {
         startTask = nil; captureTask = nil; settleTask = nil; autoTask = nil; finishTask = nil
         source = nil; worker = nil; context = nil; selecting = false
-        capturePending = false; hintPoints = 0; hintPrecise = true; unmatchedStreak = 0; stalledDownward = 0
+        capturePending = false; hintPoints = 0; hintImprecise = 0; freshInput = false; unmatchedStreak = 0; stalledDownward = 0
         state.reset()
         isBusy = false
     }

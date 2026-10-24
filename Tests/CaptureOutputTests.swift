@@ -63,6 +63,61 @@ final class CaptureOutputTests: XCTestCase {
         XCTAssertEqual(pasteboard.pasteboardItems?.count, 1, "No file promise without a file")
     }
 
+    func testClipboardDoesNotKeepTheCaptureImageAlive() throws {
+        let pasteboard = scratchPasteboard()
+        defer { pasteboard.releaseGlobally() }
+        let png = try Exporters.encode(try image(), format: .png)
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).png")
+        try png.write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let released = ReleaseFlag()
+        try autoreleasepool {
+            let (width, height) = (64, 40)
+            let bytes = UnsafeMutableRawPointer.allocate(byteCount: width * height * 4, alignment: 16)
+            bytes.initializeMemory(as: UInt8.self, repeating: 200, count: width * height * 4)
+            let provider = try XCTUnwrap(CGDataProvider(dataInfo: Unmanaged.passRetained(released).toOpaque(), data: bytes,
+                size: width * height * 4) { info, data, _ in
+                    Unmanaged<ReleaseFlag>.fromOpaque(info!).takeRetainedValue().released = true
+                    UnsafeMutableRawPointer(mutating: data).deallocate()
+                })
+            let capture = try XCTUnwrap(CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+                bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+            ClipboardWriter.write(png: png, image: capture, date: Date(), file: file, to: pasteboard)
+        }
+        XCTAssertTrue(released.released, "A crop keeps its full-screen buffer alive; the clipboard must not hold it")
+        XCTAssertEqual(pasteboard.data(forType: .png), png)
+        XCTAssertNotNil(NSImage(pasteboard: pasteboard), "Image readers still get the PNG")
+    }
+
+    func testDraggedCaptureIsAReadablyNamedFileWithPNG() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("niko-drag-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let png = try Exporters.encode(try image(), format: .png)
+        let source = root.appendingPathComponent("\(UUID().uuidString).png")
+        try png.write(to: source)
+        let date = try XCTUnwrap(Calendar.current.date(from: DateComponents(year: 2026, month: 10, day: 24, hour: 13, minute: 5, second: 12)))
+        XCTAssertEqual(DragExport.fileName(for: date), "niko-shot 2026-10-24 13.05.12.png")
+
+        let staging = root.appendingPathComponent("staging", isDirectory: true)
+        let staged = try DragExport.stagedFile(for: source, date: date, in: staging)
+        XCTAssertEqual(staged.lastPathComponent, "niko-shot 2026-10-24 13.05.12.png")
+        XCTAssertEqual(try Data(contentsOf: staged), png)
+        XCTAssertEqual(try DragExport.stagedFile(for: source, date: date, in: staging), staged, "Dragging again reuses the same path")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path), "The archived capture stays in history")
+
+        let pasteboard = scratchPasteboard()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.writeObjects([DragExport.pasteboardItem(for: staged)])
+        let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]
+        XCTAssertEqual(urls?.map(\.standardizedFileURL), [staged.standardizedFileURL], "Terminal and upload areas take only file URLs")
+        XCTAssertEqual(pasteboard.data(forType: .png), png, "Image-only targets take the PNG")
+        XCTAssertFalse(pasteboard.types?.contains(NSPasteboard.PasteboardType("com.apple.NSFilePromiseItemMetaData")) ?? true)
+    }
+
     func testThumbnailFitsTheCornerWithoutUpscalingTinyCaptures() {
         XCTAssertEqual(CapturePreviewController.thumbnailSize(for: CGSize(width: 5120, height: 2880)), CGSize(width: 220, height: 124))
         XCTAssertEqual(CapturePreviewController.thumbnailSize(for: CGSize(width: 800, height: 6000)), CGSize(width: 48, height: 150))
@@ -108,4 +163,8 @@ final class CaptureOutputTests: XCTestCase {
         let top = SelectionView.loupeOrigin(for: CGPoint(x: 500, y: 0), size: size, in: bounds, safeTop: 32)
         XCTAssertGreaterThanOrEqual(top.y, 32)
     }
+}
+
+private final class ReleaseFlag: @unchecked Sendable {
+    var released = false
 }

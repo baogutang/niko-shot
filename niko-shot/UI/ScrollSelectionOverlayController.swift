@@ -17,6 +17,8 @@ final class ScrollSelectionOverlayController: NSObject {
     nonisolated(unsafe) private var appearanceObserver: NSObjectProtocol?
     private let workspaceNotifications = NSWorkspace.shared.notificationCenter
     private let screenFrames: @MainActor () -> [CGRect]
+    /// Last shown viewport, re-applied when displays are reconfigured.
+    private var context: CaptureContext?
 
     /// Uses all attached displays; tests may inject immutable geometry without any capture permission.
     init(screenFrames: @escaping @MainActor () -> [CGRect] = { NSScreen.screens.map(\.frame) }) {
@@ -60,9 +62,14 @@ final class ScrollSelectionOverlayController: NSObject {
         guard Self.valid(context.globalRect), Self.valid(context.screen.frame) else { close(); return }
         apply(context: context)
         if screenObserver == nil {
+            // 显示器变化时重新排布而不是关闭：区域模式以蒙层窗口号作为「其下方」的捕获基准，
+            // 关掉后窗口号失效，后续帧会把控制条和预览一起截进去。
             screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                 object: nil, queue: .main) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.close() }
+                    MainActor.assumeIsolated {
+                        guard let self, !self.panels.isEmpty, let context = self.context else { return }
+                        self.apply(context: context)
+                    }
                 }
         }
         if appearanceObserver == nil {
@@ -84,28 +91,36 @@ final class ScrollSelectionOverlayController: NSObject {
     func close() {
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         if let appearanceObserver { workspaceNotifications.removeObserver(appearanceObserver) }
-        screenObserver = nil; appearanceObserver = nil
+        screenObserver = nil; appearanceObserver = nil; context = nil
         let old = panels; panels.removeAll()
         for panel in old { panel.orderOut(nil); panel.contentView = nil; panel.close() }
     }
 
+    /// Keeps panels on unchanged displays, moves leftover panels onto new frames, and only then creates
+    /// or closes panels, so window numbers stay valid across display changes.
     private func apply(context: CaptureContext) {
+        self.context = context
         var screens: [CGRect] = []
         for frame in screenFrames() where Self.valid(frame) && !screens.contains(frame) { screens.append(frame) }
         if screens.isEmpty { screens = [context.screen.frame] }
-        let removed = panels.filter { !screens.contains($0.frame) }
-        panels.removeAll { !screens.contains($0.frame) }
-        for panel in removed { panel.orderOut(nil); panel.contentView = nil; panel.close() }
+        var spare = panels.filter { !screens.contains($0.frame) }
+        var placed: [ScrollSelectionOverlayPanel] = []
         for screen in screens {
             let panel: ScrollSelectionOverlayPanel
-            if let existing = panels.first(where: { $0.frame == screen }) { panel = existing }
-            else {
+            if let existing = panels.first(where: { $0.frame == screen && !placed.contains($0) }) { panel = existing }
+            else if !spare.isEmpty {
+                panel = spare.removeFirst()
+                panel.setFrame(screen, display: false)
+                panel.contentView?.frame = CGRect(origin: .zero, size: screen.size)
+            } else {
                 panel = ScrollSelectionOverlayPanel(screenFrame: screen)
-                panels.append(panel)
             }
+            placed.append(panel)
             (panel.contentView as? ScrollSelectionOverlayView)?.setSelection(context.globalRect, on: screen)
             panel.orderFrontRegardless()
         }
+        panels = placed
+        for panel in spare { panel.orderOut(nil); panel.contentView = nil; panel.close() }
     }
 
     private static func valid(_ rect: CGRect) -> Bool {

@@ -26,7 +26,6 @@ def main():
     env = os.environ.copy()
     env["NIKO_STARTUP_METRICS"] = str(ready.resolve())
     env["NIKO_TEARDOWN_METRICS"] = str(args.output.with_suffix(".teardown.json").resolve())
-    env["NIKO_DISPLAYLINK_METRICS"] = str(args.output.with_suffix(".displaylink.json").resolve())
     env["NIKO_CAPTURE_METRICS"] = str(args.output.with_suffix(".capture.json").resolve())
     with args.output.with_suffix(".stdout.log").open("wb") as out, args.output.with_suffix(".stderr.log").open("wb") as err:
         launched = time.monotonic()

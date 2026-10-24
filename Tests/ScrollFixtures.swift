@@ -53,6 +53,23 @@ actor ScrollImageFixture {
         return image
     }
 
+    /// Full-width text lines every 28 rows: every overlay strip holds real content, so wrong erasures show.
+    nonisolated static func denseDocument(width: Int, height: Int) throws -> CGImage {
+        let context = try context(width: width, height: height)
+        context.setFillColor(CGColor(gray: 0.985, alpha: 1)); context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let font = CTFontCreateWithName("Helvetica" as CFString, 15, nil)
+        let words = ["native ", "scroll ", "stitch ", "capture ", "window ", "pixels "]
+        var y = 20, index = 0
+        while y < height - 40 {
+            var text = "Line \(index): "
+            for word in 0..<40 { text += words[(index * 7 + word * 3) % words.count] }
+            draw(text, font: font, gray: 0.2, x: 30 + (index * 13) % 40, top: y, height: height, in: context)
+            y += 28; index += 1
+        }
+        guard let image = context.makeImage() else { throw ScrollCaptureError.image }
+        return image
+    }
+
     /// One viewport of `document` starting at `offset`, optionally wrapped in fixed chrome and overlays.
     nonisolated static func viewport(_ document: CGImage, offset: Int, height: Int, header: Int = 0, footer: Int = 0,
                                      scrollbarAt thumb: Int? = nil, noise: UInt8 = 0, seed: UInt64 = 1,

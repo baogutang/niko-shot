@@ -27,6 +27,56 @@ final class GifExporterTests: XCTestCase {
         XCTAssertGreaterThan(result.firstRed, 240); XCTAssertLessThan(result.lastRed, 10)
     }
 
+    func testPaletteKeepsNeutralsNeutralAndPicksTheNearestEntry() {
+        let colors = GIFGlobalPalette.colors
+        XCTAssertEqual(colors.count, 768)
+        func entry(_ red: Int, _ green: Int, _ blue: Int) -> [Int] {
+            let index = Int(GIFGlobalPalette.index(red: red, green: green, blue: blue))
+            return [Int(colors[index * 3]), Int(colors[index * 3 + 1]), Int(colors[index * 3 + 2])]
+        }
+        for value in 0...255 {
+            let color = entry(value, value, value)
+            XCTAssertTrue(color[0] == color[1] && color[1] == color[2], "Gray \(value) tinted to \(color)")
+            XCTAssertLessThanOrEqual(abs(color[0] - value), 3)
+        }
+        XCTAssertEqual(entry(0, 0, 0), [0, 0, 0]); XCTAssertEqual(entry(255, 255, 255), [255, 255, 255])
+        XCTAssertEqual(entry(255, 0, 0), [255, 0, 0]); XCTAssertEqual(entry(51, 153, 204), [51, 153, 204])
+        // The precomputed lookup must agree with an exhaustive search over all 256 entries.
+        for red in stride(from: 0, through: 255, by: 17) {
+            for green in stride(from: 0, through: 255, by: 17) {
+                for blue in stride(from: 0, through: 255, by: 17) {
+                    func distance(_ color: [Int]) -> Int {
+                        let dr: Int = color[0] - red, dg: Int = color[1] - green, db: Int = color[2] - blue
+                        return dr * dr + dg * dg + db * db
+                    }
+                    var best = Int.max
+                    for index in 0..<256 {
+                        let candidate: [Int] = [Int(colors[index * 3]), Int(colors[index * 3 + 1]), Int(colors[index * 3 + 2])]
+                        best = min(best, distance(candidate))
+                    }
+                    XCTAssertEqual(distance(entry(red, green, blue)), best, "(\(red),\(green),\(blue))")
+                }
+            }
+        }
+    }
+
+    func testGrayFramesStayNeutralInTheWrittenGIF() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = RecordingMediaFixture()
+        let levels: [CGFloat] = [0, 128.0 / 255, 236.0 / 255, 1]
+        let destination = directory.appendingPathComponent("grays.gif")
+        try await GifExporter().exportFrames(images: try await fixture.grayImages(levels), timestamps: [0, 0.1, 0.2, 0.3],
+                                             destination: destination, options: GifOptions(width: 16, fps: 15))
+        let pixels = try await fixture.framePixels(destination)
+        XCTAssertEqual(pixels.count, 4)
+        for (pixel, level) in zip(pixels, levels) {
+            XCTAssertLessThanOrEqual(pixel.max()! - pixel.min()!, 1, "Gray \(Int(level * 255)) must not be tinted: \(pixel)")
+            XCTAssertLessThanOrEqual(abs(pixel[0] - Int((level * 255).rounded())), 4)
+        }
+        XCTAssertEqual(pixels.first, [0, 0, 0]); XCTAssertEqual(pixels.last, [255, 255, 255])
+    }
+
     func testCentisecondRoundingKeepsThirtyFPSTotalDuration() async throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -112,6 +162,29 @@ private actor RecordingMediaFixture {
             }
             context.setFillColor(color); context.fill(CGRect(x: 0, y: 0, width: 16, height: 16))
             guard let image = context.makeImage() else { throw GifExportError.image }; return image
+        }
+    }
+
+    func grayImages(_ levels: [CGFloat]) throws -> [CGImage] {
+        guard let context = CGContext(data: nil, width: 16, height: 16, bitsPerComponent: 8, bytesPerRow: 64,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue) else {
+            throw GifExportError.image
+        }
+        return try levels.map { level in
+            context.setFillColor(red: level, green: level, blue: level, alpha: 1); context.fill(CGRect(x: 0, y: 0, width: 16, height: 16))
+            guard let image = context.makeImage() else { throw GifExportError.image }; return image
+        }
+    }
+
+    func framePixels(_ url: URL) throws -> [[Int]] {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { throw GifExportError.image }
+        return try (0..<CGImageSourceGetCount(source)).map { index in
+            guard let image = CGImageSourceCreateImageAtIndex(source, index, nil),
+                  let context = CGContext(data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue),
+                  let bytes = context.data?.assumingMemoryBound(to: UInt8.self) else { throw GifExportError.image }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            return [Int(bytes[0]), Int(bytes[1]), Int(bytes[2])]
         }
     }
 

@@ -126,7 +126,7 @@ final class TranslationViewModel {
     /// Makes editing invalidate results while keeping typing completely local.
     func originalTextChanged(_ text: String) {
         guard text != requestedText, isTranslating || !translatedText.isEmpty || errorMessage != nil else { return }
-        invalidate(message: "原文已更新，点击“翻译”获取新结果。")
+        invalidate(message: "原文已更新，点「翻译」获取新结果。")
     }
 
     /// Explains unsupported language pairs before a request can leave the application.

@@ -1,4 +1,4 @@
-// Displays pinned captures in an adaptive native grid with file promises and window actions.
+// Displays pinned captures in an adaptive native grid with drag-out files and window actions.
 import AppKit
 import ImageIO
 import SwiftUI
@@ -18,7 +18,7 @@ struct PinLibraryView: View {
             VStack(spacing: 0) {
                 if manager.pins.isEmpty {
                     NikoEmptyState(title: "还没有贴图", symbol: "pin",
-                                   detail: "截图后选择“贴图”，让图片留在桌面上。")
+                                   detail: "截图后选择「贴图」，让图片留在桌面上。")
                 } else {
                     ScrollView {
                         LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
@@ -38,7 +38,7 @@ struct PinLibraryView: View {
                         Text(selectedPin.url.lastPathComponent).lineLimit(1).truncationMode(.middle)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     } else { Spacer() }
-                    Text("双击显示 · 拖出文件")
+                    Text("双击显示，也可以拖出文件")
                 }.font(.system(size: 11)).foregroundStyle(.secondary)
                     .padding(.horizontal, 16).padding(.vertical, 8)
                     .background(NikoTheme.raisedSurface.opacity(0.45))
@@ -60,7 +60,7 @@ struct PinLibraryView: View {
                 ToolbarItem(placement: .automatic) {
                     Button("显示 / 隐藏全部", systemImage: "eye") { manager.toggleVisibility() }
                         .disabled(manager.pins.isEmpty)
-                        .help("显示或隐藏全部贴图 · ⌥⌘T")
+                        .help("显示或隐藏全部贴图")
                         .accessibilityLabel("显示或隐藏全部贴图")
                 }
             }
@@ -122,7 +122,7 @@ private struct PinLibraryTile: View {
                 }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Menu { tileActions } label: { Image(systemName: "ellipsis").frame(width: 24, height: 24) }
-                    .menuIndicator(.hidden).menuStyle(.borderlessButton).fixedSize()
+                    .menuIndicator(.hidden).menuStyle(.borderlessButton).fixedSize().tint(.secondary)
                     .accessibilityLabel("贴图操作：显示、在 Finder 中查看或删除")
             }.padding(.horizontal, 2)
         }

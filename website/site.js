@@ -21,24 +21,32 @@
     const themeLabel = themeButton.querySelector(".theme-label");
     if (themeLabel) themeLabel.textContent = names[current];
   };
+  // Native preview screenshots: assets/app-<key>.png, app-<key>-dark.png and their -compact.png variants.
+  // width/height are the full-size PNG pixels; compactWidth is the -compact.png width. Light and dark
+  // files of one preview must share these sizes. Update the numbers here when a screenshot is replaced.
   const previewImages = {
-    ocr: { alt: "当前原生 OCR 窗口，左侧勾选编辑文字；未配置翻译时右侧直接显示原文", width: 1960, height: 1240 },
-    settings: { alt: "当前原生翻译设置，五类服务及独立的凭据配置区", width: 1800, height: 1300 },
-    recording: { alt: "当前原生录屏配置，包含区域、画质、声音与摄像头选项", width: 1000, height: 1120 },
-    scroll: { alt: "示例文档正在滚动截图，透明选区保留实时画面，旁边的原生半透明预览跟随已拼接内容，向上查看后可恢复跟随", width: 1760, height: 1120 }
+    ocr: { width: 1960, height: 1296, compactWidth: 980,
+      alt: "文字识别窗口：左侧勾选文字区块，右侧显示识别结果；未配置翻译时只显示原文" },
+    settings: { width: 1120, height: 1060, compactWidth: 560,
+      alt: "设置窗口的快捷键标签：新安装只设置了区域截图，每个快捷键都可以重新录制或按 Delete 移除" },
+    recording: { width: 1000, height: 1120, compactWidth: 500,
+      alt: "录屏设置：录制范围、画质、声音和摄像头选项" },
+    scroll: { width: 1760, height: 1120, compactWidth: 880,
+      alt: "自动滚动长截图：选区外轻微变暗，右侧实时预览显示已拼接的内容，下方控制条可暂停或完成" }
   };
   let preview = "ocr";
   const nativeImage = document.querySelector("#native-image");
   const updatePreview = () => {
     if (!nativeImage) return;
-    nativeImage.src = `assets/app-${preview}${isDark() ? "-dark" : ""}.png`;
+    const image = previewImages[preview];
     const stem = `assets/app-${preview}${isDark() ? "-dark" : ""}`;
-    nativeImage.srcset = `${stem}-compact.png ${previewImages[preview].width / 2}w, ${stem}.png ${previewImages[preview].width}w`;
+    nativeImage.src = `${stem}.png`;
+    nativeImage.srcset = `${stem}-compact.png ${image.compactWidth}w, ${stem}.png ${image.width}w`;
     nativeImage.sizes = "(max-width: 720px) calc(100vw - 60px), (max-width: 980px) calc(100vw - 108px), 1080px";
-    nativeImage.alt = previewImages[preview].alt;
+    nativeImage.alt = image.alt;
     nativeImage.classList.toggle("scroll-preview", preview === "scroll");
-    nativeImage.width = previewImages[preview].width;
-    nativeImage.height = previewImages[preview].height;
+    nativeImage.width = image.width;
+    nativeImage.height = image.height;
   };
   themeButton?.addEventListener("click", () => {
     const next = { system: "light", light: "dark", dark: "system" }[root.dataset.theme || "system"];
@@ -125,7 +133,7 @@
     let releaseDestinations = null;
     const updateDownloadSelection = () => {
       const label = architectureNames[selectedArchitecture];
-      if (selectedChip) selectedChip.textContent = `已选：${label} · ${selectedArchitecture}。可在苹果菜单「关于本机」查看芯片或处理器。`;
+      if (selectedChip) selectedChip.textContent = `已选 ${label}（${selectedArchitecture}）。可以在苹果菜单 →「关于本机」中查看芯片。`;
       for (const kind of ["dmg", "zip"]) {
         const anchor = document.querySelector(`[data-download="${kind}"]`);
         if (!anchor) continue;
@@ -134,7 +142,7 @@
           ? `下载 ${label} 版 ${kind.toUpperCase()} 安装包`
           : `前往 GitHub Release 查看 ${label} 版 ${kind.toUpperCase()} 安装包`);
         const text = anchor.querySelector("[data-download-label]");
-        if (text) text.textContent = `${label} · ${kind.toUpperCase()}`;
+        if (text) text.textContent = `下载 ${kind.toUpperCase()}`;
       }
     };
     architectureInputs.forEach(input => {
@@ -191,9 +199,9 @@
       updateDownloadSelection();
       const published = release.published_at ? new Date(release.published_at) : null;
       const date = published && !Number.isNaN(published.getTime()) ? published.toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" }) : "";
-      releaseStatus.textContent = `niko-shot ${tag.slice(1)}${date ? ` · ${date}` : ""} · M 芯片与 Intel 均可下载。`;
+      releaseStatus.textContent = `最新版本 niko-shot ${tag.slice(1)}${date ? `，${date}发布` : ""}。`;
     }).catch(() => {
-      releaseStatus.textContent = "前往 GitHub Release 下载最新版本，M 芯片与 Intel 分别提供安装包。";
+      releaseStatus.textContent = "暂时无法读取版本信息，请在 GitHub 发布页下载对应芯片的安装包。";
     }).finally(() => clearTimeout(timeout));
     window.addEventListener("pagehide", () => { clearTimeout(timeout); releaseController.abort(); }, { once: true });
   }
@@ -208,6 +216,9 @@
   const undoButton = document.querySelector("#undo-demo");
   const playButton = document.querySelector("#play-demo");
   const source = new Image();
+  // Icon amber: selection uses the --accent fill colour; strokes use the deeper text amber for contrast on the light sample.
+  const accentFallback = "#E8A333";
+  const annotationColor = "#AD7111";
   const defaultSelection = () => ({ x: .08, y: .085, w: .84, h: .8 });
   let selection = defaultSelection();
   let tool = "crop";
@@ -230,7 +241,7 @@
   const drawStroke = (ctx, stroke, width, height) => {
     if (!stroke || !stroke.points.length) return;
     const first = stroke.points[0]; const last = stroke.points[stroke.points.length - 1];
-    ctx.strokeStyle = "#b8790f"; ctx.lineWidth = Math.max(3, width * .004); ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.strokeStyle = annotationColor; ctx.lineWidth = Math.max(3, width * .004); ctx.lineCap = "round"; ctx.lineJoin = "round";
     ctx.beginPath();
     if (stroke.tool === "rectangle") ctx.rect(first.x * width, first.y * height, (last.x - first.x) * width, (last.y - first.y) * height);
     else { ctx.moveTo(first.x * width, first.y * height); stroke.points.slice(1).forEach(point => ctx.lineTo(point.x * width, point.y * height)); }
@@ -248,16 +259,16 @@
     const width = canvas.width; const height = canvas.height;
     context.clearRect(0, 0, width, height); context.drawImage(source, 0, 0, width, height);
     const { x, y, w, h } = selection;
-    context.fillStyle = "rgba(22,20,17,.48)";
+    context.fillStyle = "rgba(0,0,0,.45)";
     context.fillRect(0, 0, width, y * height); context.fillRect(0, (y + h) * height, width, (1 - y - h) * height);
     context.fillRect(0, y * height, x * width, h * height); context.fillRect((x + w) * width, y * height, (1 - x - w) * width, h * height);
     annotations.forEach(stroke => drawStroke(context, stroke, width, height)); drawStroke(context, currentStroke, width, height);
-    const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#c8402f";
+    const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || accentFallback;
     context.strokeStyle = accent; context.lineWidth = 2; context.strokeRect(x * width, y * height, w * width, h * height);
     context.fillStyle = accent;
     [[x,y],[x+w,y],[x,y+h],[x+w,y+h]].forEach(([cx,cy]) => { const px = cx * width, py = cy * height; context.fillRect(px - 4, py - 4, 8, 8); context.strokeStyle = "rgba(255,255,255,.85)"; context.lineWidth = 1; context.strokeRect(px - 4, py - 4, 8, 8); });
     if (document.activeElement === canvas && tool !== "crop") {
-      context.strokeStyle = "#332b1d"; context.lineWidth = 1.5; const cx = keyboardPoint.x * width; const cy = keyboardPoint.y * height;
+      context.strokeStyle = "#1D1D1F"; context.lineWidth = 1.5; const cx = keyboardPoint.x * width; const cy = keyboardPoint.y * height;
       context.beginPath(); context.moveTo(cx - 9, cy); context.lineTo(cx + 9, cy); context.moveTo(cx, cy - 9); context.lineTo(cx, cy + 9); context.stroke();
     }
     sizeLabel.textContent = `${Math.round(w * source.naturalWidth)} × ${Math.round(h * source.naturalHeight)} px`;
@@ -267,7 +278,7 @@
     tool = next; currentStroke = null; keyboardStart = null;
     document.querySelectorAll("[data-tool]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.tool === tool)));
     const names = { crop: "框选", arrow: "箭头", rectangle: "矩形", pencil: "画笔" };
-    announce(tool === "crop" ? "拖动框选，方向键微调，Enter 确认。" : `已选择${names[tool]}。拖动绘制；键盘可用空格开始、方向键移动、空格完成。`);
+    announce(tool === "crop" ? "拖动框选，方向键微调，Return 确认。" : `已选择${names[tool]}。拖动绘制；也可以按空格开始，方向键移动，再按空格完成。`);
     if (focus) canvas.focus({ preventScroll: true }); requestDraw();
   };
   document.querySelectorAll("[data-tool]").forEach(button => button.addEventListener("click", () => { stopDemo(); setTool(button.dataset.tool); }));
@@ -299,7 +310,7 @@
     if (currentStroke) { annotations.push(currentStroke); if (annotations.length > 64) annotations.shift(); currentStroke = null; }
     pointerStart = null;
     if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
-    announce(`已更新${tool === "crop" ? "选区" : "标注"}，可继续编辑或导出 PNG。`); requestDraw();
+    announce(`已更新${tool === "crop" ? "选区" : "标注"}，可以继续编辑或导出 PNG。`); requestDraw();
   };
   canvas.addEventListener("pointerup", finishPointer);
   canvas.addEventListener("pointercancel", () => { pointerStart = null; currentStroke = null; requestDraw(); });
@@ -310,7 +321,7 @@
     if (!event.metaKey && !event.ctrlKey && shortcuts[event.key.toLowerCase()]) { event.preventDefault(); stopDemo(); setTool(shortcuts[event.key.toLowerCase()]); return; }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") { event.preventDefault(); stopDemo(); annotations.pop(); announce("已撤销最后一个标注。"); requestDraw(); return; }
     if (event.key === "Escape") { event.preventDefault(); stopDemo(); selection = defaultSelection(); annotations = []; currentStroke = null; keyboardStart = null; setTool("crop"); return; }
-    if (event.key === "Enter") { event.preventDefault(); stopDemo(); announce(`选区已确认：${sizeLabel.textContent}。可复制或导出 PNG。`); requestDraw(); return; }
+    if (event.key === "Enter") { event.preventDefault(); stopDemo(); announce(`选区已确认：${sizeLabel.textContent}。可以复制或导出 PNG。`); requestDraw(); return; }
     if (event.code === "Space" && tool !== "crop") {
       event.preventDefault(); stopDemo();
       if (!keyboardStart) { keyboardStart = { ...keyboardPoint }; currentStroke = { tool, points: [{ ...keyboardPoint }, { ...keyboardPoint }] }; announce("开始绘制，方向键移动，空格完成。"); }
@@ -357,15 +368,15 @@
     if (playing) { stopDemo(); announce("演示已暂停，可以自行编辑。"); return; }
     if (!source.naturalWidth) return;
     selection = defaultSelection(); annotations = []; currentStroke = null; setTool("crop", false);
-    const arrow = { tool: "arrow", points: [{x:.67,y:.48},{x:.43,y:.48}] };
-    if (reducedMotion.matches) { annotations.push(arrow); announce("减少动态效果已开启，直接展示框选与箭头标注结果。"); requestDraw(); return; }
+    const arrow = { tool: "arrow", points: [{x:.66,y:.505},{x:.45,y:.505}] };
+    if (reducedMotion.matches) { annotations.push(arrow); announce("已开启减少动态效果，直接显示框选和箭头。"); requestDraw(); return; }
     playing = true; lab.classList.add("is-playing"); playButton.querySelector("span").textContent = "暂停演示"; playButton.querySelector("use").setAttribute("href", "assets/icons.svg#player-pause");
-    announce("演示：冻结图像并框选区域。"); requestDraw();
-    demoTimers.push(setTimeout(() => { annotations.push(arrow); announce("演示：添加箭头，让重点一目了然。"); requestDraw(); }, 1300));
-    demoTimers.push(setTimeout(() => { stopDemo(); announce("演示完成。现在可以自行框选、标注和导出。"); requestDraw(); }, 3000));
+    announce("演示：框选区域。"); requestDraw();
+    demoTimers.push(setTimeout(() => { annotations.push(arrow); announce("演示：添加箭头。"); requestDraw(); }, 1300));
+    demoTimers.push(setTimeout(() => { stopDemo(); announce("演示结束，可以自己试试。"); requestDraw(); }, 3000));
   });
-  source.onload = () => { announce("拖动框选，按 A 画箭头，Enter 确认。"); requestDraw(); };
-  source.onerror = () => { announce("演示图片暂时无法载入，请刷新页面。下载和接入指南仍可使用。"); sizeLabel.textContent = "图片载入失败"; document.querySelectorAll(".lab-toolbar button").forEach(button => button.disabled = true); playButton.disabled = true; };
+  source.onload = () => { announce("拖动框选，按 A 画箭头，Return 确认。"); requestDraw(); };
+  source.onerror = () => { announce("示例图载入失败，请刷新页面。"); sizeLabel.textContent = "图片载入失败"; document.querySelectorAll(".lab-toolbar button").forEach(button => button.disabled = true); playButton.disabled = true; };
   // The original same-origin SVG has no external resources and remains safe for PNG export.
   source.src = "assets/capture-sample.svg";
   document.addEventListener("visibilitychange", () => { if (document.hidden) stopDemo(); });

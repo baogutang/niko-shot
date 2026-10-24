@@ -4,23 +4,35 @@ import ScreenCaptureKit
 
 @MainActor
 final class WindowFrameGrabber {
-    typealias WindowImageRequest = (CGRect, CGWindowListOption, CGWindowID) -> CGImage?
+    /// Called off the main actor: CGWindowListCreateImage is thread-safe.
+    typealias WindowImageRequest = @Sendable (CGRect, CGWindowListOption, CGWindowID) -> CGImage?
     private let request: WindowImageRequest
 
     init(request: @escaping WindowImageRequest = { NikoCreateWindowImage($0, $1, $2) }) {
         self.request = request
     }
 
-    /// rect 是 WindowServer 左上原点的全局点坐标；不得提前乘 Retina 倍率。
-    func captureWindow(windowID: CGWindowID, rect: CGRect) -> CGImage? {
+    /// rect 是 WindowServer 左上原点的全局点坐标；不得提前乘 Retina 倍率。给出 scale 时一并规范化像素尺寸。
+    func captureWindow(windowID: CGWindowID, rect: CGRect, scale: CGFloat? = nil) async throws -> CGImage? {
         guard windowID != kCGNullWindowID, Self.valid(rect) else { return nil }
-        return request(rect, .optionIncludingWindow, windowID)
+        return try await Self.grab(request, rect: rect, option: .optionIncludingWindow, windowID: windowID, scale: scale)
     }
 
     /// 以选区蒙层为边界排除其上方的预览、控制条以及蒙层本身。
-    func captureRegionBelowOwnWindow(ownWindowID: CGWindowID, rect: CGRect) -> CGImage? {
+    func captureRegionBelowOwnWindow(ownWindowID: CGWindowID, rect: CGRect, scale: CGFloat? = nil) async throws -> CGImage? {
         guard ownWindowID != kCGNullWindowID, Self.valid(rect) else { return nil }
-        return request(rect, .optionOnScreenBelowWindow, ownWindowID)
+        return try await Self.grab(request, rect: rect, option: .optionOnScreenBelowWindow, windowID: ownWindowID, scale: scale)
+    }
+
+    /// 同步取图和尺寸规范化都放在主线程之外：主线程上一次全窗合成要几十毫秒，
+    /// 控制条和 Esc 会跟着卡顿，滚动事件的时间戳也会被拖后。
+    private nonisolated static func grab(_ request: @escaping WindowImageRequest, rect: CGRect, option: CGWindowListOption,
+                                         windowID: CGWindowID, scale: CGFloat?) async throws -> CGImage? {
+        try await Task.detached(priority: .userInitiated) { () throws -> CGImage? in
+            guard let image = request(rect, option, windowID) else { return nil }
+            guard let scale else { return image }
+            return try normalized(image, rect: rect, scale: scale)
+        }.value
     }
 
     /// 鼠标所在屏优先；NSScreen.main 是键盘焦点屏，不适合多屏框选。
@@ -40,7 +52,7 @@ final class WindowFrameGrabber {
     }
 
     /// CG 默认分辨率可能与屏幕不同；只在尺寸不符时规范化，正常帧不反复重采样。
-    static func normalized(_ image: CGImage, rect: CGRect, scale: CGFloat) throws -> CGImage {
+    nonisolated static func normalized(_ image: CGImage, rect: CGRect, scale: CGFloat) throws -> CGImage {
         guard Self.valid(rect), scale.isFinite, scale > 0 else { throw ScrollCaptureError.image }
         let w = rect.width * scale, h = rect.height * scale
         guard w >= 1, h >= 1, w < CGFloat(Int32.max), h < CGFloat(Int32.max) else { throw ScrollCaptureError.dimensionOverflow }
@@ -78,20 +90,21 @@ final class WindowFrameGrabber {
         _ = try validate()
 
         var fallback: Task<RegionSnapshot, Error>?
-        return RegionSnapshot(capture: { [self] in
-            guard let current = try validate() else { throw ScrollCaptureError.image }
+        return RegionSnapshot(capture: { [self] target in
+            // RegionSnapshot 每帧只校验一次几何：这里直接用它上一次校验的位置取图，抓图后它再核对一次。
+            guard let current = target else { throw ScrollCaptureError.image }
             let rect = Self.windowServerRect(current, primaryTop: NSScreen.screens.first?.frame.maxY ?? 0)
+            let scale = current.screen.scale
             let image: CGImage?
-            if current.kind == "window", let id = current.windowID { image = captureWindow(windowID: id, rect: rect) }
-            else if let ownWindowID { image = captureRegionBelowOwnWindow(ownWindowID: ownWindowID, rect: rect) }
+            if current.kind == "window", let id = current.windowID { image = try await captureWindow(windowID: id, rect: rect, scale: scale) }
+            else if let ownWindowID { image = try await captureRegionBelowOwnWindow(ownWindowID: ownWindowID, rect: rect, scale: scale) }
             else { throw ScrollCaptureError.image }
-            if let image { return try Self.normalized(image, rect: rect, scale: current.screen.scale) }
+            if let image { return image }
             if #available(macOS 15, *) {
                 // 后续系统不再提供 CG 图像时才初始化受支持的单帧源，正常帧没有 SCKit 枚举/流开销。
                 if fallback == nil {
                     fallback = Task { @MainActor in
-                        try await self.prepareModern(context: current, original: original, ownWindowID: ownWindowID,
-                                                     validate: validate, validateScroll: validateScroll)
+                        try await self.prepareModern(context: current, original: original, ownWindowID: ownWindowID)
                     }
                 }
                 guard let fallback else { throw ScrollCaptureError.image }
@@ -105,10 +118,10 @@ final class WindowFrameGrabber {
         })
     }
 
+    /// The outer snapshot validates every frame, so this fallback source carries no geometry checks of its own.
     @available(macOS 15, *)
-    private func prepareModern(context: CaptureContext, original: ScrollWindowGeometry?, ownWindowID: CGWindowID?,
-        validate: @escaping @MainActor () throws -> CaptureContext?,
-        validateScroll: @escaping @MainActor (CGPoint) throws -> Void) async throws -> RegionSnapshot {
+    private func prepareModern(context: CaptureContext, original: ScrollWindowGeometry?,
+                               ownWindowID: CGWindowID?) async throws -> RegionSnapshot {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         try Task.checkCancellation()
         let filter: SCContentFilter
@@ -144,7 +157,7 @@ final class WindowFrameGrabber {
         config.captureResolution = .best; config.colorSpaceName = CGColorSpace.sRGB
         config.pixelFormat = kCVPixelFormatType_32BGRA
         config.capturesAudio = false
-        return RegionSnapshot(capture: {
+        return RegionSnapshot(capture: { _ in
             let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
             if let crop {
                 guard let cropped = image.cropping(to: crop), cropped.width == Int(crop.width), cropped.height == Int(crop.height) else {
@@ -153,10 +166,10 @@ final class WindowFrameGrabber {
                 return cropped
             }
             return image
-        }, validate: validate, validateScroll: validateScroll)
+        })
     }
 
-    private static func valid(_ rect: CGRect) -> Bool {
+    private nonisolated static func valid(_ rect: CGRect) -> Bool {
         !rect.isNull && !rect.isInfinite && rect.width > 0 && rect.height > 0 && rect.origin.x.isFinite
             && rect.origin.y.isFinite && rect.width.isFinite && rect.height.isFinite
     }

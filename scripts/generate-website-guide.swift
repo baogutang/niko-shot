@@ -45,7 +45,7 @@ struct GenerateWebsiteGuide {
           <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark">
           <title>翻译接入指南 | niko-shot</title>
           <meta name="description" content="百度、Google Cloud、有道、DeepL、彩云与 LibreTranslate 的官方申请入口、凭据类型和配置步骤。与 niko-shot 应用内指南同步。">
-          <meta property="og:title" content="官方翻译接入指南 | niko-shot"><meta property="og:description" content="五类翻译服务，申请、凭据与测试分步说明。官方资料核对日期 \(date)。"><meta property="og:type" content="website"><meta property="og:url" content="https://baogutang.github.io/niko-shot/guide.html"><meta property="og:image" content="https://baogutang.github.io/niko-shot/assets/app-settings.png">
+          <meta property="og:title" content="翻译接入指南 | niko-shot"><meta property="og:description" content="百度、Google、有道、DeepL 和自定义 REST 翻译服务的申请与配置步骤。官方文档核对日期 \(date)。"><meta property="og:type" content="website"><meta property="og:url" content="https://baogutang.github.io/niko-shot/guide.html"><meta property="og:image" content="https://baogutang.github.io/niko-shot/assets/app-settings.png">
           <link rel="canonical" href="https://baogutang.github.io/niko-shot/guide.html">
           <link rel="icon" type="image/png" href="assets/app-icon.png"><link rel="stylesheet" href="styles.css"><script src="site.js" defer></script>
         </head>
@@ -53,17 +53,17 @@ struct GenerateWebsiteGuide {
           <a class="skip-link" href="#main">跳到主要内容</a>
           <header class="site-header"><nav class="nav-shell" aria-label="主导航">
             <a class="wordmark" href="./" aria-label="niko-shot 首页"><img src="assets/niko-mark.svg" width="36" height="36" alt=""><span>niko-shot</span></a>
-            <div class="nav-links" id="site-navigation"><a href="./#experience">体验</a><a href="./#workflow">功能</a><a href="guide.html" aria-current="page">接入指南</a></div>
+            <div class="nav-links" id="site-navigation"><a href="./#experience">试用</a><a href="./#workflow">功能</a><a href="guide.html" aria-current="page">翻译接入</a></div>
             <div class="nav-actions"><button class="icon-button theme-toggle" aria-label="切换明暗外观" title="切换明暗外观"><svg aria-hidden="true"><use href="assets/icons.svg#sun"></use></svg><span class="theme-label">系统</span></button><a class="icon-button github-link" href="https://github.com/baogutang/niko-shot" aria-label="查看 GitHub 仓库"><svg aria-hidden="true"><use href="assets/icons.svg#brand-github"></use></svg></a><button class="icon-button nav-toggle" aria-label="展开导航" aria-expanded="false" aria-controls="site-navigation" hidden><svg aria-hidden="true"><use href="assets/icons.svg#menu-2"></use></svg></button><a class="button nav-download" href="./#download">下载 <svg aria-hidden="true"><use href="assets/icons.svg#arrow-up-right"></use></svg></a></div>
           </nav></header>
           <main id="main" class="shell">
-            <div class="guide-hero"><p class="eyebrow">连接你的翻译服务</p><h1>选好服务。<br>把翻译接上。</h1><p>选择服务，按步骤开通 API、填入凭据，再在应用里测试连接。所有申请入口均指向各家官方平台。</p><p class="verified-date">官方公开文档核对日期：\(date) · 与应用内指南使用同一份源数据。</p></div>
+            <div class="guide-hero"><h1>翻译接入指南</h1><p>每项服务分三步：开通 API、把凭据填到 设置 → 翻译、测试连接。所有链接都指向各家官方网站。</p><p class="verified-date">官方文档核对日期：\(date)。内容与应用内指南来自同一份数据。</p></div>
             <div class="guide-layout"><nav class="guide-nav" aria-label="翻译服务目录">\(navigation)</nav><div>
               \(cards)
               <p class="guide-footer-note">本页只提供说明与导航，不读取或提交密钥。真实账号连通性仍需你在应用内验证；认证、服务状态、套餐和额度以官方账户当前信息为准。更多模板示例见 <a href="https://github.com/baogutang/niko-shot/blob/main/docs/TRANSLATION.md">翻译配置文档</a>。</p>
             </div></div>
           </main>
-          <footer class="site-footer shell"><div><a class="wordmark" href="./"><img src="assets/niko-mark.svg" width="28" height="28" alt=""><span>niko-shot</span></a><p>截下一瞬，接住全部。</p></div><div class="footer-links"><a href="https://github.com/baogutang/niko-shot">GitHub</a><a href="guide.html">接入指南</a><a href="https://github.com/baogutang/niko-shot/issues">反馈问题</a></div><small>© 2026 niko-shot</small></footer>
+          <footer class="site-footer shell"><div><a class="wordmark" href="./"><img src="assets/niko-mark.svg" width="28" height="28" alt=""><span>niko-shot</span></a><p>原生 Mac 截图工具</p></div><div class="footer-links"><a href="https://github.com/baogutang/niko-shot">GitHub</a><a href="guide.html">翻译接入</a><a href="https://github.com/baogutang/niko-shot/issues">反馈问题</a></div><small>© 2026 niko-shot</small></footer>
         </body></html>
         """
         try (html + "\n").write(to: root.appendingPathComponent("website/guide.html"), atomically: true, encoding: .utf8)

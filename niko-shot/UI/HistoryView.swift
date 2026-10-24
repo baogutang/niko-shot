@@ -1,4 +1,4 @@
-// Browses searchable, paginated screenshot history with native file-promise thumbnails.
+// Browses searchable, paginated screenshot history with thumbnails that drag out as files.
 import AppKit
 import SwiftUI
 
@@ -16,6 +16,7 @@ struct HistoryView: View {
     @State private var loadingMore = false
     @State private var hasMore = false
     @State private var requestID = UUID()
+    @State private var loadedQuery: String?
     @State private var errorMessage: String?
     @State private var deleting: Set<UUID> = []
     @State private var selectedID: UUID?
@@ -89,7 +90,7 @@ struct HistoryView: View {
                             .lineLimit(1).truncationMode(.middle)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     } else { Spacer() }
-                    Text("双击编辑 · 拖出文件")
+                    Text("双击编辑，也可以拖出文件")
                 }.font(.system(size: 11)).foregroundStyle(.secondary)
                     .padding(.horizontal, 16).padding(.vertical, 8)
                     .background(NikoTheme.raisedSurface.opacity(0.45))
@@ -132,21 +133,30 @@ struct HistoryView: View {
     private var selectedRecord: HistoryRecord? { records.first { $0.id == selectedID } }
     private var selectionIsDeleting: Bool { selectedID.map { deleting.contains($0) } ?? false }
 
+    /// Rows stay on screen while reloading; refreshing the same search re-reads every loaded row, so a
+    /// delete or a finished OCR keeps the scroll position, later pages and the selection.
     private func reload() async {
         let currentID = UUID()
         requestID = currentID
         loading = true
         loadingMore = false
-        hasMore = false
         errorMessage = nil
-        records = []
         defer { if requestID == currentID { loading = false } }
+        let search = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let wanted = search == loadedQuery ? max(pageSize, records.count) : pageSize
         do {
-            let page = try await store.list(query: query.trimmingCharacters(in: .whitespacesAndNewlines), limit: pageSize, offset: 0)
-            try Task.checkCancellation()
-            guard requestID == currentID else { return }
-            records = page
-            hasMore = page.count == pageSize
+            var fresh: [HistoryRecord] = [], seen = Set<UUID>(), offset = 0, more = false
+            repeat {
+                let page = try await store.list(query: search, limit: pageSize, offset: offset)
+                try Task.checkCancellation()
+                guard requestID == currentID else { return }
+                offset += page.count
+                fresh.append(contentsOf: page.filter { seen.insert($0.id).inserted })
+                more = page.count == pageSize
+            } while more && offset < wanted
+            records = fresh
+            hasMore = more
+            loadedQuery = search
         } catch is CancellationError {
             // SwiftUI cancels the previous search task as its query changes.
         } catch {
@@ -180,8 +190,10 @@ struct HistoryView: View {
         defer { deleting.remove(record.id) }
         do {
             try await store.delete(id: record.id)
-            // Re-query after deletion so an in-flight offset page cannot skip a row.
-            await reload()
+            if selectedID == record.id { selectedID = nil }
+            records.removeAll { $0.id == record.id }
+            // A page or reload already in flight may have read the row before it was deleted, or offset past it.
+            if loading || loadingMore { await reload() }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -207,7 +219,7 @@ private struct HistoryRow: View {
         HStack(spacing: 12) {
             Group {
                 if let thumbnail {
-                    FileDragPreview(url: fileURL, image: thumbnail)
+                    FileDragPreview(url: fileURL, image: thumbnail, date: record.createdAt)
                 } else {
                     Image(systemName: "photo").font(.title).foregroundStyle(.tertiary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -226,7 +238,7 @@ private struct HistoryRow: View {
                 Text(captureName).font(.system(size: 13, weight: .medium))
                 HStack(spacing: 12) {
                     Text(record.createdAt, format: .dateTime.year().month().day().hour().minute())
-                    Text("\(record.width) × \(record.height) px")
+                    Text(verbatim: "\(record.width) × \(record.height) px")
                 }.font(.system(size: 12)).foregroundStyle(.secondary).monospacedDigit()
                 if !record.ocrText.isEmpty {
                     Text(record.ocrText).font(.system(size: 12)).foregroundStyle(.secondary)
@@ -239,7 +251,7 @@ private struct HistoryRow: View {
             Menu {
                 rowActions
             } label: { Image(systemName: "ellipsis").frame(width: 28, height: 28) }
-                .menuIndicator(.hidden).menuStyle(.borderlessButton).fixedSize()
+                .menuIndicator(.hidden).menuStyle(.borderlessButton).fixedSize().tint(.secondary)
                 .help("截图操作").accessibilityLabel("截图操作：识别文字、贴图、编辑或删除")
         }
         .contentShape(Rectangle())

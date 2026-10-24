@@ -1,7 +1,6 @@
 // Floating thumbnail after a capture: drag the file out, open the editor, pin or save; it then leaves on its own.
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 /// What the floating thumbnail shows; hover is tracked in AppKit so it also works while the panel is not key.
 @MainActor @Observable
@@ -44,7 +43,7 @@ final class CapturePreviewController {
         let container = PreviewContainerView(frame: CGRect(origin: .zero, size: size))
         container.onHover = { [weak self] inside in self?.hoverChanged(inside) }
         let hosting = NSHostingView(rootView: CapturePreviewView(model: model, margin: margin,
-            source: URL(fileURLWithPath: record.path),
+            source: URL(fileURLWithPath: record.path), date: record.createdAt,
             onClick: { [weak self] in self?.perform(\.onEdit) },
             onDragEnded: { [weak self] moved in if moved { self?.dismiss(animated: true) } },
             edit: { [weak self] in self?.perform(\.onEdit) },
@@ -167,6 +166,7 @@ private struct CapturePreviewView: View {
     @Bindable var model: CapturePreviewModel
     let margin: CGFloat
     let source: URL
+    let date: Date
     let onClick: () -> Void
     let onDragEnded: (Bool) -> Void
     let edit: () -> Void, pin: () -> Void, save: () -> Void, close: () -> Void
@@ -174,7 +174,7 @@ private struct CapturePreviewView: View {
 
     var body: some View {
         ZStack {
-            PreviewThumbnail(image: model.image, source: source, onClick: onClick, onDragEnded: onDragEnded)
+            PreviewThumbnail(image: model.image, source: source, date: date, onClick: onClick, onDragEnded: onDragEnded)
             if model.hovering {
                 LinearGradient(colors: [.clear, .black.opacity(0.45)], startPoint: .center, endPoint: .bottom)
                     .allowsHitTesting(false)
@@ -239,12 +239,13 @@ private struct CapturePreviewView: View {
 private struct PreviewThumbnail: NSViewRepresentable {
     let image: NSImage
     let source: URL
+    let date: Date
     let onClick: () -> Void
     let onDragEnded: (Bool) -> Void
 
     func makeNSView(context: Context) -> PreviewThumbnailView { PreviewThumbnailView() }
     func updateNSView(_ view: PreviewThumbnailView, context: Context) {
-        view.image = image; view.source = source; view.onClick = onClick; view.onDragEnded = onDragEnded
+        view.image = image; view.source = source; view.date = date; view.onClick = onClick; view.onDragEnded = onDragEnded
         view.needsDisplay = true
     }
 }
@@ -253,10 +254,10 @@ private struct PreviewThumbnail: NSViewRepresentable {
 final class PreviewThumbnailView: NSView, NSDraggingSource {
     var image: NSImage?
     var source: URL?
+    var date: Date?
     var onClick: (() -> Void)?
     var onDragEnded: ((Bool) -> Void)?
     private var downPoint: CGPoint?
-    private var promiseDelegate: FilePromiseDelegate?
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func draw(_ dirtyRect: NSRect) {
@@ -270,12 +271,8 @@ final class PreviewThumbnailView: NSView, NSDraggingSource {
         let point = convert(event.locationInWindow, from: nil)
         guard hypot(point.x - start.x, point.y - start.y) > 3 else { return }
         downPoint = nil
-        let delegate = FilePromiseDelegate(source: source)
-        promiseDelegate = delegate
-        let provider = NSFilePromiseProvider(fileType: UTType.png.identifier, delegate: delegate)
-        let item = NSDraggingItem(pasteboardWriter: provider)
-        item.setDraggingFrame(bounds, contents: image)
-        beginDraggingSession(with: [item], event: event, source: self)
+        // A real file URL (named by capture time) plus PNG: promise-only drags were refused by Terminal and upload areas.
+        beginDraggingSession(with: [DragExport.draggingItem(for: source, date: date, frame: bounds, image: image)], event: event, source: self)
     }
     override func mouseUp(with event: NSEvent) {
         if downPoint != nil { onClick?() }
@@ -283,9 +280,6 @@ final class PreviewThumbnailView: NSView, NSDraggingSource {
     }
     nonisolated func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
     nonisolated func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
-        MainActor.assumeIsolated {
-            promiseDelegate = nil
-            onDragEnded?(operation != [])
-        }
+        MainActor.assumeIsolated { onDragEnded?(operation != []) }
     }
 }

@@ -10,11 +10,16 @@ final class ScrollCoordinatorTests: XCTestCase {
         let document: CGImage
         var offset = 0
         var captures = 0
+        /// Renders the next frames mid-momentum (rows resampled at a fractional offset).
+        var soft = false
+        var scrolls = 0
+        var scrollChecks = 0
         let height: Int
         init(document: CGImage, height: Int) { self.document = document; self.height = height }
         func frame() throws -> CGImage {
             captures += 1
-            return try ScrollImageFixture.viewport(document, offset: offset, height: height)
+            return soft ? try ScrollImageFixture.resampledViewport(document, offset: offset, height: height)
+                : try ScrollImageFixture.viewport(document, offset: offset, height: height)
         }
     }
 
@@ -26,15 +31,21 @@ final class ScrollCoordinatorTests: XCTestCase {
 
     private var permissionRequests = 0
 
+    /// `scroll` enables automatic mode and moves the fake target for each synthetic step.
     private func makeCoordinator(target: FakeTarget, selection: SelectionSession,
                                  onCapture: @escaping (CGImage, CaptureContext) -> Void,
-                                 settleDelays: [Duration] = []) -> ScrollCoordinator {
+                                 settleDelays: [Duration] = [],
+                                 scroll: ((CGFloat) -> Void)? = nil) -> ScrollCoordinator {
         var workflow = ScrollCaptureWorkflow(freezeScreens: { [] }, windows: { [] },
-            prepareSource: { context, _ in RegionSnapshot(capture: { try target.frame() }, validate: { context }) })
+            prepareSource: { context, _ in
+                RegionSnapshot(capture: { _ in try target.frame() }, validate: { context },
+                               validateScroll: { _ in target.scrollChecks += 1 })
+            })
         workflow.activate = { _ in }
         workflow.settleDelays = settleDelays
         workflow.activationDelay = .zero
-        workflow.isAutoScrollAuthorized = { false }
+        workflow.isAutoScrollAuthorized = { scroll != nil }
+        workflow.scroll = { points, _ in target.scrolls += 1; scroll?(points) }
         workflow.requestAutoScrollPermission = { [weak self] in self?.permissionRequests += 1 }
         return ScrollCoordinator(engine: CaptureEngine(), selection: selection, windows: WindowList(),
                                  onCapture: onCapture, workflow: workflow)
@@ -158,6 +169,71 @@ final class ScrollCoordinatorTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(900))
         XCTAssertNotEqual(quieter.state.title, "画面没对上", "momentum-window mismatches must stay quiet")
         XCTAssertEqual(quieter.state.phase, .capturing)
+    }
+
+    /// The stitcher measures shift from the last accepted frame, so the hint must too: the delta of a
+    /// frame the app had not repainted yet (unchanged) carries over to the next, soft momentum frame,
+    /// whose rescue needs a hint within a few rows of the true shift.
+    func testScrollHintRunsFromTheLastAcceptedFrame() async throws {
+        let document = try ScrollImageFixture.document(width: 800, height: 3_000)
+        let target = FakeTarget(document: document, height: 600)
+        let selection = SelectionSession()
+        let coordinator = makeCoordinator(target: target, selection: selection) { _, _ in }
+        coordinator.continueFromSelection(context: context(width: 800, height: 600))
+        try await waitUntil { coordinator.state.frames == 1 }
+        coordinator.receive(ScrollActivity(preciseDownwardPoints: 50))
+        try await waitUntil { target.captures == 2 && coordinator.resourceCounts["capture"] == 0 }
+        XCTAssertEqual(coordinator.state.height, 600, "the app had not moved yet")
+        // 40 pt more arrive with a frame rendered mid-momentum at 90 pt (180 px at 2x).
+        target.offset = 180; target.soft = true
+        coordinator.receive(ScrollActivity(preciseDownwardPoints: 40))
+        try await waitUntil { coordinator.state.height == 780 }
+        await coordinator.cancel()
+    }
+
+    /// Automatic mode that never re-finds its overlap stops with a warning instead of looping forever,
+    /// and every synthetic event (including the corrective back-scroll) validated the target first.
+    func testPersistentMismatchEndsAutomaticModeAndEveryStepIsValidated() async throws {
+        let document = try ScrollImageFixture.document(width: 600, height: 3_000)
+        let target = FakeTarget(document: document, height: 400)
+        let selection = SelectionSession()
+        // Each synthetic step lands far from the accepted frame, so no frame ever overlaps it.
+        let coordinator = makeCoordinator(target: target, selection: selection, onCapture: { _, _ in }) { _ in
+            target.offset = target.offset == 1_500 ? 2_200 : 1_500
+        }
+        coordinator.continueFromSelection(context: context(width: 600, height: 400))
+        try await waitUntil { coordinator.state.frames == 1 }
+        coordinator.toggleAutomatic()
+        XCTAssertTrue(coordinator.state.isAutomatic)
+        try await waitUntil { !coordinator.state.isAutomatic && coordinator.resourceCounts["auto"] == 0 }
+        XCTAssertEqual(coordinator.state.phase, .capturing, "a mismatch is not the end of the page")
+        XCTAssertEqual(coordinator.state.tone, .warning)
+        XCTAssertEqual(coordinator.state.frames, 1)
+        XCTAssertGreaterThanOrEqual(target.scrolls, 4, "three stalls with back-scrolls in between")
+        XCTAssertEqual(target.scrollChecks, target.scrolls)
+        await coordinator.cancel()
+    }
+
+    /// Pause then Auto in quick succession: the finished old loop must not clear the new loop's handle.
+    func testQuickPauseAndResumeKeepsTheNewAutomaticLoop() async throws {
+        let document = try ScrollImageFixture.document(width: 600, height: 6_000)
+        let target = FakeTarget(document: document, height: 400)
+        let selection = SelectionSession()
+        let coordinator = makeCoordinator(target: target, selection: selection, onCapture: { _, _ in }) { points in
+            target.offset = min(target.offset + Int(points * 2), document.height - 400)
+        }
+        coordinator.continueFromSelection(context: context(width: 600, height: 400))
+        try await waitUntil { coordinator.state.frames == 1 }
+        coordinator.toggleAutomatic()
+        coordinator.toggleAutomatic()
+        XCTAssertFalse(coordinator.state.isAutomatic)
+        coordinator.toggleAutomatic()
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertTrue(coordinator.state.isAutomatic)
+        XCTAssertEqual(coordinator.resourceCounts["auto"], 1, "the running loop must stay tracked for cancel/finish")
+        try await waitUntil { coordinator.state.frames >= 2 }
+        await coordinator.cancel()
+        XCTAssertEqual(coordinator.resourceCounts.values.reduce(0, +), 0)
     }
 
     private func waitUntil(_ condition: () -> Bool) async throws {

@@ -47,4 +47,23 @@ final class CaptureIntentsTests: XCTestCase {
         do { _ = try await scroll.perform(); XCTFail("Expected invalid output") } catch { XCTAssertTrue(error is AutomationError) }
         XCTAssertTrue(recorder.commands.isEmpty)
     }
+
+    func testShortcutRelativePathsLandOnTheDesktopAndUnsafeDestinationsAreRefused() async throws {
+        let bridge = AutomationBridge.shared, prior = bridge.handler, recorder = AutomationCommandRecorder()
+        defer { bridge.handler = prior }
+        bridge.handler = { command in recorder.commands.append(command); return AutomationResponse(outputPath: command.outputPath) }
+        let region = CaptureRegionIntent(); region.delay = 0; region.outputPath = "Shots/region.png"; region.autoOCR = false
+        let result = try await region.perform()
+        let expected = AutomationCommand.defaultOutputDirectory.appendingPathComponent("Shots/region.png").standardizedFileURL.path
+        XCTAssertEqual(result.value, expected)
+        XCTAssertEqual(expected, FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop/Shots/region.png").path)
+        let recording = StartRecordingIntent(); recording.delay = 0; recording.autoOCR = false; recording.format = .gif
+        for path in ["~/.zshrc", "~/Desktop/region", "~/.ssh/key.png"] {
+            region.outputPath = path
+            do { _ = try await region.perform(); XCTFail("Expected refusal for \(path)") } catch { XCTAssertTrue(error is AutomationError) }
+        }
+        recording.outputPath = "~/Desktop/movie.mp4"
+        do { _ = try await recording.perform(); XCTFail("Expected GIF extension mismatch") } catch { XCTAssertTrue(error is AutomationError) }
+        XCTAssertEqual(recorder.commands.count, 1)
+    }
 }

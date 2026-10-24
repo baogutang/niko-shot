@@ -1,4 +1,5 @@
-// Uses Core Animation layers for frozen-frame selection; no full-screen drawRect work.
+// Frozen-frame selection drawn with plain Core Animation layers. Every layer is a solid rectangle or a
+// small sprite, so a pointer move only dirties the strips that changed, never the whole screen.
 import AppKit
 import QuartzCore
 
@@ -18,13 +19,18 @@ final class SelectionView: NSView {
     var candidates: [WindowCandidate] = []
     var windowMode = false
     var selectedWindow: WindowCandidate?
-    var selection: CGRect = .zero { didSet { updateAccessibilitySize(); displayUpdates?.markDirty() } }
+    var selection: CGRect = .zero { didSet { if selection != oldValue { updateLayers() } } }
+    /// True between mouse down and mouse up while drawing, moving or resizing; the session keeps
+    /// the toolbar out of the way until the gesture ends.
+    private(set) var isTrackingMouse = false
     private var anchor: CGPoint?
-    private let dim = CAShapeLayer()
-    private let border = CAShapeLayer()
-    private let badge = CATextLayer()
-    private let handlesLayer = CAShapeLayer()
-    private let hoverLayer = CAShapeLayer()
+    /// Four solid strips around the selection instead of one even-odd path over the whole display.
+    private(set) var dimLayers = (0..<4).map { _ in CALayer() }
+    private let border = CALayer()
+    private let badge = CALayer()
+    private let badgeText = CATextLayer()
+    private let handleLayers = (0..<8).map { _ in CALayer() }
+    private let hoverLayer = CALayer()
     /// Magnifier: a pixel-exact zoom with a grid and the centre pixel outlined, then coordinates and colour.
     private let loupe = CALayer()
     private let loupeImage = CALayer()
@@ -34,6 +40,7 @@ final class SelectionView: NSView {
     private static let loupePixels = 15
     private static let loupeSide: CGFloat = 135
     private static let loupeInfoHeight: CGFloat = 36
+    private static let handleSize: CGFloat = 7
     private var dragging = false
     private var tracking: NSTrackingArea?
     private var hitWindows: [WindowCandidate] = []
@@ -44,18 +51,14 @@ final class SelectionView: NSView {
     private var resizeHandle: Int?
     private var moving = false
     private var colorTask: Task<Void, Never>?
-    private var displayUpdates: ActiveDisplayLink?
-    private var lastDisplayStatistics = ActiveDisplayLink.Statistics()
     private var hoverRect: CGRect?
     private var loupeVisible = false
     private var scrollModeControl: NSSegmentedControl?
     private var scrollHint: NSTextField?
-    /// Active native display links; a detached or finished selection owns none.
-    var displayLinkCount: Int { displayUpdates?.isActive == true ? 1 : 0 }
-    /// Real callback timing retained after explicit teardown for session measurements.
-    var displayLinkStatistics: ActiveDisplayLink.Statistics { displayUpdates?.statistics ?? lastDisplayStatistics }
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
+    /// The first click must start a selection even if activation has not reached the overlay yet.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     init(frameInfo: FrozenFrame) {
         self.frameInfo = frameInfo
@@ -63,33 +66,41 @@ final class SelectionView: NSView {
         wantsLayer = true
         layer?.contents = frameInfo.image
         layer?.contentsGravity = .resize
-        dim.fillColor = NSColor.black.withAlphaComponent(Self.dimAlpha).cgColor
-        dim.fillRule = .evenOdd
-        border.strokeColor = NikoAccent.nsColor.cgColor
-        border.fillColor = NSColor.clear.cgColor
-        border.lineWidth = 1 / frameInfo.screen.scale
-        badge.fontSize = 12
-        badge.alignmentMode = .center
-        badge.foregroundColor = NSColor.white.cgColor
-        badge.backgroundColor = NSColor.black.withAlphaComponent(0.82).cgColor
-        badge.cornerRadius = 6
-        badge.contentsScale = frameInfo.screen.scale
-        [dim, border, badge].forEach { layer?.addSublayer($0) }
-        handlesLayer.fillColor = NSColor.white.cgColor
-        handlesLayer.strokeColor = NikoAccent.nsColor.cgColor
-        hoverLayer.fillColor = NikoAccent.nsColor.withAlphaComponent(0.06).cgColor
-        hoverLayer.strokeColor = NikoAccent.nsColor.cgColor
-        hoverLayer.lineWidth = 1 / frameInfo.screen.scale
-        hoverLayer.shadowColor = NikoAccent.nsColor.cgColor
-        hoverLayer.shadowOpacity = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.7
-        hoverLayer.shadowRadius = 5
+        let hairline = 1 / max(1, frameInfo.screen.scale)
+        for strip in dimLayers {
+            strip.backgroundColor = NSColor.black.withAlphaComponent(Self.dimAlpha).cgColor
+            layer?.addSublayer(strip)
+        }
+        hoverLayer.backgroundColor = NikoAccent.bright.withAlphaComponent(0.08).cgColor
+        hoverLayer.borderColor = NikoAccent.bright.cgColor
+        hoverLayer.borderWidth = max(hairline, 1)
+        hoverLayer.isHidden = true
+        border.borderColor = NikoAccent.bright.cgColor
+        border.borderWidth = hairline
+        badgeText.fontSize = 12
+        badgeText.font = Self.badgeFont
+        badgeText.alignmentMode = .center
+        badgeText.foregroundColor = NSColor.white.cgColor
+        badgeText.contentsScale = frameInfo.screen.scale
+        badge.backgroundColor = NSColor.black.withAlphaComponent(0.78).cgColor
+        badge.cornerRadius = 5
+        badge.addSublayer(badgeText)
+        [hoverLayer, border, badge].forEach { layer?.addSublayer($0) }
+        for handle in handleLayers {
+            handle.bounds = CGRect(x: 0, y: 0, width: Self.handleSize, height: Self.handleSize)
+            handle.cornerRadius = Self.handleSize / 2
+            handle.backgroundColor = NSColor.white.cgColor
+            handle.borderColor = NikoAccent.bright.cgColor
+            handle.borderWidth = 1
+            layer?.addSublayer(handle)
+        }
         let side = Self.loupeSide, cell = side / CGFloat(Self.loupePixels)
         loupe.bounds = CGRect(x: 0, y: 0, width: side, height: side + Self.loupeInfoHeight)
         loupe.anchorPoint = .zero
-        loupe.cornerRadius = 12; loupe.cornerCurve = .continuous; loupe.masksToBounds = true
+        loupe.cornerRadius = 10; loupe.cornerCurve = .continuous; loupe.masksToBounds = true
         loupe.backgroundColor = NSColor.black.withAlphaComponent(0.86).cgColor
         loupe.borderColor = NSColor.white.withAlphaComponent(0.28).cgColor
-        loupe.borderWidth = 1 / frameInfo.screen.scale
+        loupe.borderWidth = hairline
         loupeImage.frame = CGRect(x: 0, y: 0, width: side, height: side)
         loupeImage.contents = frameInfo.image
         loupeImage.magnificationFilter = .nearest
@@ -102,21 +113,19 @@ final class SelectionView: NSView {
         loupeGrid.frame = loupeImage.frame
         loupeGrid.path = grid
         loupeGrid.strokeColor = NSColor.black.withAlphaComponent(0.16).cgColor
-        loupeGrid.lineWidth = 1 / frameInfo.screen.scale
+        loupeGrid.lineWidth = hairline
         let middle = CGFloat(Self.loupePixels / 2) * cell
         loupeCenter.frame = loupeImage.frame
         loupeCenter.path = CGPath(rect: CGRect(x: middle, y: middle, width: cell, height: cell), transform: nil)
         loupeCenter.fillColor = NSColor.clear.cgColor
         loupeCenter.strokeColor = NSColor.white.cgColor
         loupeCenter.lineWidth = 1.5
-        loupeCenter.shadowColor = NSColor.black.cgColor; loupeCenter.shadowOpacity = 0.8
-        loupeCenter.shadowRadius = 1; loupeCenter.shadowOffset = .zero
         loupeLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
         loupeLabel.fontSize = 11; loupeLabel.foregroundColor = NSColor.white.cgColor
         loupeLabel.alignmentMode = .center; loupeLabel.contentsScale = frameInfo.screen.scale
         loupeLabel.frame = CGRect(x: 4, y: side + 3, width: side - 8, height: Self.loupeInfoHeight - 6)
         [loupeImage, loupeGrid, loupeCenter, loupeLabel].forEach { loupe.addSublayer($0) }
-        [hoverLayer, handlesLayer, loupe].forEach { layer?.addSublayer($0) }
+        layer?.addSublayer(loupe)
         loupe.isHidden = true
         setAccessibilityElement(true)
         setAccessibilityLabel("截图选区，拖动鼠标选择，回车复制，Escape 取消")
@@ -152,59 +161,70 @@ final class SelectionView: NSView {
         scrollHint?.stringValue = windowMode ? "单击窗口开始 · 空格切换重叠窗口 · Esc 取消" : "拖动框选后直接开始 · Tab 切换窗口 · Esc 取消"
         onSelectionModeChanged?()
         window?.makeFirstResponder(self)
-        displayUpdates?.markDirty()
+        updateLayers()
     }
 
     deinit { colorTask?.cancel() }
 
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        guard window != nil else { stopDisplayUpdates(); return }
-        if displayUpdates == nil { displayUpdates = ActiveDisplayLink { [weak self] in self?.updateLayers() } }
-        displayUpdates?.start(in: self)
-    }
-
     override func viewWillMove(toWindow newWindow: NSWindow?) {
-        if newWindow == nil { stopDisplayUpdates() }
+        if newWindow == nil { stopUpdates() }
         super.viewWillMove(toWindow: newWindow)
     }
 
-    /// Stops native frame callbacks and pending pixel sampling before a window or stage is released.
-    func stopDisplayUpdates() {
-        if let displayUpdates {
-            lastDisplayStatistics = displayUpdates.statistics
-            displayUpdates.invalidate()
-        }
-        displayUpdates = nil
+    /// Cancels pending pixel sampling before a window or stage releases the view.
+    func stopUpdates() {
         colorTask?.cancel()
         colorTask = nil
     }
 
+    /// The selection snapped to the pixels that will actually be exported, in view points.
+    var visibleSelection: CGRect {
+        let scale = frameInfo.screen.scale
+        guard !selection.isEmpty, scale > 0 else { return .zero }
+        let pixels = CoordinateSpace.imagePixelRect(fromSelection: selection, screen: frameInfo.screen)
+        return CGRect(x: pixels.minX / scale, y: pixels.minY / scale, width: pixels.width / scale, height: pixels.height / scale)
+    }
+
     private var sizeLabel: String {
-        let scale = AppSettings.shared.showsPixels ? frameInfo.screen.scale : 1
-        return "\(Int((selection.width * scale).rounded())) × \(Int((selection.height * scale).rounded())) \(scale == 1 ? "pt" : "px")"
+        if AppSettings.shared.showsPixels {
+            let pixels = CoordinateSpace.imagePixelRect(fromSelection: selection, screen: frameInfo.screen)
+            return "\(Int(pixels.width)) × \(Int(pixels.height))"
+        }
+        return "\(Int(selection.width.rounded())) × \(Int(selection.height.rounded())) pt"
     }
 
     private func updateAccessibilitySize() { setAccessibilityValue(sizeLabel) }
 
+    /// Moves a handful of layers; nothing here redraws pixels except the two short text labels.
     private func updateLayers() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        let path = CGMutablePath()
-        path.addRect(bounds)
-        if !selection.isEmpty { path.addRect(selection) }
-        dim.path = path
-        border.path = CGPath(rect: selection, transform: nil)
-        let handlePath = CGMutablePath()
-        if !selection.isEmpty { for point in SelectionGeometry.handles(selection) { handlePath.addEllipse(in: CGRect(x: point.x - 3, y: point.y - 3, width: 6, height: 6)) } }
-        handlesLayer.path = handlePath
-        badge.isHidden = selection.isEmpty
-        badge.string = sizeLabel
-        if scrollModeControl != nil, !selection.isEmpty, selection.height * frameInfo.screen.scale < 240 {
-            badge.string = "选区至少需要 240 px 高"
+        let rect = visibleSelection
+        let hasSelection = !rect.isEmpty
+        layoutDim(around: hasSelection ? rect : nil)
+        border.isHidden = !hasSelection
+        let hairline = 1 / max(1, frameInfo.screen.scale)
+        // The hairline sits just outside the exported pixels so it never covers them.
+        if hasSelection { border.frame = rect.insetBy(dx: -hairline, dy: -hairline) }
+        for (handle, point) in zip(handleLayers, SelectionGeometry.handles(rect)) {
+            handle.isHidden = !hasSelection
+            handle.position = point
         }
-        badge.frame = CGRect(x: min(max(8, selection.midX - 78), bounds.width - 164), y: max(frameInfo.screen.safeTop + 8, selection.minY - 34), width: 156, height: 26)
-        hoverLayer.path = hoverRect.map { CGPath(rect: $0, transform: nil) }
+        badge.isHidden = !hasSelection
+        if hasSelection {
+            let tooShort = scrollModeControl != nil && rect.height * frameInfo.screen.scale < 240
+            let text = tooShort ? "选区至少需要 240 px 高" : sizeLabel
+            if (badgeText.string as? String) != text { badgeText.string = text }
+            let width = ceil((text as NSString).size(withAttributes: [.font: Self.badgeFont]).width) + 14
+            let height: CGFloat = 20
+            var origin = CGPoint(x: rect.minX, y: rect.minY - height - 6)
+            if origin.y < frameInfo.screen.safeTop + 4 { origin.y = rect.minY + 6; origin.x = rect.minX + 6 }
+            origin.x = min(max(4, origin.x), bounds.width - width - 4)
+            badge.frame = CGRect(origin: origin, size: CGSize(width: width, height: height))
+            badgeText.frame = CGRect(x: 0, y: (height - 15) / 2, width: width, height: 15)
+        }
+        hoverLayer.isHidden = hoverRect == nil
+        if let hoverRect { hoverLayer.frame = hoverRect }
         loupe.isHidden = !loupeVisible
         if loupeVisible {
             let scale = frameInfo.screen.scale
@@ -215,10 +235,26 @@ final class SelectionView: NSView {
             let pixelY = min(CGFloat(image.height - 1), max(0, (lastPoint.y * scale).rounded(.down)))
             loupeImage.contentsRect = CGRect(x: (pixelX - half) / CGFloat(image.width), y: (pixelY - half) / CGFloat(image.height),
                                              width: pixels / CGFloat(image.width), height: pixels / CGFloat(image.height))
-            loupeLabel.string = "\(Int(pixelX)), \(Int(pixelY))\n\(hexColor)"
+            let label = "\(Int(pixelX)), \(Int(pixelY))\n\(hexColor)"
+            if (loupeLabel.string as? String) != label { loupeLabel.string = label }
         }
         updateAccessibilitySize()
         CATransaction.commit()
+    }
+
+    private static let badgeFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+
+    /// Top and bottom strips span the display; left and right strips fill the selection's rows.
+    private func layoutDim(around rect: CGRect?) {
+        guard let rect else {
+            dimLayers[0].frame = bounds
+            for strip in dimLayers.dropFirst() { strip.frame = .zero }
+            return
+        }
+        dimLayers[0].frame = CGRect(x: 0, y: 0, width: bounds.width, height: max(0, rect.minY))
+        dimLayers[1].frame = CGRect(x: 0, y: rect.maxY, width: bounds.width, height: max(0, bounds.height - rect.maxY))
+        dimLayers[2].frame = CGRect(x: 0, y: rect.minY, width: max(0, rect.minX), height: rect.height)
+        dimLayers[3].frame = CGRect(x: rect.maxX, y: rect.minY, width: max(0, bounds.width - rect.maxX), height: rect.height)
     }
 
     override func updateTrackingAreas() {
@@ -236,9 +272,8 @@ final class SelectionView: NSView {
         }
     }
     override func mouseMoved(with event: NSEvent) {
-        displayUpdates?.recordInputEvent()
-        let point = bounded(convert(event.locationInWindow, from: nil))
-        updatePointer(at: point)
+        updatePointer(at: bounded(convert(event.locationInWindow, from: nil)))
+        updateLayers()
     }
 
     /// Beside the pointer (down and right), flipped to the other side near a screen edge so it never covers the target.
@@ -259,6 +294,7 @@ final class SelectionView: NSView {
         return !selection.insetBy(dx: 14, dy: 14).contains(point) && selection.insetBy(dx: -14, dy: -14).contains(point)
     }
 
+    /// Updates pointer-derived state; callers refresh the layers once afterwards.
     private func updatePointer(at point: CGPoint) {
         lastPoint = point
         if selection.isEmpty, !dragging {
@@ -267,13 +303,8 @@ final class SelectionView: NSView {
             if hits != hitWindows { hitWindows = hits; hoverIndex = 0 }
             highlightWindow()
         }
-        guard wantsLoupe(at: point) else {
-            loupeVisible = false; displayUpdates?.markDirty()
-            return
-        }
-        loupeVisible = true
-        displayUpdates?.markDirty()
-        sampleColor()
+        loupeVisible = wantsLoupe(at: point)
+        if loupeVisible { sampleColor() }
     }
 
     /// Reads the pixel under the pointer as sRGB hex; when the pointer has moved on, the latest point is read next.
@@ -287,7 +318,7 @@ final class SelectionView: NSView {
             guard !Task.isCancelled, let self else { return }
             self.colorTask = nil
             self.hexColor = value
-            self.displayUpdates?.markDirty()
+            if self.loupeVisible { self.updateLayers() }
             if self.lastPoint != point, self.loupeVisible { self.sampleColor() }
         }
     }
@@ -308,7 +339,6 @@ final class SelectionView: NSView {
         return drawn ? String(format: "#%02X%02X%02X", bytes[0], bytes[1], bytes[2]) : "#000000"
     }
     private func highlightWindow() {
-        defer { displayUpdates?.markDirty() }
         guard !hitWindows.isEmpty else { hoverRect = nil; selectedWindow = nil; return }
         let candidate = hitWindows[hoverIndex % hitWindows.count]
         selectedWindow = candidate
@@ -316,7 +346,6 @@ final class SelectionView: NSView {
         hoverRect = CGRect(origin: origin, size: candidate.frame.size).intersection(bounds)
     }
     override func mouseDown(with event: NSEvent) {
-        displayUpdates?.recordInputEvent()
         let point = bounded(convert(event.locationInWindow, from: nil))
         if windowMode { selection = .zero }
         if selection.isEmpty { updatePointer(at: point) }
@@ -330,41 +359,42 @@ final class SelectionView: NSView {
             else if abs(point.y - selection.maxY) < 5 { resizeHandle = 5 }
         }
         moving = resizeHandle == nil && selection.contains(point)
+        isTrackingMouse = !windowMode
         if !moving, resizeHandle == nil { selection = .zero }
         // Moving the whole selection needs no pixel aim; drawing and edge resizing do.
         loupeVisible = !moving && scrollModeControl == nil && !windowMode
-        displayUpdates?.markDirty()
+        updateLayers()
     }
     override func mouseDragged(with event: NSEvent) {
-        displayUpdates?.recordInputEvent()
         guard !windowMode else { return }
         guard let anchor else { return }
         selectedWindow = nil; hoverRect = nil
         let point = bounded(convert(event.locationInWindow, from: nil))
         dragging = !moving
         let aspect: CGFloat? = event.modifierFlags.contains(.shift) ? (originalRect.isEmpty ? 1 : originalRect.width / max(1, originalRect.height)) : nil
-        if moving { selection = SelectionGeometry.clamp(originalRect.offsetBy(dx: point.x - anchor.x, dy: point.y - anchor.y), bounds: bounds) }
+        let next: CGRect
+        if moving { next = SelectionGeometry.clamp(originalRect.offsetBy(dx: point.x - anchor.x, dy: point.y - anchor.y), bounds: bounds) }
         else if let resizeHandle {
-            selection = SelectionGeometry.resize(originalRect, handle: resizeHandle, to: point, aspect: aspect, centered: event.modifierFlags.contains(.option)).intersection(bounds)
-        } else { selection = SelectionGeometry.drag(anchor: anchor, point: point, aspect: aspect, centered: event.modifierFlags.contains(.option)).intersection(bounds) }
-        if dragging { updatePointer(at: point) } else { loupeVisible = false }
+            next = SelectionGeometry.resize(originalRect, handle: resizeHandle, to: point, aspect: aspect, centered: event.modifierFlags.contains(.option)).intersection(bounds)
+        } else { next = SelectionGeometry.drag(anchor: anchor, point: point, aspect: aspect, centered: event.modifierFlags.contains(.option)).intersection(bounds) }
+        if dragging { updatePointer(at: point) } else { lastPoint = point; loupeVisible = false }
+        selection = next.isNull ? .zero : next
+        updateLayers()
         onSelection?(selection)
     }
     override func mouseUp(with event: NSEvent) {
-        displayUpdates?.recordInputEvent()
         if selection.isEmpty, let selectedWindow {
             let origin = CoordinateSpace.globalPointToScreenLocal(CGPoint(x: selectedWindow.frame.minX, y: selectedWindow.frame.maxY), screen: frameInfo.screen)
             selection = CGRect(origin: origin, size: selectedWindow.frame.size).intersection(bounds)
         }
-        anchor = nil; moving = false; resizeHandle = nil; dragging = false
+        anchor = nil; moving = false; resizeHandle = nil; dragging = false; isTrackingMouse = false
         updatePointer(at: bounded(convert(event.locationInWindow, from: nil)))
+        updateLayers()
         onSelection?(selection)
         window?.invalidateCursorRects(for: self)
-        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
         if !selection.isEmpty { onSelectionCompleted?() }
     }
     override func keyDown(with event: NSEvent) {
-        displayUpdates?.recordInputEvent()
         if event.modifierFlags.contains(.option), event.charactersIgnoringModifiers?.lowercased() == "c" {
             NSPasteboard.general.clearContents(); NSPasteboard.general.setString(hexColor, forType: .string); return
         }
@@ -381,12 +411,12 @@ final class SelectionView: NSView {
         case 48:
             if let modes = scrollModeControl { modes.selectedSegment = windowMode ? 1 : 0; changeScrollMode(modes) }
             else { onAnnotate?() }
-        case 49: hoverIndex += 1; highlightWindow()
+        case 49: hoverIndex += 1; highlightWindow(); updateLayers()
         case 123, 124, 125, 126:
             let delta: CGFloat = (event.modifierFlags.contains(.shift) ? 10 : 1) / frameInfo.screen.scale
             selection = SelectionGeometry.clamp(selection.offsetBy(dx: event.keyCode == 123 ? -delta : event.keyCode == 124 ? delta : 0, dy: event.keyCode == 126 ? -delta : event.keyCode == 125 ? delta : 0), bounds: bounds)
             onSelection?(selection)
-        case 32: AppSettings.shared.showsPixels.toggle(); updateAccessibilitySize(); displayUpdates?.markDirty()
+        case 32: AppSettings.shared.showsPixels.toggle(); updateLayers()
         case 35: showSizePanel()
         default: super.keyDown(with: event)
         }
@@ -394,7 +424,7 @@ final class SelectionView: NSView {
     private func showSizePanel() {
         let menu = NSMenu()
         for preset in AppSettings.shared.presetSizes {
-            let item = NSMenuItem(title: "\(preset.name) · \(Int(preset.width)) × \(Int(preset.height))", action: #selector(applyPreset(_:)), keyEquivalent: "")
+            let item = NSMenuItem(title: "\(preset.name)（\(Int(preset.width)) × \(Int(preset.height))）", action: #selector(applyPreset(_:)), keyEquivalent: "")
             item.target = self; item.representedObject = preset; menu.addItem(item)
         }
         menu.addItem(.separator())

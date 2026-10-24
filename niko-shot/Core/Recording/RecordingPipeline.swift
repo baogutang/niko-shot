@@ -13,6 +13,9 @@ import VideoToolbox
 final class RecordingPipeline: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDelegate,
                                AVCaptureVideoDataOutputSampleBufferDelegate {
     let queue = DispatchQueue(label: "com.n1ko.niko-shot.recording.writer", qos: .userInitiated)
+    /// AVCaptureSession start/stop can block for hundreds of ms; screen frames arrive on queue and must not wait.
+    /// Camera commands run here in order and only touch pipeline state through queue.sync.
+    private let cameraQueue = DispatchQueue(label: "com.n1ko.niko-shot.recording.camera", qos: .userInitiated)
     private let options: RecordingOptions
     private let width: Int, height: Int
     private let output: URL
@@ -72,12 +75,22 @@ final class RecordingPipeline: NSObject, @unchecked Sendable, SCStreamOutput, SC
 
     func setCameraEnabled(_ enabled: Bool) async throws -> AVCaptureSession? {
         try await withCheckedThrowingContinuation { continuation in
-            queue.async {
-                guard self.acceptsSamples else { continuation.resume(throwing: RecordingError.cancelled); return }
+            cameraQueue.async {
+                guard self.queue.sync(execute: { self.acceptsSamples }) else { continuation.resume(throwing: RecordingError.cancelled); return }
                 do {
-                    if enabled, self.cameraSession == nil { try self.startCameraOnQueue() }
-                    else if !enabled { self.stopCameraOnQueue() }
-                    continuation.resume(returning: self.cameraSession)
+                    if !enabled { self.queue.sync { self.stopCameraOnQueue() } }
+                    else if self.queue.sync(execute: { self.cameraSession }) == nil {
+                        let (session, output) = try self.makeRunningCamera()
+                        let installed = self.queue.sync { () -> Bool in
+                            guard self.acceptsSamples, self.cameraSession == nil else { return false }
+                            self.cameraOutput = output; self.cameraSession = session; return true
+                        }
+                        guard installed else {
+                            output.setSampleBufferDelegate(nil, queue: nil); session.stopRunning()
+                            throw RecordingError.cancelled
+                        }
+                    }
+                    continuation.resume(returning: self.queue.sync { self.cameraSession })
                 } catch { continuation.resume(throwing: error) }
             }
         }
@@ -121,6 +134,11 @@ final class RecordingPipeline: NSObject, @unchecked Sendable, SCStreamOutput, SC
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
+        receive(sampleBuffer, of: outputType)
+    }
+
+    /// The SCStreamOutput body, callable on queue without a live stream.
+    func receive(_ sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
         dispatchPrecondition(condition: .onQueue(queue))
         guard acceptsSamples, timeline.pausedAt == nil,
               CMSampleBufferIsValid(sampleBuffer), CMSampleBufferDataIsReady(sampleBuffer) else { return }
@@ -144,8 +162,10 @@ final class RecordingPipeline: NSObject, @unchecked Sendable, SCStreamOutput, SC
         }
     }
 
-    func stream(_ stream: SCStream, didStopWithError error: any Error) {
-        let message = error.localizedDescription
+    func stream(_ stream: SCStream, didStopWithError error: any Error) { captureStopped(error.localizedDescription) }
+
+    /// Menu-bar Stop and display removal arrive here; failOnQueue keeps the file while the writer is healthy.
+    func captureStopped(_ message: String) {
         queue.async { if self.acceptsSamples { self.failOnQueue(message) } }
     }
 
@@ -274,7 +294,8 @@ final class RecordingPipeline: NSObject, @unchecked Sendable, SCStreamOutput, SC
         return destination
     }
 
-    private func startCameraOnQueue() throws {
+    private func makeRunningCamera() throws -> (AVCaptureSession, AVCaptureVideoDataOutput) {
+        dispatchPrecondition(condition: .onQueue(cameraQueue))
         guard let device = AVCaptureDevice.default(for: .video) else { throw RecordingError.capture("没有可用的摄像头。") }
         let session = AVCaptureSession()
         let input = try AVCaptureDeviceInput(device: device)
@@ -292,14 +313,18 @@ final class RecordingPipeline: NSObject, @unchecked Sendable, SCStreamOutput, SC
             connection.automaticallyAdjustsVideoMirroring = false; connection.isVideoMirrored = true
         }
         session.commitConfiguration()
-        cameraOutput = output; cameraSession = session
         session.startRunning()
-        guard session.isRunning else { stopCameraOnQueue(); throw RecordingError.capture("摄像头未能开始采集。") }
+        guard session.isRunning else {
+            output.setSampleBufferDelegate(nil, queue: nil); throw RecordingError.capture("摄像头未能开始采集。")
+        }
+        return (session, output)
     }
 
     private func stopCameraOnQueue() {
+        dispatchPrecondition(condition: .onQueue(queue))
         cameraOutput?.setSampleBufferDelegate(nil, queue: nil)
-        cameraSession?.stopRunning()
+        // Late frames are dropped by the cameraSession guard while the blocking stop finishes elsewhere.
+        if let session = cameraSession { cameraQueue.async { session.stopRunning() } }
         cameraSession = nil; cameraOutput = nil; cameraImage = nil; imageContext = nil
     }
 
@@ -309,8 +334,8 @@ final class RecordingPipeline: NSObject, @unchecked Sendable, SCStreamOutput, SC
             continuation.resume(throwing: RecordingError.encoder(self.writer?.error?.localizedDescription ?? "录制器已停止。")); return
         }
         acceptsSamples = false; stopInputsOnQueue()
-        do { try audio?.flushConverters() }
-        catch { writer.cancelWriting(); continuation.resume(throwing: error); return }
+        // A lost resampler tail is a few ms of audio; never discard a healthy writer over it.
+        try? audio?.flushConverters()
         guard timeline.origin != nil, lastVideoTime != nil else {
             writer.cancelWriting()
             if ownsOutput { try? FileManager.default.removeItem(at: output); ownsOutput = false }
@@ -389,7 +414,10 @@ final class RecordingPipeline: NSObject, @unchecked Sendable, SCStreamOutput, SC
 
     private func failOnQueue(_ message: String) {
         guard acceptsSamples else { return }
-        acceptsSamples = false; stopInputsOnQueue(); events.yield(.failure(message))
+        acceptsSamples = false; stopInputsOnQueue()
+        // Only a failed writer loses the file. Otherwise freeze the clock here so a later Stop ends at this frame.
+        if writer?.status == .writing { timeline.pause(at: Self.hostTime); events.yield(.interrupted(message)) }
+        else { events.yield(.failure(message)) }
     }
 
     private func stopInputsOnQueue() {

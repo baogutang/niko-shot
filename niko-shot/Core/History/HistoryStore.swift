@@ -80,9 +80,11 @@ actor HistoryStore {
     /// Paginates newest-first with parameterized FTS searches, including Chinese substrings.
     func list(query: String = "", limit: Int = 50, offset: Int = 0) throws -> [HistoryRecord] {
         let filtering = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let match = Self.matchExpression(query)
+        if filtering && match.isEmpty { return [] }
         let stmt = try statement("SELECT * FROM captures \(filtering ? "WHERE id IN (SELECT id FROM captures_fts WHERE captures_fts MATCH ?)" : "") ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?")
         defer { sqlite3_finalize(stmt) }
-        if filtering { bind("\"" + Self.searchTokens(query).replacingOccurrences(of: "\"", with: "\"\"") + "\"", at: 1, to: stmt) }
+        if filtering { bind(match, at: 1, to: stmt) }
         let base: Int32 = filtering ? 2 : 1
         sqlite3_bind_int(stmt, base, Int32(min(200, max(1, limit)))); sqlite3_bind_int64(stmt, base + 1, Int64(max(0, offset)))
         var result: [HistoryRecord] = []
@@ -136,6 +138,16 @@ actor HistoryStore {
             if let raw = sqlite3_column_text(stmt, 0), let id = UUID(uuidString: String(cString: raw)), let path = sqlite3_column_text(stmt, 1) { expired.append((id, String(cString: path))) }
         }
         for (id, _) in expired { try delete(id: id) }
+    }
+    /// Every whitespace-separated word must occur, the last token of each as a prefix: "Eng" finds
+    /// "English", "hello world" finds "hello big world". A Chinese word stays one quoted phrase of
+    /// consecutive single-character tokens, so it still matches only as a substring. Words with nothing
+    /// the tokenizer indexes (punctuation alone) are dropped; they would otherwise match nothing.
+    nonisolated static func matchExpression(_ query: String) -> String {
+        query.split(whereSeparator: \.isWhitespace)
+            .filter { $0.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) } }
+            .map { "\"" + searchTokens(String($0)).replacingOccurrences(of: "\"", with: "\"\"") + "\"*" }
+            .joined(separator: " AND ")
     }
     nonisolated static func searchTokens(_ text: String) -> String {
         var result = ""

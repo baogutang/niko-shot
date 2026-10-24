@@ -255,6 +255,24 @@ final class ScreenshotTextTests: XCTestCase {
         store.remove()
     }
 
+    func testInlineProviderPickerNeverSelectsTheGenericCustomEntryOrAMissingInstance() async throws {
+        let store = try settings()
+        defer { store.remove() }
+        let local = CustomRESTConfiguration(name: "Local fixture", urlTemplate: "https://example.com/translate",
+            bodyTemplate: #"{"q":"$TEXT"}"#, responsePath: "text")
+        store.settings.customTranslationServices = [local]
+        let controller = makeController(settings: store.settings, gate: RecognitionGate(), log: TranslationLog())
+        controller.model.selectProvider(TranslationProviderID.custom.rawValue)
+        XCTAssertEqual(store.settings.translationProvider, .baidu, "The generic entry has no instance and would disable translation")
+        controller.model.selectProvider(TranslationServiceChoice.tag(UUID()))
+        XCTAssertEqual(store.settings.translationProvider, .baidu)
+        controller.model.selectProvider(TranslationServiceChoice.tag(local.id))
+        XCTAssertEqual(store.settings.translationProvider, .custom)
+        XCTAssertEqual(store.settings.selectedCustomTranslationID, local.id)
+        XCTAssertEqual(controller.model.providerSelection, TranslationServiceChoice.tag(local.id))
+        await controller.finishAndDrain()
+    }
+
     func testSavingThenRemovingCredentialsRefreshesAnOpenCardAndCancelsQueuedText() async throws {
         let store = try settings()
         defer { store.remove() }

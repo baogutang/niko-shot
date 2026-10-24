@@ -1,4 +1,4 @@
-// Publishes multi-type images and file URLs; native drag promises are supplied by DragExporter.
+// Publishes PNG and file URLs as data; native drag promises are supplied by DragExporter.
 import AppKit
 import UniformTypeIdentifiers
 
@@ -25,49 +25,41 @@ enum ClipboardWriter {
 
     /// Writes PNG and the archived file URL as data, never as promises: input methods, clipboard
     /// tools and security agents read every new clipboard within a millisecond, and a provider asked
-    /// for them would run on the main thread. Only TIFF (60 MB at 5K, rarely wanted) is drawn on request.
-    static func write(png: Data, image: CGImage, date: Date, file: URL?, to pasteboard: NSPasteboard = .general) {
-        let payload = CapturePasteboardPayload(image: image, date: date, file: file)
+    /// for them would run on the main thread. TIFF readers get the pasteboard's own PNG conversion, so
+    /// `image` is not kept: a crop holds its whole full-screen buffer (about 59 MB at 5K) alive.
+    static func write(png: Data, image _: CGImage, date: Date, file: URL?, to pasteboard: NSPasteboard = .general) {
         let item = NSPasteboardItem()
         item.setData(png, forType: .png)
-        item.setDataProvider(payload, forTypes: [.tiff])
         var objects: [any NSPasteboardWriting] = [item]
+        var payload: CapturePasteboardPayload?
         if let file {
             item.setString(file.absoluteString, forType: .fileURL)
-            objects.append(NSFilePromiseProvider(fileType: UTType.png.identifier, delegate: payload))
+            let promise = CapturePasteboardPayload(file: file)
+            objects.append(NSFilePromiseProvider(fileType: UTType.png.identifier, delegate: promise))
+            payload = promise
         }
         pasteboard.clearContents(); pasteboard.writeObjects(objects)
         current = payload
     }
 }
 
-/// The parts of a published capture made only when asked: TIFF, and the copy a file promise writes.
-final class CapturePasteboardPayload: NSObject, NSPasteboardItemDataProvider, NSFilePromiseProviderDelegate, @unchecked Sendable {
-    let file: URL?
-    private let image: CGImage
-    private let date: Date
+/// Writes the copy a pasted file promise asks for, off the main thread.
+final class CapturePasteboardPayload: NSObject, NSFilePromiseProviderDelegate, @unchecked Sendable {
+    let file: URL
     private let promiseQueue: OperationQueue = {
         let queue = OperationQueue()
         queue.qualityOfService = .userInitiated
         return queue
     }()
 
-    init(image: CGImage, date: Date, file: URL?) {
-        self.image = image; self.date = date; self.file = file
-    }
-
-    func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
-        guard type == .tiff, let data = try? Exporters.encode(image, format: .tiff, date: date) else { return }
-        item.setData(data, forType: .tiff)
-    }
+    init(file: URL) { self.file = file }
 
     func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider, fileNameForType fileType: String) -> String {
-        file?.lastPathComponent ?? "niko-shot.png"
+        file.lastPathComponent
     }
 
     func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider, writePromiseTo url: URL,
                              completionHandler: @escaping ((any Error)?) -> Void) {
-        guard let file else { completionHandler(AppError.file("截图未能保存。")); return }
         do { try FileManager.default.copyItem(at: file, to: url); completionHandler(nil) } catch { completionHandler(error) }
     }
 

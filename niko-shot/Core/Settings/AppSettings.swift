@@ -82,6 +82,11 @@ public final class AppSettings {
     public var playsCaptureSound: Bool { didSet { defaults.set(playsCaptureSound, forKey: "playsCaptureSound") } }
     /// Shows a floating thumbnail after copying a capture, to drag out, edit, pin or save it.
     public var showsCapturePreview: Bool { didSet { defaults.set(showsCapturePreview, forKey: "showsCapturePreview") } }
+    /// Lets the CLI capture full screen, a window by ID or read OCR history without on-screen selection.
+    public var allowsSilentAutomation: Bool { didSet { defaults.set(allowsSilentAutomation, forKey: "allowsSilentAutomation") } }
+
+    /// Folder that receives a file for every completed capture; empty keeps captures on the clipboard only.
+    public var autoSaveFolder: String { didSet { defaults.set(autoSaveFolder, forKey: "autoSaveFolder") } }
 
     /// Loads preferences from an injectable defaults store without storing any credentials.
     public init(defaults: UserDefaults = .standard) {
@@ -91,7 +96,7 @@ public final class AppSettings {
             "filenameTemplate": "niko-shot {date} {time}", "autoOCR": true, "automaticTranslation": true,
             "recordingFPS": 30, "recordingCodec": "hevc", "systemAudio": true,
             "microphone": false, "showsCursor": true, "historyRetention": 30, "accurateOCR": true,
-            "playsCaptureSound": true, "showsCapturePreview": true
+            "playsCaptureSound": true, "showsCapturePreview": true, "allowsSilentAutomation": false
         ])
         captureDelay = min(10, max(0, defaults.integer(forKey: "captureDelay")))
         showsPixels = defaults.bool(forKey: "showsPixels")
@@ -130,5 +135,7 @@ public final class AppSettings {
         historyRetention = max(0, defaults.integer(forKey: "historyRetention"))
         playsCaptureSound = defaults.bool(forKey: "playsCaptureSound")
         showsCapturePreview = defaults.bool(forKey: "showsCapturePreview")
+        allowsSilentAutomation = defaults.bool(forKey: "allowsSilentAutomation")
+        autoSaveFolder = defaults.string(forKey: "autoSaveFolder") ?? ""
     }
 }

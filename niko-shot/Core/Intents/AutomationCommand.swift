@@ -58,6 +58,9 @@ public enum AutomationError: Error, LocalizedError, Equatable, Sendable {
         case .executionFailed(let message): return message
         }
     }
+
+    /// Returned to CLI clients that ask for a capture without on-screen selection before the user opted in.
+    public static let silentAutomationDisabled = AutomationError.executionFailed("命令行静默截图未开启：在 设置 → 通用 打开「允许命令行静默截图」。")
 }
 
 /// Metadata only: clipboard contents, recognized text and credentials never belong in a command.
@@ -90,8 +93,24 @@ public struct AutomationCommand: Codable, Sendable, Equatable {
         self.recordingFormat = recordingFormat; self.windowID = windowID
     }
 
+    /// The resident app runs with `/` as its working directory, so Shortcuts' relative paths land on the Desktop.
+    public static var defaultOutputDirectory: URL {
+        FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop", isDirectory: true)
+    }
+
+    /// True when the command yields pixels or recognized text without any on-screen selection.
+    public var runsWithoutSelection: Bool {
+        switch action {
+        case .lastOCR: true
+        case .capture, .ocr: captureType == .fullscreen || windowID != nil
+        case .translate, .record, .scroll: false
+        }
+    }
+
     /// Validates scalar values and expands file paths without creating files.
-    public func validated() throws -> AutomationCommand {
+    /// Relative paths resolve against `base`; only the CLI passes its own working directory.
+    public func validated(relativeTo base: URL = AutomationCommand.defaultOutputDirectory) throws -> AutomationCommand {
         guard (0...10).contains(delay) else { throw AutomationError.invalidArguments("delay 必须为 0–10 的整数。") }
         if let windowID {
             guard windowID > 0, captureType == .window, action == .capture || action == .ocr else {
@@ -103,17 +122,28 @@ public struct AutomationCommand: Codable, Sendable, Equatable {
         }
         var result = self
         if let outputPath {
+            guard action != .translate, action != .lastOCR else { throw AutomationError.invalidArguments("output 不适用于 \(action.rawValue)。") }
             guard !outputPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   !outputPath.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
                 throw AutomationError.invalidArguments("output 不得为空或包含控制字符。")
             }
             let expanded = (outputPath as NSString).expandingTildeInPath
             guard !expanded.hasPrefix("~") else { throw AutomationError.invalidArguments("无法展开 output 中的用户目录。") }
-            let base = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
-            let path = URL(fileURLWithPath: expanded, relativeTo: base).standardizedFileURL.path
+            let url = URL(fileURLWithPath: expanded, relativeTo: base).standardizedFileURL
+            let path = url.path
             var isDirectory: ObjCBool = false
             guard path != "/", !(FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue) else {
                 throw AutomationError.invalidArguments("output 必须指向文件，不能指向目录。")
+            }
+            // Dotfiles and hidden directories (~/.zshrc, ~/.ssh) are never capture destinations, even through a symlink.
+            guard !Self.isHidden(url), !Self.isHidden(Self.resolvingExistingSymlinks(url)) else {
+                throw AutomationError.invalidArguments("output 不能写入隐藏文件或隐藏目录。")
+            }
+            let allowed = action == .record ? (recordingFormat == .gif ? ["gif"] : ["mp4", "mov"])
+                : ["png", "jpg", "jpeg", "heic", "heif", "tif", "tiff"]
+            guard allowed.contains(url.pathExtension.lowercased()) else {
+                let names = allowed.count == 1 ? allowed[0] : allowed.dropLast().joined(separator: "、") + " 或 " + allowed[allowed.count - 1]
+                throw AutomationError.invalidArguments("output 的扩展名应为 \(names)。")
             }
             result.outputPath = path
         }
@@ -128,6 +158,14 @@ public struct AutomationCommand: Codable, Sendable, Equatable {
             throw AutomationError.invalidArguments("to 仅适用于 translate。")
         }
         return result
+    }
+
+    /// Validates a request from another local process. Such a process borrows niko-shot's Screen Recording
+    /// permission, so captures and OCR history that skip on-screen selection stay off until the user opts in.
+    public func validatedForCommandLine(allowsSilentAutomation: Bool) throws -> AutomationCommand {
+        let command = try validated()
+        guard allowsSilentAutomation || !command.runsWithoutSelection else { throw AutomationError.silentAutomationDisabled }
+        return command
     }
 
     /// Parses CLI arguments excluding the executable name, rejecting duplicates and unknown flags.
@@ -182,16 +220,20 @@ public struct AutomationCommand: Codable, Sendable, Equatable {
             }
             index += 1
         }
-        return try command.validated()
+        return try command.validated(relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true))
     }
 
     /// Parses the registered URL scheme without accepting arbitrary hosts, paths or duplicate query items.
+    /// Any web page or app can open these links, so they only start flows the user finishes on screen.
     public static func parse(url: URL) throws -> AutomationCommand {
         guard let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
               parts.scheme?.lowercased() == "niko-shot", let host = parts.host,
               let action = action(named: host), parts.user == nil, parts.password == nil, parts.port == nil,
               parts.path.isEmpty, parts.fragment == nil else {
-            throw AutomationError.invalidArguments("URL 应为 niko-shot://capture、ocr、translate、record、scroll 或 last-ocr。")
+            throw AutomationError.invalidArguments("URL 应为 niko-shot://capture、ocr、record 或 scroll。")
+        }
+        guard action != .translate, action != .lastOCR else {
+            throw AutomationError.invalidArguments("URL 不能调用 \(host)，请改用快捷指令或命令行。")
         }
         var command = AutomationCommand(action: action), seen = Set<String>()
         for item in parts.queryItems ?? [] {
@@ -201,14 +243,15 @@ public struct AutomationCommand: Codable, Sendable, Equatable {
             switch key {
             case "type":
                 try require(action, in: [.capture, .ocr, .record], argument: key)
-                guard let type = AutomationCaptureType(rawValue: value) else { throw AutomationError.invalidArguments("type 应为 region、window 或 fullscreen。") }
+                guard let type = AutomationCaptureType(rawValue: value) else { throw AutomationError.invalidArguments("type 应为 region 或 window。") }
+                guard type != .fullscreen else { throw AutomationError.invalidArguments("URL 不支持全屏截图，请改用 region 或 window 手动选择。") }
                 command.captureType = type
             case "delay":
                 try require(action, in: [.capture, .ocr, .record, .scroll], argument: key)
                 guard let delay = Int(value) else { throw AutomationError.invalidArguments("delay 必须为整数。") }
                 command.delay = delay
-            case "output":
-                try require(action, in: [.capture, .ocr, .record, .scroll], argument: key); command.outputPath = value
+            case "output": throw AutomationError.invalidArguments("URL 不能指定 output，请改用快捷指令或命令行。")
+            case "windowID": throw AutomationError.invalidArguments("URL 不能指定 window-id，请在屏幕上选择窗口。")
             case "autoOCR":
                 try require(action, in: [.capture, .ocr, .record, .scroll], argument: key)
                 guard let enabled = ["true": true, "false": false, "1": true, "0": false][value] else { throw AutomationError.invalidArguments("autoOCR 应为 true、false、1 或 0。") }
@@ -217,12 +260,6 @@ public struct AutomationCommand: Codable, Sendable, Equatable {
                 try require(action, in: [.record], argument: key)
                 guard let format = AutomationRecordingFormat(rawValue: value) else { throw AutomationError.invalidArguments("format 应为 mp4 或 gif。") }
                 command.recordingFormat = format
-            case "windowID":
-                try require(action, in: [.capture, .ocr, .record], argument: key)
-                guard let id = UInt32(value) else { throw AutomationError.invalidArguments("windowID 必须为正整数。") }
-                command.windowID = id
-            case "to":
-                try require(action, in: [.translate], argument: key); command.targetLanguage = value
             default: throw AutomationError.invalidArguments("未知 URL 参数：\(item.name)。")
             }
         }
@@ -234,6 +271,15 @@ public struct AutomationCommand: Codable, Sendable, Equatable {
     }
     private static func require(_ action: AutomationAction, in actions: [AutomationAction], argument: String) throws {
         guard actions.contains(action) else { throw AutomationError.invalidArguments("\(argument) 不适用于 \(action.rawValue)。") }
+    }
+    private static func isHidden(_ url: URL) -> Bool { url.pathComponents.dropFirst().contains { $0.hasPrefix(".") } }
+    // Foundation leaves a path untouched when its leaf is missing, so resolve the deepest existing ancestor instead.
+    private static func resolvingExistingSymlinks(_ url: URL) -> URL {
+        var existing = url, missing: [String] = []
+        while !FileManager.default.fileExists(atPath: existing.path), existing.pathComponents.count > 1 {
+            missing.insert(existing.lastPathComponent, at: 0); existing = existing.deletingLastPathComponent()
+        }
+        return missing.reduce(existing.resolvingSymlinksInPath()) { $0.appendingPathComponent($1) }
     }
 }
 

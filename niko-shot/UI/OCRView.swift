@@ -34,14 +34,14 @@ struct OCRView: View {
                     .help(showsBlocks ? "隐藏文字区块，展开原文与译文" : "显示文字区块，勾选或编辑识别结果")
                 }
                 ToolbarItem(placement: .status) {
-                    Text("\(selectedCount) 段 · \(model.selectedText.count) 字")
+                    Text("已选 \(selectedCount) 段，\(model.selectedText.count) 字")
                         .font(.system(size: 12)).foregroundStyle(.secondary).monospacedDigit()
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button("复制文字", systemImage: "doc.on.clipboard") { model.copySelected() }
                         .keyboardShortcut(.return, modifiers: .command)
                         .disabled(model.selectedText.isEmpty || model.isRecognizing)
-                        .help("复制所有勾选区块 · ⌘↩")
+                        .help("复制勾选的文字（⌘↩）")
                 }
             }
         }
@@ -128,17 +128,15 @@ private struct OCRBlockEditor: View {
                     .font(.system(size: 10)).foregroundStyle(.tertiary).monospacedDigit()
                     .help("Vision 识别置信度")
                 Button(action: onCopy) { Label("复制第 \(number) 个文字区块", systemImage: "doc.on.doc").labelStyle(.iconOnly).frame(width: 24, height: 24) }
-                    .buttonStyle(.borderless).help("复制这段文字")
+                    .buttonStyle(.borderless).foregroundStyle(.secondary).help("复制这段文字")
                     .disabled(block.text.isEmpty)
             }
             NativeTextEditor(text: $block.text, accessibilityLabel: "编辑第 \(number) 个文字区块")
                 .padding(.horizontal, -4).frame(height: editorHeight)
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
-        .background(block.selected ? NikoTheme.selection.opacity(0.5) : .clear)
-        .overlay(alignment: .leading) {
-            if block.selected { Rectangle().fill(NikoTheme.accent).frame(width: 2) }
-        }
+        // The checkbox carries selection; excluded blocks simply recede.
+        .opacity(block.selected ? 1 : 0.5)
     }
 
     private var editorHeight: CGFloat {

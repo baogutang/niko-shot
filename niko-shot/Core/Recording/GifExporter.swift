@@ -192,29 +192,17 @@ public actor GifExporter {
         }
     }
 
-    private nonisolated static var palette: [UInt8] {
-        var result: [UInt8] = []
-        result.reserveCapacity(768)
-        for value in 0..<256 {
-            let red = ((value >> 5) & 7) * 255 / 7
-            let green = ((value >> 2) & 7) * 255 / 7
-            let blue = (value & 3) * 255 / 3
-            result.append(UInt8(red)); result.append(UInt8(green)); result.append(UInt8(blue))
-        }
-        return result
-    }
-
     private nonisolated static func setGlobalProperties(on output: CGImageDestination) {
         CGImageDestinationSetProperties(output, [kCGImagePropertyGIFDictionary: [
             kCGImagePropertyGIFLoopCount: 0, kCGImagePropertyGIFHasGlobalColorMap: true,
-            kCGImagePropertyGIFImageColorMap: Data(palette)
+            kCGImagePropertyGIFImageColorMap: Data(GIFGlobalPalette.colors)
         ]] as CFDictionary)
     }
 
     private nonisolated static func frameProperties(delay: Double) -> CFDictionary {
         [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: delay,
             kCGImagePropertyGIFUnclampedDelayTime: delay, kCGImagePropertyGIFHasGlobalColorMap: true,
-            kCGImagePropertyGIFImageColorMap: Data(palette)]] as CFDictionary
+            kCGImagePropertyGIFImageColorMap: Data(GIFGlobalPalette.colors)]] as CFDictionary
     }
 
     private nonisolated static func indexedImage(_ image: CGImage, maximumWidth: Int) throws -> CGImage {
@@ -229,12 +217,9 @@ public actor GifExporter {
         context.interpolationQuality = .high; context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         var indices = [UInt8](repeating: 0, count: width * height)
         for index in indices.indices {
-            let red = (Int(bytes[index * 4]) * 7 + 127) / 255
-            let green = (Int(bytes[index * 4 + 1]) * 7 + 127) / 255
-            let blue = (Int(bytes[index * 4 + 2]) * 3 + 127) / 255
-            indices[index] = UInt8(red << 5 | green << 2 | blue)
+            indices[index] = GIFGlobalPalette.index(red: Int(bytes[index * 4]), green: Int(bytes[index * 4 + 1]), blue: Int(bytes[index * 4 + 2]))
         }
-        let colors = palette
+        let colors = GIFGlobalPalette.colors
         let space = colors.withUnsafeBufferPointer { pointer -> CGColorSpace? in
             guard let address = pointer.baseAddress else { return nil }
             return CGColorSpace(indexedBaseSpace: CGColorSpaceCreateDeviceRGB(), last: 255, colorTable: address)

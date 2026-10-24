@@ -12,8 +12,9 @@
 <key>LSUIElement</key><true/>
 <key>NSPrincipalClass</key><string>NSApplication</string>
 <key>NSHighResolutionCapable</key><true/>
-<key>NSScreenCaptureUsageDescription</key><string>niko-shot captures the area you select for screenshots, OCR and recording.</string>
-<key>NSMicrophoneUsageDescription</key><string>Include your microphone in a recording when you enable it.</string>
-<key>NSCameraUsageDescription</key><string>Show your camera as a picture-in-picture overlay during recording.</string>
+<key>NSHumanReadableCopyright</key><string>© 2026 niko-shot</string>
+<key>NSScreenCaptureUsageDescription</key><string>用于截图、文字识别、长截图和录屏。</string>
+<key>NSMicrophoneUsageDescription</key><string>开启后，把麦克风的声音录进视频。</string>
+<key>NSCameraUsageDescription</key><string>录屏时以画中画显示摄像头画面。</string>
 <key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>niko-shot</string><key>CFBundleURLSchemes</key><array><string>niko-shot</string></array></dict></array>
 </dict></plist>

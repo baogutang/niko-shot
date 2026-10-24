@@ -41,4 +41,30 @@ final class HistoryStoreTests: XCTestCase {
         try await store.delete(id: ids[0])
         let new = try await store.list(query: "新结果"); XCTAssertTrue(new.isEmpty)
     }
+
+    func testSearchMatchesEveryWordAsAPrefixInAnyOrder() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = try HistoryStore(url: folder.appendingPathComponent("history.sqlite"))
+        let texts = ["hello big world", "English manual", "这是中文银行卡截图", "he said \"quoted\" twice"]
+        var ids: [UUID] = []
+        for (index, text) in texts.enumerated() {
+            let id = UUID(); ids.append(id)
+            try await store.insert(HistoryRecord(id: id, createdAt: Date(timeIntervalSince1970: Double(index)), path: "",
+                thumbnail: Data([1]), width: 40, height: 20, appBundleID: "test", captureKind: "region", ocrText: text))
+        }
+        func search(_ query: String) async throws -> [UUID] { try await store.list(query: query).map(\.id) }
+        var found = try await search("Eng"); XCTAssertEqual(found, [ids[1]], "A word matches as a prefix")
+        found = try await search("eng MAN"); XCTAssertEqual(found, [ids[1]])
+        found = try await search("hello world"); XCTAssertEqual(found, [ids[0]], "Words need not be adjacent")
+        found = try await search("wor hel"); XCTAssertEqual(found, [ids[0]], "or in order")
+        found = try await search("hello English"); XCTAssertEqual(found, [], "Every word must occur")
+        found = try await search("银行"); XCTAssertEqual(found, [ids[2]])
+        found = try await search("银行 截图"); XCTAssertEqual(found, [ids[2]])
+        found = try await search("银卡"); XCTAssertEqual(found, [], "Chinese still matches only as a substring")
+        found = try await search("quoted\""); XCTAssertEqual(found, [ids[3]], "Quotes in a query are literal")
+        found = try await search("\""); XCTAssertEqual(found, [])
+        found = try await search("said -- tw"); XCTAssertEqual(found, [ids[3]], "Punctuation-only words are ignored")
+        XCTAssertEqual(HistoryStore.matchExpression(" say \"hi\"  银行 "), "\"say\"* AND \"\"\"hi\"\"\"* AND \"银 行\"*")
+    }
 }

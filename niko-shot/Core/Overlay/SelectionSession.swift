@@ -26,6 +26,8 @@ final class SelectionSession {
     private(set) var state: State = .idle
     private(set) var windows: [OverlayWindow] = []
     private(set) var monitorCount = 0
+    /// Pixel density of the image last opened in the editor; survives `finish()` so the completion can read it.
+    private(set) var editorPixelScale: CGFloat = 1
     private let store = FreezeFrameStore()
     nonisolated(unsafe) private var screenObserver: NSObjectProtocol?
     private var selected: (FrozenFrame, CGRect)?
@@ -50,6 +52,8 @@ final class SelectionSession {
     private var resumedDocument: AnnotationDocument?
     private var resumedContext: CaptureContext?
     var onFinish: ((Bool) -> Void)?
+    /// Called every time an active session returns to idle, after `onFinish`; unlike `onFinish` it is never consumed.
+    var onSessionEnd: (() -> Void)?
     /// Receives the original viewport after overlays close; nil explicitly requires screen reselection.
     var onScrollCapture: ((CaptureContext?) -> Void)?
     /// Screenshot text stays attached to the active capture until the user requests a full workspace.
@@ -59,7 +63,6 @@ final class SelectionSession {
     private var annotationStyle = AnnotationStyle()
     private var imageEditorWindow: NSWindow?
     private var imageEditorSource: FrozenFrame?
-    private var completedDisplayStatistics: [ActiveDisplayLink.Statistics] = []
     private var operations: [UUID: Task<Void, Never>] = [:]
     private var retiringCanvases: [UUID: Task<Void, Never>] = [:]
     private let afterImageOperation: (@Sendable () async -> Void)?
@@ -77,27 +80,15 @@ final class SelectionSession {
          "annotationPreview": canvas?.resourceCounts["preview"] ?? 0,
          "annotationTextAlert": canvas?.resourceCounts["textAlert"] ?? 0]
     }
+    var isToolbarVisible: Bool { toolbar?.isVisible == true }
+    var toolbarWindow: NSWindow? { toolbar?.panelWindow }
     var windowCount: Int { windows.count + (imageEditorWindow == nil ? 0 : 1) + (toolbar?.windowCount ?? 0) }
     var frameCount: Int { store.frames.count }
-    /// Native display links currently owned by attached selection views; zero after finish.
-    var displayLinkCount: Int { selectionViews.reduce(0) { $0 + $1.displayLinkCount } }
-    /// Actual per-display callbacks, including snapshots saved before a stage or session ends.
-    var displayLinkStatistics: [ActiveDisplayLink.Statistics] {
-        completedDisplayStatistics + selectionViews.filter { $0.displayLinkCount > 0 }.map(\.displayLinkStatistics)
-    }
-    private var selectionViews: [SelectionView] {
-        var views = windows.compactMap { $0.contentView as? SelectionView }
-        if let view = (imageEditorWindow?.contentView as? NSScrollView)?.documentView as? SelectionView { views.append(view) }
-        return views
-    }
-    private func stopDisplayUpdates(_ view: SelectionView) {
-        if view.displayLinkCount > 0 { completedDisplayStatistics.append(view.displayLinkStatistics) }
-        view.stopDisplayUpdates()
-    }
 
     /// Reuses the annotation editor for history images and completed long screenshots.
     func edit(image: CGImage, pointSize: CGSize, kind: String = "edited", completion: @escaping (CGImage, CaptureContext) -> Void) {
-        finish(); completedDisplayStatistics.removeAll(); generation = UUID(); state = .annotating; outputAction = .copy; self.completion = completion
+        finish(); generation = UUID(); state = .annotating; outputAction = .copy; self.completion = completion
+        editorPixelScale = max(1, CGFloat(image.width) / max(1, pointSize.width))
         let screen = NSScreen.main?.frame ?? CGRect(x: 0, y: 0, width: 1200, height: 800)
         let viewport = CGSize(width: min(900, screen.width - 80), height: min(650, screen.height - 100))
         let factor = max(1, pointSize.width / max(1, viewport.width - 16))
@@ -134,10 +125,10 @@ final class SelectionSession {
             remainingCanvas?.prepareForFinish()
             remainingText?.cancel()
             remainingToolbar?.close()
-            ((remainingEditor?.contentView as? NSScrollView)?.documentView as? SelectionView)?.stopDisplayUpdates()
+            ((remainingEditor?.contentView as? NSScrollView)?.documentView as? SelectionView)?.stopUpdates()
             remainingEditor?.close()
             for window in remainingWindows {
-                (window.contentView as? SelectionView)?.stopDisplayUpdates()
+                (window.contentView as? SelectionView)?.stopUpdates()
                 window.orderOut(nil); window.close()
             }
         }
@@ -146,7 +137,6 @@ final class SelectionSession {
     /// Starts a snapshot-only session, injectable so teardown can be tested without TCC.
     func start(frames: [FrozenFrame], candidates: [WindowCandidate] = [], kind: String = "region", initial: CaptureContext? = nil, autoConfirm: Bool = true, confirmationTitle: String? = nil, directScrollSelection: Bool = false, completion: @escaping (CGImage, CaptureContext) -> Void) {
         finish()
-        completedDisplayStatistics.removeAll()
         self.completion = completion
         generation = UUID()
         outputAction = .copy
@@ -171,7 +161,7 @@ final class SelectionSession {
                 self?.windowID = target?.id
                 self?.targetWindowFrame = target?.frame
                 if directScrollSelection { self?.captureKind = view?.windowMode == true ? "window" : "region" }
-                self?.select(frame: frame, rect: rect)
+                self?.select(frame: frame, rect: rect, live: view?.isTrackingMouse == true)
             }
             if directScrollSelection {
                 view.onSelectionCompleted = { [weak self] in self?.confirm() }
@@ -209,18 +199,28 @@ final class SelectionSession {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    private func select(frame: FrozenFrame, rect: CGRect) {
+    /// `live` marks an unfinished drag: the toolbar steps aside and nothing heavier than the
+    /// selection state changes until the pointer is released.
+    private func select(frame: FrozenFrame, rect: CGRect, live: Bool = false) {
         guard state != .exporting else { return }
         if let activeScreen, activeScreen != frame.screen.id { return }
         if selected?.1 != rect { closeScreenshotText() }
-        activeScreen = frame.screen.id
-        for window in windows {
-            window.ignoresMouseEvents = (window.contentView as? SelectionView)?.frameInfo.screen.id != activeScreen
-            if window.ignoresMouseEvents, let view = window.contentView as? SelectionView { stopDisplayUpdates(view) }
+        if activeScreen == nil {
+            activeScreen = frame.screen.id
+            for window in windows {
+                let inactive = (window.contentView as? SelectionView)?.frameInfo.screen.id != frame.screen.id
+                guard inactive else { continue }
+                window.ignoresMouseEvents = true
+                (window.contentView as? SelectionView)?.stopUpdates()
+            }
         }
         selected = (frame, rect)
         state = rect.isEmpty ? .selecting : .selected
-        if !rect.isEmpty && !directScrollSelection { showToolbar(context: CaptureContext(screen: frame.screen, localRect: rect, kind: captureKind, appBundleID: appBundleID, windowID: windowID, targetWindowFrame: targetWindowFrame)) }
+        if live || rect.isEmpty {
+            toolbar?.hide()
+            return
+        }
+        if !directScrollSelection { showToolbar(context: CaptureContext(screen: frame.screen, localRect: rect, kind: captureKind, appBundleID: appBundleID, windowID: windowID, targetWindowFrame: targetWindowFrame)) }
         updateScrollAvailability()
     }
 
@@ -304,7 +304,7 @@ final class SelectionSession {
                 stage.addSubview(canvas)
                 self.canvas = canvas
                 for window in self.windows {
-                    if let view = window.contentView as? SelectionView { self.stopDisplayUpdates(view) }
+                    if let view = window.contentView as? SelectionView { view.stopUpdates() }
                     if (window.contentView as? SelectionView)?.frameInfo.screen.id == frame.screen.id {
                         window.contentView = stage; window.makeKeyAndOrderFront(nil); window.makeFirstResponder(canvas)
                     } else { window.close(); window.contentView = nil }
@@ -500,7 +500,7 @@ final class SelectionSession {
             if let savedDocument { view.document = savedDocument; view.refresh() }
             view.tool = tool; self.configure(view); self.canvas = view
             self.editorContext = CaptureContext(screen: frame.screen, localRect: rect, kind: self.captureKind)
-            if let old = scroll.documentView as? SelectionView { self.stopDisplayUpdates(old) }
+            if let old = scroll.documentView as? SelectionView { old.stopUpdates() }
             self.selected = nil; scroll.documentView = view; window.makeFirstResponder(view)
             self.toolbar?.setSelectedTool(tool)
             self.toolbar?.setUndoAvailability(canUndo: view.document.canUndo, canRedo: view.document.canRedo)
@@ -553,7 +553,7 @@ final class SelectionSession {
         let context = CaptureContext(screen: frame.screen, localRect: rect, kind: captureKind, appBundleID: appBundleID, windowID: windowID, targetWindowFrame: targetWindowFrame)
         let gate = afterImageOperation
         runOperation { [weak self] in
-            let image = try? await Self.imageWork(after: gate) { frame.image.cropping(to: pixels) }
+            let image = try? await Self.imageWork(after: gate) { ImageUtilities.ownedCrop(frame.image, to: pixels) }
             guard !Task.isCancelled, let self, self.generation == token, self.state == .exporting else { return }
             self.finish(completed: image != nil)
             if let image { callback?(image, context) }
@@ -562,6 +562,7 @@ final class SelectionSession {
 
     /// Closes all overlays and removes listeners; also used for cancellation and display changes.
     func finish(completed: Bool = false) {
+        let wasActive = state != .idle
         let didFinish = onFinish; onFinish = nil
         closeScreenshotText(restoreKeyboardFocus: false)
         for operation in operations.values { operation.cancel() }
@@ -569,13 +570,13 @@ final class SelectionSession {
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
         if let view = (imageEditorWindow?.contentView as? NSScrollView)?.documentView as? SelectionView {
-            stopDisplayUpdates(view)
+            view.stopUpdates()
             view.onSelection = nil; view.onConfirm = nil; view.onCancel = nil; view.onAnnotate = nil; view.onSave = nil
         }
         imageEditorWindow?.close(); imageEditorWindow?.contentView = nil; imageEditorWindow = nil; imageEditorSource = nil
         for window in windows {
             if let view = window.contentView as? SelectionView {
-                stopDisplayUpdates(view)
+                view.stopUpdates()
                 view.onSelection = nil; view.onConfirm = nil; view.onCancel = nil
                 view.onAnnotate = nil; view.onSave = nil
                 view.onSelectionCompleted = nil; view.onSelectionModeChanged = nil
@@ -599,8 +600,8 @@ final class SelectionSession {
         archive = nil
         generation = UUID()
         state = .idle
-        persistDisplayStatisticsIfRequested()
         didFinish?(completed)
+        if wasActive { onSessionEnd?() }
     }
 
     /// Completes native rendering and preview cancellation before application termination.
@@ -648,11 +649,4 @@ final class SelectionSession {
         return try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
     }
 
-    private func persistDisplayStatisticsIfRequested() {
-        guard let path = ProcessInfo.processInfo.environment["NIKO_DISPLAYLINK_METRICS"], !path.isEmpty else { return }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(displayLinkStatistics) else { return }
-        try? data.write(to: URL(fileURLWithPath: path), options: .atomic)
-    }
 }

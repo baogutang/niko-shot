@@ -7,23 +7,58 @@ import XCTest
 final class WindowFrameGrabberTests: XCTestCase {
     func testWindowAndBelowOverlayUseDistinctOptionsAndPreservePointCoordinates() async throws {
         let image = try await ScrollImageFixture().solid(width: 40, height: 60)
-        var requests: [(CGRect, CGWindowListOption, CGWindowID)] = []
-        let grabber = WindowFrameGrabber { rect, option, id in requests.append((rect, option, id)); return image }
+        let log = RequestLog()
+        let grabber = WindowFrameGrabber { rect, option, id in log.record(rect, option, id); return image }
         let rect = CGRect(x: -500, y: -200, width: 20, height: 30)
-        XCTAssertTrue(grabber.captureWindow(windowID: 31, rect: rect) === image)
-        XCTAssertTrue(grabber.captureRegionBelowOwnWindow(ownWindowID: 72, rect: rect) === image)
+        let window = try await grabber.captureWindow(windowID: 31, rect: rect)
+        let below = try await grabber.captureRegionBelowOwnWindow(ownWindowID: 72, rect: rect)
+        XCTAssertTrue(window === image); XCTAssertTrue(below === image)
+        let requests = log.requests
         XCTAssertEqual(requests.count, 2)
-        XCTAssertEqual(requests[0].0, rect); XCTAssertEqual(requests[0].1, .optionIncludingWindow); XCTAssertEqual(requests[0].2, 31)
-        XCTAssertEqual(requests[1].0, rect); XCTAssertEqual(requests[1].1, .optionOnScreenBelowWindow); XCTAssertEqual(requests[1].2, 72)
+        XCTAssertEqual(requests[0].rect, rect); XCTAssertEqual(requests[0].option, .optionIncludingWindow); XCTAssertEqual(requests[0].id, 31)
+        XCTAssertEqual(requests[1].rect, rect); XCTAssertEqual(requests[1].option, .optionOnScreenBelowWindow); XCTAssertEqual(requests[1].id, 72)
+        XCTAssertFalse(requests.contains { $0.onMain }, "the synchronous compositor grab must not block the main thread")
     }
 
-    func testInvalidGeometryNeverCallsTheWindowServer() {
-        var calls = 0
-        let grabber = WindowFrameGrabber { _, _, _ in calls += 1; return nil }
-        XCTAssertNil(grabber.captureWindow(windowID: 0, rect: CGRect(x: 0, y: 0, width: 20, height: 20)))
-        XCTAssertNil(grabber.captureWindow(windowID: 2, rect: .infinite))
-        XCTAssertNil(grabber.captureRegionBelowOwnWindow(ownWindowID: 2, rect: .zero))
-        XCTAssertEqual(calls, 0)
+    func testInvalidGeometryNeverCallsTheWindowServer() async throws {
+        let log = RequestLog()
+        let grabber = WindowFrameGrabber { rect, option, id in log.record(rect, option, id); return nil }
+        let zeroID = try await grabber.captureWindow(windowID: 0, rect: CGRect(x: 0, y: 0, width: 20, height: 20))
+        let infinite = try await grabber.captureWindow(windowID: 2, rect: .infinite)
+        let empty = try await grabber.captureRegionBelowOwnWindow(ownWindowID: 2, rect: .zero)
+        XCTAssertNil(zeroID); XCTAssertNil(infinite); XCTAssertNil(empty)
+        XCTAssertEqual(log.requests.count, 0)
+    }
+
+    /// Nominal-resolution grabs are normalized in the same off-main hop.
+    func testScaledGrabNormalizesOffTheMainThread() async throws {
+        let nominal = try await ScrollImageFixture().solid(width: 20, height: 30)
+        let log = RequestLog()
+        let grabber = WindowFrameGrabber { rect, option, id in log.record(rect, option, id); return nominal }
+        let image = try await grabber.captureWindow(windowID: 9, rect: CGRect(x: 0, y: 0, width: 20, height: 30), scale: 2)
+        XCTAssertEqual(image?.width, 40); XCTAssertEqual(image?.height, 60)
+        XCTAssertEqual(log.requests.map(\.onMain), [false])
+    }
+
+    /// One compositor check per frame: the check after each grab supplies the next grab's geometry.
+    /// A window that moved since the last check is grabbed again at its new position.
+    func testSnapshotChecksGeometryOncePerFrameAndRegrabsAfterAMove() async throws {
+        let image = try await ScrollImageFixture().solid(width: 20, height: 20)
+        let screen = ScreenGeometry(id: 5, frame: CGRect(x: 0, y: 0, width: 800, height: 600), scale: 2)
+        let probe = SnapshotProbe(CaptureContext(screen: screen, localRect: CGRect(x: 10, y: 10, width: 100, height: 100), kind: "window"))
+        let snapshot = RegionSnapshot(capture: { target in probe.grabbed.append(target?.localRect ?? .null); return image },
+                                      validate: { probe.checks += 1; return probe.current })
+        _ = try await snapshot.capture()
+        XCTAssertEqual(probe.checks, 2, "first frame: initial geometry, then the post-grab check")
+        _ = try await snapshot.capture(); _ = try await snapshot.capture()
+        XCTAssertEqual(probe.checks, 4)
+        XCTAssertEqual(probe.grabbed.count, 3)
+        // The window moves between frames: the stale grab is discarded and repeated at the new rect.
+        let moved = CGRect(x: 60, y: 40, width: 100, height: 100)
+        probe.current = CaptureContext(screen: screen, localRect: moved, kind: "window")
+        _ = try await snapshot.capture()
+        XCTAssertEqual(Array(probe.grabbed.suffix(2)), [CGRect(x: 10, y: 10, width: 100, height: 100), moved])
+        XCTAssertEqual(snapshot.context?.localRect, moved)
     }
 
     func testMixedDisplayGeometryUsesMouseScreenScaleAndPrimaryTopOnlyForYFlip() async throws {
@@ -62,5 +97,25 @@ final class WindowFrameGrabberTests: XCTestCase {
         let screen = ScreenGeometry(id: 1, frame: CGRect(x: 0, y: 0, width: 1_440, height: 900), scale: 2)
         let context = CaptureContext(screen: screen, localRect: CGRect(x: -100, y: 80, width: 320, height: 240), kind: "window")
         XCTAssertEqual(WindowFrameGrabber.windowServerRect(context, primaryTop: 900), CGRect(x: -100, y: 80, width: 320, height: 240))
+    }
+}
+
+@MainActor
+private final class SnapshotProbe {
+    var current: CaptureContext
+    var checks = 0
+    var grabbed: [CGRect] = []
+    init(_ current: CaptureContext) { self.current = current }
+}
+
+/// Records compositor requests from whatever thread the grabber runs them on.
+private final class RequestLog: @unchecked Sendable {
+    struct Request { let rect: CGRect; let option: CGWindowListOption; let id: CGWindowID; let onMain: Bool }
+    private let lock = NSLock()
+    private var entries: [Request] = []
+    var requests: [Request] { lock.withLock { entries } }
+    func record(_ rect: CGRect, _ option: CGWindowListOption, _ id: CGWindowID) {
+        let entry = Request(rect: rect, option: option, id: id, onMain: Thread.isMainThread)
+        lock.withLock { entries.append(entry) }
     }
 }

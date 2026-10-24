@@ -144,8 +144,8 @@ for variant, limit in (("", 260_000), ("-800", 80_000)):
     if image.is_file():
         require(image.read_bytes().startswith(b"\xff\xd8\xff"), f"Invalid hero JPEG: {image.name}")
         require(image.stat().st_size < limit, f"Hero exceeds delivery size budget: {image.name}")
-for preview in ("ocr", "settings", "recording", "scroll", "annotation"):
-    for theme in (("",) if preview == "annotation" else ("", "-dark")):
+for preview in ("ocr", "settings", "recording", "scroll", "capture"):
+    for theme in (("",) if preview == "capture" else ("", "-dark")):
         require((SITE / "assets" / f"app-{preview}{theme}-compact.png").is_file(),
                 f"Missing compact native {preview}{theme} preview")
 css = (SITE / "styles.css").read_text()

@@ -1,45 +1,28 @@
-// Shares adaptive native surfaces, typography and interaction treatments across the application.
-// Design language: light = 纸间 Print Shop (warm paper, cinnabar accent),
-// dark = 墨 Ink (deep ink, turmeric accent); one accent per appearance.
+// Shares surfaces, typography and interaction treatments across the application.
+// Surfaces are the system's own colors so every window reads as part of macOS; the one brand
+// color is the amber from the app icon.
 import AppKit
 import SwiftUI
 
-/// Adaptive brand surfaces; the palette follows the niko-shot paper-and-ink identity.
+/// Native surfaces plus the single icon-amber accent.
 @MainActor
 enum NikoTheme {
-  /// 纸本 #F3EDE2 / 深墨 #121417 — window canvas.
-  static var canvas: Color {
-    adaptive(light: (0.952941, 0.929412, 0.886275), dark: (0.070588, 0.078431, 0.090196))
-  }
-  /// 冲印纸 #FBF8F2 / 墨面 #1E2226 — cards and panels.
-  static var surface: Color {
-    adaptive(light: (0.984314, 0.972549, 0.949020), dark: (0.117647, 0.133333, 0.149020))
-  }
-  /// 纸白 #FFFDF7 / 墨台 #262B30 — raised controls resting on surface.
-  static var raisedSurface: Color {
-    adaptive(light: (1.000000, 0.992157, 0.968627), dark: (0.149020, 0.168627, 0.188235))
-  }
-  /// 朱砂 #C8402F / 藤黄 #F2B33D — the single accent: primary actions, selection, readings.
-  static var accent: Color {
-    adaptive(light: (0.784314, 0.250980, 0.184314), dark: (0.949020, 0.701961, 0.239216))
-  }
+  static var canvas: Color { Color(nsColor: .windowBackgroundColor) }
+  static var surface: Color { Color(nsColor: .controlBackgroundColor) }
+  static var raisedSurface: Color { Color(nsColor: .textBackgroundColor) }
+  /// Icon amber #E8A333 in dark mode; a deeper #AD7111 in light mode keeps glyphs and text legible on white.
+  static var accent: Color { Color(nsColor: NikoAccent.nsColor) }
+  /// Ink on amber in both appearances: amber is too light to carry white text.
   static var onAccent: Color {
-    adaptive(light: (0.992157, 0.968627, 0.941176), dark: (0.133333, 0.094118, 0.015686))
+    adaptive(light: (0.109804, 0.090196, 0.062745), dark: (0.109804, 0.090196, 0.062745))
   }
-  static var selection: Color { accent.opacity(0.12) }
-  /// 暖纸发丝线 #E2D9C6 / 墨缝线 #2A2D32 — hairline separators.
-  static var separator: Color {
-    adaptive(light: (0.886275, 0.850980, 0.776471), dark: (0.164706, 0.176471, 0.196078))
-  }
-  /// 青瓷 #2F5D62 / 花青 #5FB3A1 — reserved for translated text and connection success.
-  static var translation: Color {
-    adaptive(light: (0.184314, 0.364706, 0.384314), dark: (0.372549, 0.701961, 0.631373))
-  }
-  /// 朱砂印 #C8402F / 朱砂 #CE3527 — seals and recording state only; dark value keeps 3:1 on ink surfaces.
-  static var seal: Color {
-    adaptive(light: (0.784314, 0.250980, 0.184314), dark: (0.807843, 0.207843, 0.152941))
-  }
-  static let cornerRadius: CGFloat = 10
+  static var selection: Color { accent.opacity(0.14) }
+  static var separator: Color { Color(nsColor: .separatorColor) }
+  /// Translated text: the system teal, so it reads as "different" without a second brand color.
+  static var translation: Color { Color(nsColor: .systemTeal) }
+  /// Recording state only.
+  static var seal: Color { Color(nsColor: .systemRed) }
+  static let cornerRadius: CGFloat = 8
 
   private nonisolated static func adaptive(
     light: (Double, Double, Double), dark: (Double, Double, Double)
@@ -52,74 +35,15 @@ enum NikoTheme {
   }
 }
 
-/// AppKit-side brand accent for overlay layers and custom drawing; resolves with current appearance.
+/// AppKit-side brand accent for custom drawing; resolves with the current appearance.
 nonisolated enum NikoAccent {
   static let nsColor = NSColor(name: nil) { appearance in
-    let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-    return dark ? NSColor(srgbRed: 0.949020, green: 0.701961, blue: 0.239216, alpha: 1)
-      : NSColor(srgbRed: 0.784314, green: 0.250980, blue: 0.184314, alpha: 1)
+    appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? bright
+      : NSColor(srgbRed: 0.678431, green: 0.443137, blue: 0.066667, alpha: 1)
   }
-}
-
-/// A quiet symbol tile used to identify a task or a preference category.
-@MainActor
-struct NikoSymbolBadge: View {
-  let symbol: String
-  var tint: Color = NikoTheme.accent
-  var size: CGFloat = 24
-
-  var body: some View {
-    Image(systemName: symbol)
-      .font(.system(size: size * 0.54, weight: .medium))
-      .foregroundStyle(tint)
-      .frame(width: size, height: size)
-      .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: size * 0.25))
-      .accessibilityHidden(true)
-  }
-}
-
-/// Consistent page identity with a readable title and a short purpose statement.
-@MainActor
-struct NikoPageHeader: View {
-  let title: String
-  let subtitle: String
-  let symbol: String
-
-  var body: some View {
-    HStack(alignment: .top, spacing: 10) {
-      NikoSymbolBadge(symbol: symbol, size: 28)
-      VStack(alignment: .leading, spacing: 4) {
-        Text(title).font(.system(size: 20, weight: .semibold))
-          .accessibilityAddTraits(.isHeader)
-        if !subtitle.isEmpty {
-          Text(subtitle).font(.system(size: 12)).foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-      }
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-  }
-}
-
-/// A single elevated content surface without nested boxes or ornamental shadows.
-@MainActor
-struct NikoPanel<Content: View>: View {
-  private let content: Content
-  @Environment(\.colorSchemeContrast) private var contrast
-
-  init(@ViewBuilder content: () -> Content) { self.content = content() }
-
-  var body: some View {
-    content.padding(12)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .background(NikoTheme.surface, in: RoundedRectangle(cornerRadius: NikoTheme.cornerRadius))
-      .overlay {
-        RoundedRectangle(cornerRadius: NikoTheme.cornerRadius)
-          .strokeBorder(
-            NikoTheme.separator.opacity(contrast == .increased ? 1 : 0.5),
-            lineWidth: contrast == .increased ? 1 : 0.5)
-      }
-  }
+  /// The icon amber, unchanged by appearance: capture overlays and HUDs sit on arbitrary pixels
+  /// or dark glass, never on a light window.
+  static let bright = NSColor(srgbRed: 0.909804, green: 0.639216, blue: 0.2, alpha: 1)
 }
 
 /// A native grouped-form section, without a second decorative container.
@@ -139,8 +63,7 @@ struct NikoSection<Content: View>: View {
     Section {
       content
     } header: {
-      Text(title).font(.system(size: 12, weight: .semibold))
-        .accessibilityAddTraits(.isHeader)
+      Text(title).accessibilityAddTraits(.isHeader)
     } footer: {
       if let footer {
         Text(footer).font(.system(size: 11)).foregroundStyle(.secondary)
@@ -184,23 +107,6 @@ struct NikoPreferenceRow<Content: View>: View {
   }
 }
 
-/// A compact shortcut hint; it is decoration beside an already labelled action.
-@MainActor
-struct NikoShortcutHint: View {
-  let text: String
-  var body: some View {
-    Text(text).font(.system(size: 11, weight: .medium))
-      .monospacedDigit().foregroundStyle(.secondary)
-      .padding(.horizontal, 6).padding(.vertical, 3)
-      .background(NikoTheme.surface, in: RoundedRectangle(cornerRadius: 4))
-      .overlay {
-        RoundedRectangle(cornerRadius: 4).strokeBorder(
-          NikoTheme.separator.opacity(0.6), lineWidth: 0.5)
-      }
-      .accessibilityHidden(true)
-  }
-}
-
 /// A compact empty state that identifies the next useful action without oversized decoration.
 @MainActor
 struct NikoEmptyState: View {
@@ -211,8 +117,8 @@ struct NikoEmptyState: View {
   var body: some View {
     VStack(spacing: 12) {
       Image(systemName: symbol).font(.system(size: 28, weight: .light))
-        .foregroundStyle(NikoTheme.accent.opacity(0.7)).accessibilityHidden(true)
-      Text(title).font(.system(size: 15, weight: .medium))
+        .foregroundStyle(.tertiary).accessibilityHidden(true)
+      Text(title).font(.system(size: 15, weight: .medium)).foregroundStyle(.secondary)
       Text(detail).font(.system(size: 12)).foregroundStyle(.secondary)
         .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: 280)

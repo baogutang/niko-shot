@@ -39,8 +39,15 @@ public enum CaptureAction: String, CaseIterable, Codable, Identifiable, Sendable
         }
     }
 
-    /// The specification's default global shortcut.
-    public var defaultShortcut: HotkeyShortcut {
+    /// Shortcut assigned on a fresh install. Only region capture gets one: a global hotkey silently takes
+    /// the combination away from every other app, and ⇧⌘V, ⇧⌘R, ⇧⌘W, ⇧⌘P and friends are everyday app
+    /// shortcuts. Everything else is one click away in Settings.
+    public var defaultShortcut: HotkeyShortcut? {
+        self == .region ? legacyShortcut : nil
+    }
+
+    /// The full set assigned by 0.1–0.5; installs that predate 0.6 keep it so nobody loses muscle memory.
+    public var legacyShortcut: HotkeyShortcut {
         let code: Int
         switch self {
         case .region: code = kVK_ANSI_A
@@ -84,6 +91,17 @@ public struct HotkeyShortcut: Codable, Hashable, Sendable {
         return result + Self.keyNames[keyCode, default: "键 \(keyCode)"]
     }
 
+    /// The same combination as an NSMenuItem key equivalent, so menus show it the native way.
+    public var menuKeyEquivalent: (key: String, modifiers: NSEvent.ModifierFlags)? {
+        guard let name = Self.keyNames[keyCode], name.count == 1, name.first?.isASCII == true else { return nil }
+        var flags: NSEvent.ModifierFlags = []
+        if modifiers & UInt32(controlKey) != 0 { flags.insert(.control) }
+        if modifiers & UInt32(optionKey) != 0 { flags.insert(.option) }
+        if modifiers & UInt32(shiftKey) != 0 { flags.insert(.shift) }
+        if modifiers & UInt32(cmdKey) != 0 { flags.insert(.command) }
+        return (name.lowercased(), flags)
+    }
+
     /// Converts event flags to the bits understood by RegisterEventHotKey.
     public static func carbonModifiers(from flags: NSEvent.ModifierFlags) -> UInt32 {
         var result: UInt32 = 0
@@ -120,7 +138,7 @@ public struct HotkeyRegistrationIssue: Equatable, Sendable {
 /// Registers and releases application hotkeys using Carbon's event-driven API.
 @MainActor @Observable
 public final class HotkeyCenter {
-    /// Requested shortcuts, restored from preferences on launch.
+    /// Assigned shortcuts, restored from preferences on launch; an absent action has no shortcut.
     public private(set) var shortcuts: [CaptureAction: HotkeyShortcut]
     /// Registration or assignment failures, suitable for inline settings feedback.
     public private(set) var registrationErrors: [CaptureAction: HotkeyRegistrationIssue] = [:]
@@ -136,17 +154,29 @@ public final class HotkeyCenter {
     @ObservationIgnored nonisolated(unsafe) private var references: [CaptureAction: EventHotKeyRef] = [:]
     @ObservationIgnored nonisolated(unsafe) private var eventHandler: EventHandlerRef?
     private static let preferenceKey = "globalHotkeys"
+    /// Set once the welcome flow finished; its presence without saved hotkeys marks a pre-0.6 install.
+    private static let legacyInstallKey = "permissionWizardCompleted"
     private static let signature: UInt32 = 0x4E534854
 
     /// Creates a center; tests can defer system registration to avoid reserving keys.
     public init(actions: [CaptureAction: () -> Void], defaults: UserDefaults = .standard, registersImmediately: Bool = true) {
         self.actions = actions
         self.defaults = defaults
-        let saved = defaults.data(forKey: Self.preferenceKey).flatMap { try? JSONDecoder().decode([String: HotkeyShortcut].self, from: $0) } ?? [:]
-        shortcuts = Dictionary(uniqueKeysWithValues: CaptureAction.allCases.map { action in
-            let restored = saved[action.rawValue]
-            return (action, restored?.isValid == true ? restored ?? action.defaultShortcut : action.defaultShortcut)
-        })
+        // A stored null means the user removed that shortcut; a missing key means "use the default".
+        let saved = defaults.data(forKey: Self.preferenceKey).flatMap { try? JSONDecoder().decode([String: HotkeyShortcut?].self, from: $0) }
+        let legacyInstall = saved == nil && defaults.bool(forKey: Self.legacyInstallKey)
+        var restored: [CaptureAction: HotkeyShortcut] = [:]
+        for action in CaptureAction.allCases {
+            let fallback = legacyInstall ? action.legacyShortcut : action.defaultShortcut
+            switch saved?[action.rawValue] {
+            case .some(.some(let shortcut)): restored[action] = shortcut.isValid ? shortcut : fallback
+            case .some(.none): break
+            case .none: restored[action] = fallback
+            }
+        }
+        shortcuts = restored
+        // Record the first launch's choice; otherwise finishing the welcome flow would later read as a pre-0.6 install.
+        if saved == nil { persist() }
         if registersImmediately { start() }
     }
 
@@ -162,7 +192,8 @@ public final class HotkeyCenter {
         let status = InstallEventHandler(GetApplicationEventTarget(), Self.eventCallback, 1, &type, Unmanaged.passUnretained(self).toOpaque(), &eventHandler)
         guard status == noErr else {
             for action in CaptureAction.allCases {
-                registrationErrors[action] = HotkeyRegistrationIssue(shortcut: shortcut(for: action), status: status, message: "无法安装热键处理器（\(status)）。请重启应用后重试。")
+                guard let shortcut = shortcut(for: action) else { continue }
+                registrationErrors[action] = HotkeyRegistrationIssue(shortcut: shortcut, status: status, message: "快捷键暂时不可用（\(status)），请重新打开 niko-shot。")
             }
             return
         }
@@ -180,9 +211,9 @@ public final class HotkeyCenter {
         isRunning = false
     }
 
-    /// Returns the persisted shortcut or its specified default.
-    public func shortcut(for action: CaptureAction) -> HotkeyShortcut {
-        shortcuts[action] ?? action.defaultShortcut
+    /// The assigned shortcut, or nil when the action has none.
+    public func shortcut(for action: CaptureAction) -> HotkeyShortcut? {
+        shortcuts[action]
     }
 
     /// Updates a command callback without reinstalling its shortcut.
@@ -197,7 +228,7 @@ public final class HotkeyCenter {
             return false
         }
         if let conflict = CaptureAction.allCases.first(where: { $0 != action && self.shortcut(for: $0) == shortcut }) {
-            registrationErrors[action] = HotkeyRegistrationIssue(shortcut: shortcut, status: nil, message: "\(shortcut.displayString) 已分配给「\(conflict.title)」。原有快捷键仍可使用。")
+            registrationErrors[action] = HotkeyRegistrationIssue(shortcut: shortcut, status: nil, message: "\(shortcut.displayString) 已用于「\(conflict.title)」。")
             return false
         }
         if let reference = references.removeValue(forKey: action) { UnregisterEventHotKey(reference) }
@@ -209,11 +240,22 @@ public final class HotkeyCenter {
         return registrationErrors[action] == nil
     }
 
-    /// Restores all specified defaults and retries their registrations.
+    /// Removes an action's shortcut and frees the key combination for other apps immediately.
+    public func clearShortcut(for action: CaptureAction) {
+        if let reference = references.removeValue(forKey: action) { UnregisterEventHotKey(reference) }
+        registeredActions.remove(action)
+        registrationErrors.removeValue(forKey: action)
+        shortcuts.removeValue(forKey: action)
+        persist()
+    }
+
+    /// Restores every action to the fresh-install defaults and retries their registrations.
     public func resetDefaults() {
         let wasRunning = isRunning
         stop()
-        shortcuts = Dictionary(uniqueKeysWithValues: CaptureAction.allCases.map { ($0, $0.defaultShortcut) })
+        shortcuts = Dictionary(uniqueKeysWithValues: CaptureAction.allCases.compactMap { action in
+            action.defaultShortcut.map { (action, $0) }
+        })
         registrationErrors.removeAll()
         persist()
         if wasRunning { start() }
@@ -221,20 +263,19 @@ public final class HotkeyCenter {
 
     /// Suggests alternate combinations that are not assigned inside this application.
     public func suggestions(for action: CaptureAction) -> [HotkeyShortcut] {
-        let current = registrationErrors[action]?.shortcut ?? shortcut(for: action)
+        let current = registrationErrors[action]?.shortcut ?? shortcut(for: action) ?? action.legacyShortcut
         let combinations = [UInt32(controlKey | shiftKey | cmdKey), UInt32(optionKey | shiftKey | cmdKey), UInt32(controlKey | optionKey | cmdKey)]
         return combinations.map { HotkeyShortcut(keyCode: current.keyCode, modifiers: $0) }
             .filter { candidate in candidate != current && !CaptureAction.allCases.contains { self.shortcut(for: $0) == candidate } }
     }
 
     private func persist() {
-        let values = Dictionary(uniqueKeysWithValues: shortcuts.map { ($0.key.rawValue, $0.value) })
+        let values: [String: HotkeyShortcut?] = Dictionary(uniqueKeysWithValues: CaptureAction.allCases.map { ($0.rawValue, shortcuts[$0]) })
         if let data = try? JSONEncoder().encode(values) { defaults.set(data, forKey: Self.preferenceKey) }
     }
 
     private func register(_ action: CaptureAction) {
-        guard let index = CaptureAction.allCases.firstIndex(of: action) else { return }
-        let shortcut = shortcut(for: action)
+        guard let index = CaptureAction.allCases.firstIndex(of: action), let shortcut = shortcut(for: action) else { return }
         var reference: EventHotKeyRef?
         let identifier = EventHotKeyID(signature: Self.signature, id: UInt32(index + 1))
         let status = RegisterEventHotKey(shortcut.keyCode, shortcut.modifiers, identifier, GetApplicationEventTarget(), 0, &reference)
@@ -243,7 +284,7 @@ public final class HotkeyCenter {
             registeredActions.insert(action)
             registrationErrors.removeValue(forKey: action)
         } else {
-            registrationErrors[action] = HotkeyRegistrationIssue(shortcut: shortcut, status: status, message: "\(shortcut.displayString) 无法注册，可能已被系统或其他应用占用（\(status)）。请选择替代组合。")
+            registrationErrors[action] = HotkeyRegistrationIssue(shortcut: shortcut, status: status, message: "\(shortcut.displayString) 已被系统或其他应用占用，请换一个组合。")
         }
     }
 

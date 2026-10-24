@@ -1,4 +1,5 @@
-// Exercises pin termination with real PNG copying, decoding and atomic JSON writes paused after native I/O.
+// Exercises pin termination with real PNG copying, decoding and atomic JSON writes paused after native I/O,
+// plus point sizing and Hide All.
 import AppKit
 import ImageIO
 import XCTest
@@ -104,6 +105,66 @@ final class PinLifecycleTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: entry.url.path))
         manager = nil
         XCTAssertNil(weakManager)
+    }
+
+    func testPinOpensAtItsCapturedPointSizeAndKeepsItsAspect() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let manager = PinWindowManager(directory: fixture.library)
+        manager.pin(image: fixture.image, url: fixture.source, thumbnail: Data(), scale: 2)
+        await manager.waitForPendingOperations()
+        var window = try XCTUnwrap(pinWindows().first)
+        XCTAssertEqual(window.contentLayoutRect.size, CGSize(width: 16, height: 12), "32 × 24 Retina pixels cover 16 × 12 points")
+        XCTAssertEqual(window.contentAspectRatio.width / window.contentAspectRatio.height, 32.0 / 24, accuracy: 0.001)
+        XCTAssertEqual(manager.pins.first?.scale, 2, "Reopening from the library keeps the size")
+        manager.closeAll()
+
+        // History pins carry no scale of their own; the archived PNG's DPI tells it.
+        let retina = fixture.root.appendingPathComponent("retina.png")
+        try Exporters.encode(fixture.image, format: .png, scale: 2).write(to: retina)
+        manager.pin(image: fixture.image, url: retina, thumbnail: Data())
+        await manager.waitForPendingOperations()
+        window = try XCTUnwrap(pinWindows().first)
+        XCTAssertEqual(window.contentLayoutRect.size, CGSize(width: 16, height: 12))
+        manager.closeAll()
+
+        manager.pin(image: fixture.image, url: fixture.source, thumbnail: Data(), scale: 1)
+        await manager.waitForPendingOperations()
+        window = try XCTUnwrap(pinWindows().first)
+        XCTAssertEqual(window.contentLayoutRect.size, CGSize(width: 32, height: 24))
+        await manager.finishForTermination()
+        XCTAssertTrue(pinWindows().isEmpty)
+    }
+
+    func testNewPinAppearsAfterHidingAllAndTheNextToggleHidesIt() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let manager = PinWindowManager(directory: fixture.library)
+        manager.pin(image: fixture.image, url: fixture.source, thumbnail: Data(), scale: 2)
+        await manager.waitForPendingOperations()
+        XCTAssertEqual(pinWindows().count, 1)
+        manager.toggleVisibility()
+        XCTAssertEqual(pinWindows().count, 0, "⌥⌘T hides every pin")
+
+        manager.pin(image: fixture.image, url: fixture.source, thumbnail: Data(), scale: 2)
+        await manager.waitForPendingOperations()
+        XCTAssertEqual(manager.resourceCounts["pinWindows"], 2)
+        XCTAssertEqual(pinWindows().count, 1, "A pin made after hiding all shows up")
+        manager.toggleVisibility()
+        XCTAssertEqual(pinWindows().count, 0, "With a pin on screen the toggle hides")
+        manager.toggleVisibility()
+        XCTAssertEqual(pinWindows().count, 2)
+
+        manager.toggleVisibility()
+        let hidden = try XCTUnwrap(manager.pins.last)
+        manager.show(id: hidden.id)
+        XCTAssertEqual(pinWindows().count, 1, "Showing one pin from the library brings it back")
+        await manager.finishForTermination()
+    }
+
+    /// On-screen pin windows, found the way VoiceOver finds them.
+    private func pinWindows() -> [NSWindow] {
+        NSApp.windows.filter { $0.isVisible && ($0.contentView?.accessibilityLabel() ?? "").hasPrefix("贴图，双指缩放") }
     }
 
     private func makeFixture() throws -> (root: URL, library: URL, source: URL, image: CGImage) {

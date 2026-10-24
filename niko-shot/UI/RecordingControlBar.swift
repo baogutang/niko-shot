@@ -12,6 +12,7 @@ final class RecordingControlBarController {
     private let onCancel: () -> Void
     private let onCamera: (Bool) -> Void
     private let format: String
+    private var confirmation: NSAlert?
 
     /// Live HUD window count for coordinator teardown assertions.
     var windowCount: Int { panel == nil ? 0 : 1 }
@@ -65,7 +66,7 @@ final class RecordingControlBarController {
         effect.layer?.borderWidth = 0.5
         let hosting = NSHostingView(rootView: RecordingControlBar(session: session, format: format,
                                                                  onStop: { [weak self] in self?.onStop() },
-                                                                 onCancel: { [weak self] in self?.onCancel() },
+                                                                 onCancel: { [weak self] in self?.requestCancel() },
                                                                  onCamera: { [weak self] in self?.onCamera($0) },
                                                                  onErrorChanged: { [weak self] in self?.resizeForError($0) }))
         hosting.translatesAutoresizingMaskIntoConstraints = false
@@ -89,8 +90,33 @@ final class RecordingControlBarController {
         }
     }
 
+    /// Esc sits next to everyday shortcuts; past five seconds a discard needs a second, deliberate answer.
+    func requestCancel() {
+        guard confirmation == nil else { return }
+        guard session.duration > 5, session.state == .recording || session.state == .paused else { onCancel(); return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "放弃这段录制？"
+        alert.informativeText = "已录下的内容不会保存。"
+        alert.addButton(withTitle: "放弃").hasDestructiveAction = true
+        alert.addButton(withTitle: "继续录制").keyEquivalent = "\u{1b}"
+        alert.layout()
+        // The HUD floats above normal windows; an alert at its default level could open hidden behind it.
+        alert.window.level = NSWindow.Level(rawValue: max(NSWindow.Level.modalPanel.rawValue, (panel?.level ?? .floating).rawValue + 1))
+        confirmation = alert
+        NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+        confirmation = nil
+        // Stop, a capture interruption or teardown may have ended this session while the alert was open.
+        guard response == .alertFirstButtonReturn, panel != nil,
+              session.state == .recording || session.state == .paused else { return }
+        onCancel()
+    }
+
     /// Removes the panel immediately so it cannot appear in a subsequent capture.
     func close() {
+        // Teardown must not leave an orphaned modal loop that blocks the app.
+        if let window = confirmation?.window, NSApp.modalWindow === window { NSApp.abortModal() }
         let old = panel
         panel = nil
         hosting = nil
@@ -130,7 +156,7 @@ private struct RecordingControlBar: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(durationLabel).font(.system(size: 16, weight: .semibold)).monospacedDigit()
                             .accessibilityLabel("录制时长 \(durationLabel)")
-                        Text("\(format) · \(stateTitle)").font(.system(size: 11)).foregroundStyle(.secondary)
+                        Text("\(format)  \(stateTitle)").font(.system(size: 11)).foregroundStyle(.secondary)
                             .accessibilityLabel("录制格式 \(format)，\(stateTitle)")
                     }
                 }.frame(width: 102, alignment: .leading)

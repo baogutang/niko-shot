@@ -2,13 +2,14 @@
 import AppKit
 
 final class OverlayWindow: NSWindow {
-    /// Builds a non-opaque screen-saver-level overlay with full-screen Space support.
+    /// Builds a screen-saver-level overlay with full-screen Space support. Its content always covers the
+    /// display with the frozen frame, so the window is opaque and the compositor skips everything below it.
     init(screen: ScreenGeometry, view: NSView) {
         super.init(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         level = .screenSaver
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        backgroundColor = .clear
-        isOpaque = false
+        backgroundColor = .black
+        isOpaque = true
         hasShadow = false
         isReleasedWhenClosed = false
         acceptsMouseMovedEvents = true

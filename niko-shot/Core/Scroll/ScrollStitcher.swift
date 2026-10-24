@@ -147,9 +147,12 @@ struct ScrollStitcher {
     private var tailRow = 0
     /// Floating-overlay removal: blocks that stay put on screen while content moves underneath.
     /// A block votes when it matches the previous frame at the same screen position while
-    /// differing from the document-aligned position; after enough votes it is erased from output.
-    var overlayVotes: [Int: Int] = [:]   // internal for diagnostics
-    private var overlayFills: [Int: (red: UInt8, green: UInt8, blue: UInt8)] = [:]
+    /// differing from the document-aligned position; consecutive votes confirm it, and it is
+    /// erased only from segments whose source frame showed it.
+    private var overlayCounts: [UInt8] = []
+    private(set) var overlayConfirmed: Set<Int> = []
+    /// Per segment: keys that voted on a step touching its source frame (the one producing it and the next).
+    private var overlayPresence: [Set<Int>] = []
     /// Overlay grid width: samples per strip (≈ 90 px at the default 512-sample sampling).
     static let overlayStripSamples = 64
     /// Screen-still rows only vote when the content actually moved by this many rows.
@@ -181,7 +184,8 @@ struct ScrollStitcher {
         didRewriteSegments = false
         guard let anchor else {
             let copy = try Self.copyRows(frame.image, from: 0, count: frame.height)
-            segments = [copy]; segmentOrigins = [0]; contentHeight = frame.height; tailRow = frame.height - 1
+            segments = [copy]; segmentOrigins = [0]; overlayPresence = [[]]
+            contentHeight = frame.height; tailRow = frame.height - 1
             self.anchor = frame; frames = 1
             return .appended(rows: frame.height)
         }
@@ -226,11 +230,15 @@ struct ScrollStitcher {
             count = max(0, rowLimit - contentHeight); limited = true
         }
         // 悬浮层投票要在 anchor 还未被替换时做：同一屏幕位置仍在、文档对齐位置已变。
-        Self.accumulateOverlayVotes(anchor: anchor, frame: frame, shift: shift, top: top, bottom: bottom,
-                                    votes: &overlayVotes)
+        // 位移太小不投票时沿用上一帧的在场集合：屏幕几乎没动，浮层是否在场也不会变。
+        let voted = Self.accumulateOverlayVotes(anchor: anchor, frame: frame, shift: shift, top: top, bottom: bottom,
+                                                counts: &overlayCounts, confirmed: &overlayConfirmed)
+        let present = voted ?? overlayPresence.last ?? []
+        if !overlayPresence.isEmpty { overlayPresence[overlayPresence.count - 1].formUnion(present) }
         if count > 0 {
             segments.append(try Self.copyRows(frame.image, from: first, count: count))
             segmentOrigins.append(first)
+            overlayPresence.append(present)
             contentHeight += count
         }
         self.anchor = frame
@@ -252,17 +260,17 @@ struct ScrollStitcher {
         context.interpolationQuality = .none
         context.setBlendMode(.copy)
         var offset = 0
-        for (index, segment) in segments.enumerated() {
+        for segment in segments {
             try Task.checkCancellation()
-            let segmentY = total - offset - segment.height
-            context.draw(segment, in: CGRect(x: 0, y: segmentY, width: width, height: segment.height))
-            drawOverlayErasures(in: context, segmentIndex: index, segmentY: segmentY, offset: offset, total: total)
+            context.draw(segment, in: CGRect(x: 0, y: total - offset - segment.height, width: width, height: segment.height))
             offset += segment.height
         }
         if footerRows > 0 {
             let footer = try Self.copyRows(anchor.image, from: anchor.height - footerRows, count: footerRows)
             context.draw(footer, in: CGRect(x: 0, y: 0, width: width, height: footerRows))
         }
+        // 抹除放在整页绘制之后：采样环带不会读到尚未绘制的（全黑）行。
+        eraseOverlays(in: context, total: total)
         guard let image = context.makeImage() else { throw ScrollCaptureError.image }
         return image
     }
@@ -291,85 +299,161 @@ struct ScrollStitcher {
         return true
     }
 
-    /// 对每个「行 × 条带」投票：同一屏幕位置仍然相同（悬浮物没动），而文档对齐位置已经不同
-    /// （内容在动）—— 判定为浮层。像素级重复的内容（如相同的头像）在文档对齐位置也相同，
-    /// 不会被误判。这是逐行比较，对齐行是单行，不存在越界歧义。
-    static func accumulateOverlayVotes(anchor: ScrollFrame, frame: ScrollFrame, shift: Int, top: Int, bottom: Int,
-                                       votes: inout [Int: Int]) {
-        guard shift >= Self.overlayMinimumShift else { return }
-        let strips = anchor.samples / Self.overlayStripSamples
-        guard strips > 0 else { return }
-        // 固定带边缘 8 行内的静止条（阴影、分隔线）容易连续假匹配，不参与投票。
-        for row in max(top, 0) + 8..<(frame.height - max(bottom, 0) - 8) {
-            let aligned = row + shift
-            guard aligned >= 0, aligned < frame.height else { continue }
-            for strip in 0..<strips {
-                let key = overlayKey(row: row, strip: strip)
-                // 无对比度的空白条带不参与投票：它没有浮层证据，误票只会污染拼接结果。
-                let s0 = strip * Self.overlayStripSamples
-                var lo = Int32.max, hi = Int32.min
-                for s in 0..<Self.overlayStripSamples {
-                    let v = Int32(frame.luma[row * frame.samples + s0 + s])
-                    lo = min(lo, v); hi = max(hi, v)
-                }
-                guard hi - lo >= 24 else { continue }
-                guard Self.stripMatches(anchor, row, strip, frame, row, strip) else { continue }
-                guard !Self.stripMatches(anchor, aligned, strip, frame, row, strip) else { continue }
-                votes[key, default: 0] += 1
-            }
-        }
+    /// A strip with contrast that did not change on screen between the two frames: possibly an overlay.
+    private static func stillDetail(_ anchor: ScrollFrame, _ frame: ScrollFrame, row: Int, strip: Int) -> Bool {
+        let s0 = row * frame.samples + strip * Self.overlayStripSamples
+        var lo = UInt8.max, hi = UInt8.min
+        for s in s0..<(s0 + Self.overlayStripSamples) { let v = frame.luma[s]; lo = min(lo, v); hi = max(hi, v) }
+        return hi - lo >= 24 && stripMatches(anchor, row, strip, frame, row, strip)
     }
 
-    /// 把确认的浮层条带从输出里抹除：用条带上下若干行的逐通道中位色填充（保持背景色调）。
-    private func drawOverlayErasures(in context: CGContext, segmentIndex: Int, segmentY: Int,
-                                     offset: Int, total: Int) {
-        guard !overlayVotes.isEmpty, segmentIndex < segmentOrigins.count else { return }
-        guard let anchor, let data = context.data else { return }
-        let origin = segmentOrigins[segmentIndex]
-        let segmentHeight = segments[segmentIndex].height
+    /// Consecutive screen-still votes per overlay key, for diagnostics.
+    var overlayVotes: [Int: Int] {
+        let strips = (anchor?.samples ?? 0) / Self.overlayStripSamples
+        guard strips > 0 else { return [:] }
+        var votes: [Int: Int] = [:]
+        for (index, count) in overlayCounts.enumerated() where count > 0 {
+            votes[Self.overlayKey(row: index / strips, strip: index % strips)] = Int(count)
+        }
+        return votes
+    }
+
+    /// 对每个「行 × 条带」投票：同一屏幕位置仍然相同（悬浮物没动），而文档对齐位置已经不同
+    /// （内容在动）—— 判定为浮层。像素级重复的内容（如相同的头像）在文档对齐位置也相同，
+    /// 不会被误判。对齐行必须落在两帧的滚动区内：读到 anchor 的固定底栏必然「不同」，
+    /// 底栏上方的普通内容会因此误投票；贴着底栏的浮层改由向上配对（anchor 行 ↔ frame 行 − shift）取证。
+    /// 条带随文档移动时计数清零，阈值才是「连续」帧数。返回本步投票的键；位移太小不投票时返回 nil。
+    static func accumulateOverlayVotes(anchor: ScrollFrame, frame: ScrollFrame, shift: Int, top: Int, bottom: Int,
+                                       counts: inout [UInt8], confirmed: inout Set<Int>) -> Set<Int>? {
+        guard shift >= Self.overlayMinimumShift else { return nil }
+        let strips = anchor.samples / Self.overlayStripSamples
+        let top = max(top, 0), end = frame.height - max(bottom, 0)
+        // 固定带边缘 8 行内的静止条（阴影、分隔线）容易连续假匹配，不参与投票。
+        guard strips > 0, top + 8 < end - 8 else { return [] }
+        if counts.count != frame.height * strips { counts = [UInt8](repeating: 0, count: frame.height * strips) }
+        var voted = Set<Int>()
+        for row in (top + 8)..<(end - 8) {
+            let down = row + shift, up = row - shift
+            let hasDown = down < end, hasUp = up >= top
+            for strip in 0..<strips {
+                let index = row * strips + strip
+                // 无对比度的空白条带没有浮层证据，不投票；只有已有计数时才需要核对它是否已随文档移动。
+                let s0 = row * frame.samples + strip * Self.overlayStripSamples
+                var lo = UInt8.max, hi = UInt8.min
+                for s in s0..<(s0 + Self.overlayStripSamples) { let v = frame.luma[s]; lo = min(lo, v); hi = max(hi, v) }
+                let flat = hi - lo < 24
+                if flat, counts[index] == 0 { continue }
+                func aligned() -> Bool {
+                    (hasDown && Self.stripMatches(anchor, down, strip, frame, row, strip))
+                        || (hasUp && Self.stripMatches(anchor, row, strip, frame, up, strip))
+                }
+                guard Self.stripMatches(anchor, row, strip, frame, row, strip) else {
+                    // 只在条带确实随文档移动（与对齐位置一致）时清零：浮层只盖住条带一部分时，
+                    // 旁边滚动的文字同样会让静止比较失败，那并不说明浮层已经消失。
+                    if counts[index] > 0, aligned() { counts[index] = 0 }
+                    continue
+                }
+                guard !flat else { continue }
+                // 对齐参照自己若也是屏幕静止且有对比度的条带（多半就是浮层本身），比较必然「不同」，
+                // 不能当作内容在动的证据；否则浮层上下一个位移处的普通内容会跟着误投票。
+                let downUsable = hasDown && !Self.stillDetail(anchor, frame, row: down, strip: strip)
+                let upUsable = hasUp && !Self.stillDetail(anchor, frame, row: up, strip: strip)
+                guard downUsable || upUsable else { continue }
+                if downUsable, Self.stripMatches(anchor, down, strip, frame, row, strip) { continue }
+                if upUsable, Self.stripMatches(anchor, row, strip, frame, up, strip) { continue }
+                let key = overlayKey(row: row, strip: strip)
+                voted.insert(key)
+                if counts[index] < UInt8.max { counts[index] += 1 }
+                if Int(counts[index]) >= Self.overlayVoteThreshold { confirmed.insert(key) }
+            }
+        }
+        return voted
+    }
+
+    /// 把确认的浮层从输出里抹除：用块上下若干行的逐通道中位色填充（保持背景色调）。
+    /// 块从确认条带出发，经「行距 ≤ 3、相邻条带」且投过票的条带生长，按外接矩形抹除：浮层跨过条带边界时，
+    /// 只盖住邻条一角的部分凑不够静止证据，外接矩形把它一并带走；块外条带里的文字不受影响。只抹源帧里出现过该块的分段；
+    /// 颜色全部取自抹除前的整页再统一填充，结果与遍历顺序无关。
+    private func eraseOverlays(in context: CGContext, total: Int) {
+        guard !overlayConfirmed.isEmpty, let anchor, let data = context.data else { return }
         let strip = Self.overlayStripSamples
         let strips = anchor.samples / strip
         let bytesPerRow = context.bytesPerRow
         let base = data.assumingMemoryBound(to: UInt8.self)
-        let threshold = Self.overlayVoteThreshold
-        // 确认行 ±2 膨胀：pill 上下抗锯齿边缘行的票数偶有不足，由相邻确认行带掉。
-        var bands = Set<Int>()
-        for (key, voteCount) in overlayVotes where voteCount >= threshold {
-            for spread in -2...2 { bands.insert(key + spread) }
+        // 采样与抹除都限制在内容区内，不读也不侵入上/下固定带。
+        let bandTop = headerRows, bandBottom = total - footerRows
+        func median(_ values: inout [Int]) -> CGFloat { values.sort(); return CGFloat(values[values.count / 2]) / 255 }
+        let voted = overlayPresence.reduce(into: Set<OverlayKey>()) { $0.formUnion($1) }
+        let blocks = Self.overlayBlocks(seeds: overlayConfirmed, through: voted).filter { $0.strips.upperBound < strips }
+        var fills: [(rect: CGRect, color: CGColor)] = []
+        var offset = 0
+        for (index, segment) in segments.enumerated() {
+            defer { offset += segment.height }
+            guard index < overlayPresence.count, index < segmentOrigins.count else { continue }
+            let origin = segmentOrigins[index]
+            // 块在分段里出现的证据：相邻两步里有投票落在块的外接矩形内。浮层贴着文字时投票时有时无，
+            // 按矩形而不是逐键判断，块里暂时没投上票的行也跟着一起抹。
+            let present = overlayPresence[index]
+            for block in blocks where present.contains(where: {
+                block.strips.contains($0 & 0xFF) && ($0 >> 8) >= block.rows.lowerBound - 3 && ($0 >> 8) <= block.rows.upperBound + 3
+            }) {
+                // 上下各多抹 5 行抗锯齿边缘（与原先 ±2 膨胀加 ±3 抹除的范围相同），但不越出本分段：
+                // 相邻分段的同一输出行是别的文档内容。
+                let first = max(block.rows.lowerBound - 5, origin)
+                let last = min(block.rows.upperBound + 5, origin + segment.height - 1)
+                // CGContext 原点在左下：输出第 r 行（自顶部）的底边 y = total - r。
+                let eraseTop = max(offset + first - origin, bandTop), eraseBottom = min(offset + last - origin + 1, bandBottom)
+                guard eraseBottom > eraseTop else { continue }
+                let x = anchor.sampleX[block.strips.lowerBound * strip] - 3
+                let endX = anchor.sampleX[min((block.strips.upperBound + 1) * strip, anchor.sampleX.count) - 1] + 3
+                let left = max(0, x), right = min(anchor.width, endX)
+                guard right > left else { continue }
+                // 采样环带：块上下 6/12/18/24 行，避开浮层本身，中位数落在背景上。
+                var reds: [Int] = [], greens: [Int] = [], blues: [Int] = []
+                for distance in [6, 12, 18, 24] {
+                    for ringRow in [eraseTop - distance, eraseBottom - 1 + distance] where ringRow >= bandTop && ringRow < bandBottom {
+                        for px in left..<right {
+                            let p = ringRow * bytesPerRow + px * 4   // BGRA，小端
+                            blues.append(Int(base[p])); greens.append(Int(base[p + 1])); reds.append(Int(base[p + 2]))
+                        }
+                    }
+                }
+                guard reds.count >= 8 else { continue }
+                fills.append((CGRect(x: left, y: total - eraseBottom, width: right - left, height: eraseBottom - eraseTop),
+                              CGColor(srgbRed: median(&reds), green: median(&greens), blue: median(&blues), alpha: 1)))
+            }
         }
-        for key in bands {
-            let row = key >> 8, stripIndex = key & 0xFF
-            guard stripIndex < strips else { continue }
-            let localRow = row - origin                     // segment-local, top-based
-            guard localRow >= 0, localRow < segmentHeight else { continue }
-            let outRow = offset + localRow                  // output-local, top-based
-            let firstSample = stripIndex * strip
-            let x = anchor.sampleX[min(firstSample, anchor.sampleX.count - 1)]
-            let endX = anchor.sampleX[min(firstSample + strip, anchor.sampleX.count) - 1]
-            let stripWidth = max(1, endX - x)
-            // 采样环带：条带上下 ±6/±12/±18/±24 行，中位数落在背景上的概率才够。
-            var reds: [Int] = [], greens: [Int] = [], blues: [Int] = []
-            for distance in [6, 12, 18, 24] {
-                for ringRow in [outRow - distance, outRow + distance] where ringRow >= 0 && ringRow < total {
-                    for px in x..<(x + stripWidth) {
-                        let p = ringRow * bytesPerRow + px * 4   // BGRA，小端
-                        blues.append(Int(base[p])); greens.append(Int(base[p + 1])); reds.append(Int(base[p + 2]))
+        for fill in fills {
+            context.setFillColor(fill.color)
+            context.fill(fill.rect)
+        }
+    }
+
+    /// Grows blocks from confirmed keys through any key that ever voted (rows within 3, strips adjacent):
+    /// an overlay beside changing text votes only intermittently, yet must be erased as one rectangle.
+    private static func overlayBlocks(seeds: Set<OverlayKey>, through voted: Set<OverlayKey>)
+        -> [(rows: ClosedRange<Int>, strips: ClosedRange<Int>)] {
+        var remaining = voted.union(seeds), unseeded = seeds
+        var blocks: [(rows: ClosedRange<Int>, strips: ClosedRange<Int>)] = []
+        while let seed = unseeded.popFirst() {
+            remaining.remove(seed)
+            var queue = [seed]
+            var rows = (seed >> 8)...(seed >> 8), strips = (seed & 0xFF)...(seed & 0xFF)
+            while let key = queue.popLast() {
+                let row = key >> 8, column = key & 0xFF
+                for dr in -3...3 {
+                    for ds in -1...1 where column + ds >= 0 {
+                        let neighbour = overlayKey(row: row + dr, strip: column + ds)
+                        guard remaining.remove(neighbour) != nil else { continue }
+                        unseeded.remove(neighbour); queue.append(neighbour)
+                        rows = min(rows.lowerBound, row + dr)...max(rows.upperBound, row + dr)
+                        strips = min(strips.lowerBound, column + ds)...max(strips.upperBound, column + ds)
                     }
                 }
             }
-            guard reds.count >= 8 else { continue }
-            func median(_ values: inout [Int]) -> CGFloat {
-                values.sort(); return CGFloat(values[values.count / 2]) / 255
-            }
-            // CGContext 原点在左下：输出第 r 行（自顶部）的底边 y = total - r。
-            // 抹除矩形钳制在内容区内，不侵入上/下固定带。
-            let bandTop = headerRows, bandBottom = total - footerRows
-            let eraseTop = max(outRow - 3, bandTop), eraseBottom = min(outRow + 3, bandBottom)
-            guard eraseBottom > eraseTop else { continue }
-            let rect = CGRect(x: x - 3, y: total - eraseBottom, width: stripWidth + 6, height: eraseBottom - eraseTop)
-            context.setFillColor(CGColor(srgbRed: median(&reds), green: median(&greens), blue: median(&blues), alpha: 1))
-            context.fill(rect)
+            blocks.append((rows, strips))
         }
+        return blocks.sorted { ($0.rows.lowerBound, $0.strips.lowerBound) < ($1.rows.lowerBound, $1.strips.lowerBound) }
     }
 
     // MARK: - Matching

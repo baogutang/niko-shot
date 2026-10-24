@@ -105,13 +105,14 @@ private struct ScreenshotTextView: View {
             if model.isTranslationConfigured && model.section == .translation {
               HStack(spacing: 8) {
                 Image(systemName: "globe").foregroundStyle(.secondary).accessibilityHidden(true)
+                let services = model.availableServices
                 Picker("翻译服务", selection: Binding(get: { model.providerSelection }, set: { model.selectProvider($0) })) {
-                    ForEach(TranslationProviderID.allCases, id: \.rawValue) { provider in
+                    ForEach(services.providers, id: \.rawValue) { provider in
                         Text(provider.displayName).tag(provider.rawValue)
                     }
-                    if !model.settings.customTranslationServices.isEmpty { Divider() }
-                    ForEach(model.settings.customTranslationServices) { configuration in
-                        Text(configuration.name).tag("instance.\(configuration.id.uuidString)")
+                    if !services.providers.isEmpty && !services.custom.isEmpty { Divider() }
+                    ForEach(services.custom) { configuration in
+                        Text(configuration.name).tag(TranslationServiceChoice.tag(configuration.id))
                     }
                 }.labelsHidden().frame(maxWidth: 210)
                 Image(systemName: "arrow.right").foregroundStyle(.tertiary).accessibilityHidden(true)

@@ -18,6 +18,29 @@ final class TranslationSettingsDrafts {
   func clearSensitiveInputs() { pendingCredentials.removeAll() }
 }
 
+/// Copies saved secrets so clipboard managers skip them, Universal Clipboard keeps them local and they expire.
+@MainActor
+enum SecretPasteboard {
+  static let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
+  static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
+
+  /// Clears only while the secret still owns the pasteboard, so a newer copy is never erased.
+  @discardableResult
+  static func copy(_ secret: String, to pasteboard: NSPasteboard = .general, clearAfter delay: Duration = .seconds(60)) -> Int {
+    _ = pasteboard.prepareForNewContents(with: .currentHostOnly)
+    pasteboard.setString(secret, forType: .string)
+    pasteboard.setData(Data(), forType: concealedType)
+    pasteboard.setData(Data(), forType: transientType)
+    let owner = pasteboard.changeCount, name = pasteboard.name
+    Task { @MainActor in
+      do { try await Task.sleep(for: delay) } catch { return }
+      let pasteboard = NSPasteboard(name: name)
+      if pasteboard.changeCount == owner { pasteboard.clearContents() }
+    }
+    return owner
+  }
+}
+
 /// Five peer service choices with one readable configuration workspace and inline connection tests.
 @MainActor
 struct TranslationSettingsView: View {
@@ -49,7 +72,7 @@ struct TranslationSettingsView: View {
     if settings.translationProvider == .custom {
       return settings.customTranslationServices.first {
         $0.id == settings.selectedCustomTranslationID
-      }?.name ?? "自定义 REST · 未选择实例"
+      }?.name ?? "自定义 REST（未选择）"
     }
     return settings.translationProvider.displayName
   }
@@ -149,9 +172,9 @@ struct TranslationSettingsView: View {
   private func productDescription(_ provider: TranslationProviderID) -> String {
     switch provider {
     case .baidu: "百度通用文本翻译 API"
-    case .google: "Google Cloud Translation · Basic v2"
+    case .google: "Google Cloud Translation Basic v2"
     case .youdao: "有道智云文本翻译 API"
-    case .deepl: "DeepL API · 翻译器订阅不包含 API"
+    case .deepl: "DeepL API（普通翻译订阅不含 API）"
     case .custom: "彩云、LibreTranslate 或自定义 REST"
     }
   }
@@ -204,7 +227,7 @@ struct TranslationSettingsView: View {
     switch provider {
     case .custom:
       let count = settings.customTranslationServices.count
-      return count == 0 ? "通用 REST · 可创建彩云和 LibreTranslate 预设" : "通用 REST · \(count) 个配置实例"
+      return count == 0 ? "通用 REST，可从彩云或 LibreTranslate 预设创建" : "通用 REST，已有 \(count) 个"
     default:
       let ready = CredentialField.fields(for: provider).allSatisfy {
         drafts.configuredAccounts.contains($0.account)
@@ -212,12 +235,12 @@ struct TranslationSettingsView: View {
       let kind: String
       switch provider {
       case .baidu: kind = "通用文本翻译 API"
-      case .google: kind = "Cloud Translation · Basic v2"
+      case .google: kind = "Cloud Translation Basic v2"
       case .youdao: kind = "智云文本翻译 API"
       case .deepl: kind = "DeepL API"
       case .custom: kind = "通用 REST"
       }
-      return kind + " · " + (ready ? "已配置" : "待配置")
+      return kind + (ready ? "，已配置" : "，未配置")
     }
   }
 
@@ -361,7 +384,7 @@ private struct ProviderCredentialEditor: View {
           .accessibilityLabel("移除\(provider.displayName)已保存的\(field.title)")
         }
       }
-      Text("钥匙串保存 · •••• 表示已有值 · 留空保留，移除才删除")
+      Text("凭据保存在钥匙串中。•••• 表示已保存；留空不会修改。")
         .font(.system(size: 11)).foregroundStyle(.secondary)
       HStack(spacing: 10) {
         Button("保存凭据") { save() }.buttonStyle(.borderedProminent)
@@ -482,9 +505,8 @@ private struct ProviderCredentialEditor: View {
       refreshStatus()
       return
     }
-    NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(value, forType: .string)
-    credentialFeedback = "已复制\(field.title)至剪贴板。"
+    SecretPasteboard.copy(value)
+    credentialFeedback = "已复制\(field.title)，60 秒后自动从剪贴板清除。"
     credentialError = nil
   }
 
@@ -609,7 +631,7 @@ private struct CustomTranslationCard: View {
           .textFieldStyle(.roundedBorder)
           .accessibilityLabel("REST URL 模板")
       }
-      templateEditor("Headers · JSON", text: headersBinding, height: 72)
+      templateEditor("Headers（JSON）", text: headersBinding, height: 72)
       NikoPreferenceRow(title: "Body 格式", labelWidth: 100) {
         Picker("Body 格式", selection: draftBinding.bodyFormat) {
           ForEach(CustomRESTConfiguration.BodyFormat.allCases, id: \.self) { format in
@@ -624,7 +646,7 @@ private struct CustomTranslationCard: View {
       }
       NikoPreferenceRow(title: "语言映射", labelWidth: 100) {
         Picker("语言映射", selection: draftBinding.languageStyle) {
-          Text("通用 · BCP-47").tag(CustomRESTConfiguration.LanguageStyle.generic)
+          Text("通用（BCP-47）").tag(CustomRESTConfiguration.LanguageStyle.generic)
           Text("彩云小译").tag(CustomRESTConfiguration.LanguageStyle.caiyun)
           Text("LibreTranslate").tag(CustomRESTConfiguration.LanguageStyle.libreTranslate)
         }.labelsHidden().frame(width: 210).accessibilityLabel("自定义翻译服务的语言代码映射")

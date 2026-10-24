@@ -127,6 +127,7 @@ enum AutomationIPCFiles {
 public final class AutomationServer {
     private let bridge: AutomationBridge
     private let configuration: AutomationIPCConfiguration
+    private let allowsSilentAutomation: @MainActor () -> Bool
     private let center = DistributedNotificationCenter.default()
     private let processID = getpid()
     private var observations: [AutomationObservation] = []
@@ -146,8 +147,9 @@ public final class AutomationServer {
     public convenience init(bridge: AutomationBridge = .shared) {
         self.init(bridge: bridge, configuration: .live)
     }
-    init(bridge: AutomationBridge, configuration: AutomationIPCConfiguration) {
-        self.bridge = bridge; self.configuration = configuration
+    init(bridge: AutomationBridge, configuration: AutomationIPCConfiguration,
+         allowsSilentAutomation: @escaping @MainActor () -> Bool = { AppSettings.shared.allowsSilentAutomation }) {
+        self.bridge = bridge; self.configuration = configuration; self.allowsSilentAutomation = allowsSilentAutomation
     }
 
     /// Registers command, readiness and cancellation observers exactly once.
@@ -225,7 +227,11 @@ public final class AutomationServer {
         operations[request.requestID] = Task { [weak self] in
             guard let self else { return }
             let result: AutomationResponse?, errorMessage: String?
-            do { result = try await self.bridge.execute(request.command); errorMessage = nil }
+            // Only CLI requests arrive here; Shortcuts and URLs call the bridge in-process.
+            do {
+                let command = try request.command.validatedForCommandLine(allowsSilentAutomation: self.allowsSilentAutomation())
+                result = try await self.bridge.execute(command); errorMessage = nil
+            }
             catch { result = nil; errorMessage = error is CancellationError ? "操作已取消。" : error.localizedDescription }
             self.operations[request.requestID] = nil
             self.draining[request.requestID] = nil
@@ -470,7 +476,7 @@ public enum AutomationCLI {
     public static func runIfNeeded(arguments: [String]) -> Int32? {
         let values = Array(arguments.dropFirst())
         guard !values.isEmpty else { return nil }
-        if values[0].hasPrefix("-psn_") || values[0].hasPrefix("-NS") { return nil }
+        if isSystemLaunchArgument(values[0]) { return nil }
         if values == ["help"] || values == ["--help"] || values == ["-h"] {
             write(help, to: .standardOutput); return 0
         }
@@ -516,6 +522,13 @@ public enum AutomationCLI {
         return result.code ?? 1
     }
 
+    /// LaunchServices adds `-psn_…` and Cocoa accepts `-AppleLanguages (en)`-style defaults; CLI flags are lowercase.
+    static func isSystemLaunchArgument(_ value: String) -> Bool {
+        if value.hasPrefix("-psn_") { return true }
+        guard value.hasPrefix("-"), let next = value.dropFirst().first else { return false }
+        return next.isUppercase
+    }
+
     static func renderedOutput(_ response: AutomationResponse, action: AutomationAction) -> String {
         switch action {
         case .ocr, .translate, .lastOCR: return response.text ?? response.message
@@ -536,6 +549,7 @@ public enum AutomationCLI {
           help | version
         OCR 命令先截图，再把识别文字写入剪贴板；翻译命令读取剪贴板文字。
         路径支持 ~ 和相对路径；互动操作等待最多 300 秒。
+        --fullscreen、--window-id 与 last-ocr 需在 设置 → 通用 打开「允许命令行静默截图」。
 
         """
     }

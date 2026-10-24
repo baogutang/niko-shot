@@ -18,6 +18,8 @@ public final class RecordingSession {
     public private(set) var cameraSession: AVCaptureSession?
     /// Actual even-pixel encoded dimensions, retained after Stop.
     public private(set) var lastOutputSize: CGSize = .zero
+    /// Runs when capture ends outside the HUD with a healthy writer, so the owner can save through its normal Stop flow.
+    @ObservationIgnored var onInterrupted: (() -> Void)?
     @ObservationIgnored private var stream: SCStream?
     @ObservationIgnored private var pipeline: RecordingPipeline?
     @ObservationIgnored private var eventTask: Task<Void, Never>?
@@ -177,6 +179,10 @@ public final class RecordingSession {
     private func receive(_ event: RecordingEvent, generation token: UUID) {
         switch event {
         case .duration(let value): duration = value
+        case .interrupted:
+            // Stop stays enabled; without an owner hook the user can still save from the HUD.
+            guard state == .recording || state == .paused else { return }
+            onInterrupted?()
         case .failure(let message):
             guard state != .idle, state != .finishing, state != .failed else { return }
             errorMessage = message; state = .failed
@@ -220,7 +226,7 @@ public final class RecordingSession {
         let rawWidth = Double(logicalSize.width * scale), rawHeight = Double(logicalSize.height * scale)
         guard rawWidth.isFinite, rawHeight.isFinite, rawWidth >= 2, rawHeight >= 2,
               rawWidth <= 16_384, rawHeight <= 16_384 else { throw RecordingError.invalidTarget }
-        let width = max(2, Int(rawWidth.rounded(.up)) / 2 * 2), height = max(2, Int(rawHeight.rounded(.up)) / 2 * 2)
+        let (width, height) = options.encodedSize(width: rawWidth, height: rawHeight)
         let configuration = SCStreamConfiguration()
         configuration.width = width; configuration.height = height
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(options.fps))

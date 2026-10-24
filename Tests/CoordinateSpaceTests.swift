@@ -23,3 +23,24 @@ final class CoordinateSpaceTests: XCTestCase {
         XCTAssertEqual(CoordinateSpace.imagePixelRect(fromSelection: CGRect(x: -10, y: 99.5, width: 20, height: 50), screen: screen), CGRect(x: 0, y: 199, width: 20, height: 1))
     }
 }
+
+final class OwnedCropTests: XCTestCase {
+    func testSmallCropsOwnTheirPixelsAndKeepTheirContent() throws {
+        let context = try ImageUtilities.context(width: 400, height: 300)
+        context.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 400, height: 300))
+        context.setFillColor(CGColor(red: 0, green: 0, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 100, y: 100, width: 50, height: 50))
+        let parent = try XCTUnwrap(context.makeImage())
+        let crop = try XCTUnwrap(ImageUtilities.ownedCrop(parent, to: CGRect(x: 100, y: 150, width: 50, height: 50)))
+        XCTAssertEqual(crop.width, 50)
+        XCTAssertEqual(crop.height, 50)
+        XCTAssertLessThan(crop.bytesPerRow, parent.bytesPerRow, "Backed by its own buffer, not a view into the parent")
+        let pixel = try XCTUnwrap(crop.dataProvider?.data as Data?)
+        // Device RGB conversion of the fill colour may leave a few levels in the other channels.
+        XCTAssertGreaterThan(pixel[0], 240, "Blue channel of a BGRA blue pixel")
+        XCTAssertLessThan(pixel[2], 16)
+        let full = try XCTUnwrap(ImageUtilities.ownedCrop(parent, to: CGRect(x: 0, y: 0, width: 400, height: 290)))
+        XCTAssertEqual(full.height, 290)
+    }
+}

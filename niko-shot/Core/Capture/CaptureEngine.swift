@@ -94,14 +94,18 @@ final class CaptureEngine {
 /// A session-owned single-frame source with target validation; native configuration never crosses actors.
 @MainActor
 final class RegionSnapshot {
-    private let request: @MainActor () async throws -> CGImage
+    private let request: @MainActor (CaptureContext?) async throws -> CGImage
     private let validation: @MainActor () throws -> CaptureContext?
     private let scrollValidation: @MainActor (CGPoint) throws -> Void
     private let stopRequest: @MainActor () async -> Void
     private var stopped = false
+    private var validated = false
+    /// Geometry from the most recent compositor check; the next grab targets it without querying again.
+    private(set) var context: CaptureContext?
 
     /// Injects a real image source and geometry check without requiring capture consent in flow tests.
-    init(capture: @escaping @MainActor () async throws -> CGImage,
+    /// `capture` receives the last validated geometry to grab.
+    init(capture: @escaping @MainActor (CaptureContext?) async throws -> CGImage,
          validate: @escaping @MainActor () throws -> CaptureContext? = { nil },
          validateScroll: @escaping @MainActor (CGPoint) throws -> Void = { _ in },
          stop: @escaping @MainActor () async -> Void = {}) {
@@ -112,6 +116,7 @@ final class RegionSnapshot {
     /// Validates identity and geometry before dispatching any event to the native target.
     func validatedContext(forAutomaticScroll: Bool = false) throws -> CaptureContext? {
         let context = try validation()
+        self.context = context; validated = true
         if forAutomaticScroll, let context {
             try scrollValidation(CGPoint(x: context.globalRect.midX, y: context.globalRect.midY))
         }
@@ -119,15 +124,23 @@ final class RegionSnapshot {
     }
 
     /// Captures a fresh viewport without retaining previous samples or installing any listener.
+    /// One compositor check per frame: the check after the grab both proves the pixels came from the
+    /// validated target (identity, size, position) and supplies the next frame's geometry.
     func capture() async throws -> CGImage {
         try Task.checkCancellation()
         guard !stopped else { throw CancellationError() }
-        _ = try validation()
-        let image = try await request()
-        try Task.checkCancellation()
-        guard !stopped else { throw CancellationError() }
-        _ = try validation()
-        return image
+        if !validated { _ = try validatedContext() }
+        for _ in 0..<2 {
+            let target = context
+            let image = try await request(target)
+            try Task.checkCancellation()
+            guard !stopped else { throw CancellationError() }
+            let current = try validation()
+            context = current
+            // 窗口在两次校验之间移动过：这一帧取的是旧位置，按新位置重取一次。
+            if current?.globalRect == target?.globalRect, current?.screen == target?.screen { return image }
+        }
+        throw ScrollTargetError.windowStateUnknown
     }
 
     func stop() async {

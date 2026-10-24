@@ -202,6 +202,50 @@ final class AnnotationKeyboardTests: XCTestCase {
         XCTAssertEqual(canvas.resourceCounts.values.reduce(0, +), 0)
     }
 
+    func testFinishingInlineTextHandsTheKeysBackToTheCanvas() async throws {
+        let canvas = try await makeCanvas()
+        defer { canvas.prepareForFinish() }
+        let window = NSWindow(contentRect: canvas.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = canvas
+        defer { window.contentView = nil; window.close() }
+        window.makeFirstResponder(canvas)
+        canvas.tool = .text
+        try send(" ", code: 49, to: canvas)
+        let editor = try XCTUnwrap(Self.findText(in: canvas))
+        XCTAssertTrue(window.firstResponder === editor)
+        editor.string = "标签"
+        let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+            isARepeat: false, keyCode: 53))
+        editor.keyDown(with: escape)
+        XCTAssertFalse(canvas.isEditingText)
+        XCTAssertEqual(canvas.document.commands.first?.text, "标签")
+        XCTAssertTrue(window.firstResponder === canvas, "Escape, Return, Command-Z and the arrows keep working without a click")
+        var actions: [ToolbarAction] = []
+        canvas.onAction = { actions.append($0) }
+        window.firstResponder?.keyDown(with: escape)
+        window.firstResponder?.keyDown(with: escape)
+        XCTAssertEqual(actions, [.close], "The first Escape clears the selection, the second closes")
+    }
+
+    func testEffectPreviewRunsOneRenderAtATimeAndShowsTheLatestMarks() async throws {
+        let canvas = try await makeCanvas()
+        defer { canvas.prepareForFinish() }
+        canvas.tool = .mosaic
+        try send(" ", code: 49, to: canvas)
+        for _ in 0..<16 {
+            try send("", code: 124, modifiers: .shift, to: canvas)
+            try send("", code: 125, modifiers: .shift, to: canvas)
+            XCTAssertLessThanOrEqual(canvas.resourceCounts["preview"] ?? 0, 1, "Moves queue the latest marks instead of piling up renders")
+        }
+        let deadline = Date().addingTimeInterval(10)
+        while canvas.resourceCounts["preview"] != 0, Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(canvas.resourceCounts["preview"], 0)
+        XCTAssertNotNil(canvas.renderedPreview, "The last render is shown once the marks stop changing")
+        try send(" ", code: 49, to: canvas)
+        XCTAssertEqual(canvas.document.commands.first?.tool, .mosaic)
+    }
+
     private func makeCanvas() async throws -> AnnotationCanvasView {
         let image = try await Task.detached { () -> CGImage in
             let context = try ImageUtilities.context(width: 400, height: 320)

@@ -61,7 +61,7 @@ final class AutomationIPCTests: XCTestCase {
         defer { server.stop(); try? FileManager.default.removeItem(at: configuration.directory) }
         server.start()
         let id = UUID(); try AutomationIPCFiles.prepare(configuration, requestID: id)
-        let request = AutomationWireRequest(requestID: id, clientPID: getpid(), serverPID: getpid(), command: AutomationCommand(action: .lastOCR))
+        let request = AutomationWireRequest(requestID: id, clientPID: getpid(), serverPID: getpid(), command: AutomationCommand(action: .translate))
         let metadata = try JSONEncoder().encode(request)
         for _ in 0..<2 { center.postNotificationName(configuration.name("request"), object: String(getpid()), userInfo: ["metadata": metadata], deliverImmediately: true) }
         try await waitUntil { FileManager.default.fileExists(atPath: configuration.responseFile(id).path) }
@@ -103,7 +103,7 @@ final class AutomationIPCTests: XCTestCase {
     func testClientRejectsResponseForAnotherProcessAndUnsafeDirectory() async throws {
         let configuration = fixtureConfiguration(), client = AutomationIPCClient(configuration: configuration)
         defer { client.cancel(); try? FileManager.default.removeItem(at: configuration.directory) }
-        let operation = Task { try await client.execute(AutomationCommand(action: .lastOCR), serverPID: getpid(), timeout: 2) }
+        let operation = Task { try await client.execute(AutomationCommand(action: .translate), serverPID: getpid(), timeout: 2) }
         try await waitUntil { client.pendingRequestID != nil }
         let id = try XCTUnwrap(client.pendingRequestID)
         try AutomationIPCFiles.write(AutomationWireResponse(requestID: id, clientPID: getpid() + 1, serverPID: getpid(), result: AutomationResponse(text: "wrong recipient"), error: nil), configuration: configuration)
@@ -116,7 +116,7 @@ final class AutomationIPCTests: XCTestCase {
         try FileManager.default.createDirectory(at: unsafe.directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o755])
         defer { try? FileManager.default.removeItem(at: unsafe.directory) }
         let unsafeClient = AutomationIPCClient(configuration: unsafe)
-        do { _ = try await unsafeClient.execute(AutomationCommand(action: .lastOCR), serverPID: getpid(), timeout: 0.1); XCTFail("Expected unsafe directory") }
+        do { _ = try await unsafeClient.execute(AutomationCommand(action: .translate), serverPID: getpid(), timeout: 0.1); XCTFail("Expected unsafe directory") }
         catch { XCTAssertTrue(error is AutomationError) }
         XCTAssertEqual(unsafeClient.observerCount + unsafeClient.timerCount, 0)
     }
@@ -136,6 +136,50 @@ final class AutomationIPCTests: XCTestCase {
         XCTAssertNil(AutomationCLI.runIfNeeded(arguments: ["niko-shot"]))
         XCTAssertEqual(AutomationCLI.runIfNeeded(arguments: ["niko-shot", "unknown"]), 64)
         try? FileManager.default.removeItem(at: configuration.directory)
+    }
+
+    func testCocoaDefaultsArgumentsLaunchTheAppInsteadOfTheCLI() {
+        for arguments in [["-AppleLanguages", "(en)"], ["-ApplePersistenceIgnoreState", "YES"],
+                          ["-NSDocumentRevisionsDebugMode", "YES"], ["-AppleLocale", "en_US"], ["-psn_0_12345"]] {
+            XCTAssertNil(AutomationCLI.runIfNeeded(arguments: ["niko-shot"] + arguments), "\(arguments)")
+        }
+        for value in ["-h", "--help", "--fullscreen", "-", "capture", "last-ocr", "help"] {
+            XCTAssertFalse(AutomationCLI.isSystemLaunchArgument(value), value)
+        }
+        XCTAssertEqual(AutomationCLI.runIfNeeded(arguments: ["niko-shot", "-h"]), 0)
+        XCTAssertEqual(AutomationCLI.runIfNeeded(arguments: ["niko-shot", "-x"]), 64)
+        XCTAssertEqual(AutomationCLI.runIfNeeded(arguments: ["niko-shot", "--Region"]), 64)
+    }
+
+    func testServerRefusesCommandLineCapturesWithoutSelectionUntilTheUserOptsIn() async throws {
+        let configuration = fixtureConfiguration(), bridge = AutomationBridge(), recorder = AutomationCommandRecorder()
+        let policy = AutomationPolicyState()
+        bridge.handler = { command in recorder.commands.append(command); return AutomationResponse(outputPath: "/tmp/fixture.png", text: "OCR") }
+        let server = AutomationServer(bridge: bridge, configuration: configuration, allowsSilentAutomation: { policy.allowsSilentAutomation })
+        let client = AutomationIPCClient(configuration: configuration)
+        defer { client.cancel(); server.stop(); try? FileManager.default.removeItem(at: configuration.directory) }
+        server.start()
+        let pid = try await client.connect(serverPID: getpid(), timeout: 2)
+        let silent = [AutomationCommand(action: .capture, captureType: .fullscreen, outputPath: "/tmp/fixture.png"),
+            AutomationCommand(action: .capture, captureType: .window, windowID: 42), AutomationCommand(action: .lastOCR)]
+        for command in silent {
+            do { _ = try await client.execute(command, serverPID: pid, timeout: 2); XCTFail("Expected refusal for \(command)") }
+            catch {
+                XCTAssertEqual(error as? AutomationError, .silentAutomationDisabled)
+                XCTAssertEqual(error.localizedDescription, "命令行静默截图未开启：在 设置 → 通用 打开「允许命令行静默截图」。")
+            }
+        }
+        XCTAssertTrue(recorder.commands.isEmpty, "A refused request must never reach the capture handler")
+        for command in [AutomationCommand(action: .capture), AutomationCommand(action: .ocr), AutomationCommand(action: .scroll),
+                        AutomationCommand(action: .record), AutomationCommand(action: .translate)] {
+            _ = try await client.execute(command, serverPID: pid, timeout: 2)
+        }
+        XCTAssertEqual(recorder.commands.map(\.action), [.capture, .ocr, .scroll, .record, .translate])
+        policy.allowsSilentAutomation = true
+        for command in silent { _ = try await client.execute(command, serverPID: pid, timeout: 2) }
+        XCTAssertEqual(recorder.commands.suffix(3).map(\.action), [.capture, .capture, .lastOCR])
+        XCTAssertEqual(client.observerCount + client.timerCount + client.processObserverCount + server.processObserverCount, 0)
+        await server.stopAndDrain()
     }
 
     func testStoppingServerImmediatelyReleasesClientAndRetainsCleanupUntilDrain() async throws {
@@ -166,7 +210,7 @@ final class AutomationIPCTests: XCTestCase {
         // An old draining operation must not clear a later request's observers, task or result.
         bridge.handler = { _ in AutomationResponse(message: "next request") }
         server.start()
-        let next = try await client.execute(AutomationCommand(action: .lastOCR), serverPID: getpid(), timeout: 2)
+        let next = try await client.execute(AutomationCommand(action: .translate), serverPID: getpid(), timeout: 2)
         XCTAssertEqual(next.message, "next request"); XCTAssertEqual(server.drainingOperationCount, 1)
         let drain = Task { await server.stopAndDrain(); drainState.connected = true }
         await Task.yield()
@@ -222,7 +266,7 @@ final class AutomationIPCTests: XCTestCase {
         DistributedNotificationCenter.default().postNotificationName(configuration.name("request"), object: String(getpid()),
             userInfo: ["metadata": metadata], deliverImmediately: true)
         try await waitUntil { recorder.commands.count == 1 && server.processObserverCount == 1 }
-        let survivingOperation = Task { try await client.execute(AutomationCommand(action: .lastOCR), serverPID: getpid(), timeout: 2) }
+        let survivingOperation = Task { try await client.execute(AutomationCommand(action: .translate), serverPID: getpid(), timeout: 2) }
         try await waitUntil { survivingRequest.waiting && server.operationCount == 2 && server.processObserverCount == 2 }
         let survivingID = try XCTUnwrap(client.pendingRequestID)
         XCTAssertEqual(kill(childPID, SIGKILL), 0, "Only the independent fixture process is killed")
@@ -250,7 +294,7 @@ final class AutomationIPCTests: XCTestCase {
             try? FileManager.default.removeItem(at: configuration.directory)
         }
         XCTAssertNotEqual(pid, getpid())
-        let operation = Task { try await client.execute(AutomationCommand(action: .lastOCR), serverPID: pid, timeout: 30) }
+        let operation = Task { try await client.execute(AutomationCommand(action: .translate), serverPID: pid, timeout: 30) }
         try await waitUntil { client.pendingRequestID != nil && client.processObserverCount == 1 }
         let exitedAt = ContinuousClock.now
         XCTAssertEqual(kill(pid, SIGKILL), 0)
@@ -284,12 +328,12 @@ final class AutomationIPCTests: XCTestCase {
         XCTAssertEqual(kill(losingPID, SIGKILL), 0)
         let resident = try await connection.value
         XCTAssertEqual(resident, getpid())
-        let result = try await client.execute(AutomationCommand(action: .lastOCR), serverPID: resident, timeout: 2)
+        let result = try await client.execute(AutomationCommand(action: .translate), serverPID: resident, timeout: 2)
         try await waitUntil { handshake.queries.count >= 2 && handshake.requests.count == 1 }
         XCTAssertEqual(result.text, "resident ready")
         XCTAssertEqual(Set(handshake.queries.map(\.id)), [phase], "Handoff must keep the original query identity")
         XCTAssertEqual(handshake.queries.map(\.serverPID), [losingPID, getpid()])
-        XCTAssertEqual(commands.commands.map(\.action), [.lastOCR]); XCTAssertEqual(handshake.requests.count, 1)
+        XCTAssertEqual(commands.commands.map(\.action), [.translate]); XCTAssertEqual(handshake.requests.count, 1)
         XCTAssertEqual(client.observerCount + client.timerCount + client.processObserverCount + server.processObserverCount, 0)
         await server.stopAndDrain()
     }
@@ -317,7 +361,7 @@ final class AutomationIPCTests: XCTestCase {
             }
             let pid = try await connection.value
             XCTAssertEqual(pid, getpid()); XCTAssertTrue(losingProcess.isRunning)
-            let result = try await client.execute(AutomationCommand(action: .lastOCR), serverPID: pid, timeout: 2)
+            let result = try await client.execute(AutomationCommand(action: .translate), serverPID: pid, timeout: 2)
             XCTAssertEqual(result.message, "winner"); XCTAssertEqual(commands.commands.count, 1)
             XCTAssertEqual(client.observerCount + client.timerCount + client.processObserverCount, 0)
             await server.stopAndDrain()
@@ -346,7 +390,7 @@ final class AutomationIPCTests: XCTestCase {
         XCTAssertEqual(client.pendingQueryID, phase, "A stop notification without a bound PID cannot cancel cold-start handoff")
         lookup.processID = getpid(); server.start()
         let pid = try await connection.value
-        let result = try await client.execute(AutomationCommand(action: .lastOCR), serverPID: pid, timeout: 2)
+        let result = try await client.execute(AutomationCommand(action: .translate), serverPID: pid, timeout: 2)
         XCTAssertEqual(pid, getpid()); XCTAssertEqual(result.text, "late winner")
         XCTAssertEqual(commands.commands.count, 1)
         XCTAssertEqual(client.observerCount + client.timerCount + client.processObserverCount, 0)
@@ -376,7 +420,7 @@ final class AutomationIPCTests: XCTestCase {
         bridge.handler = { _ in AutomationResponse(message: "next handshake") }
         let resident = try await second.value
         XCTAssertEqual(resident, getpid())
-        let result = try await client.execute(AutomationCommand(action: .lastOCR), serverPID: resident, timeout: 2)
+        let result = try await client.execute(AutomationCommand(action: .translate), serverPID: resident, timeout: 2)
         XCTAssertEqual(result.message, "next handshake")
         XCTAssertEqual(client.observerCount + client.timerCount + client.processObserverCount, 0)
         await server.stopAndDrain()
@@ -477,6 +521,7 @@ final class AutomationIPCTests: XCTestCase {
 
 @MainActor private final class AutomationNotificationRecorder { var payloads: [String] = [] }
 @MainActor private final class AutomationConnectionState { var connected = false }
+@MainActor private final class AutomationPolicyState { var allowsSilentAutomation = false }
 @MainActor private final class AutomationResidentLookup {
     var processID: Int32?
     var calls = 0

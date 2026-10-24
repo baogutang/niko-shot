@@ -103,8 +103,8 @@ struct RecordingSetupView: View {
             }
             formRow("编码") {
                 Picker("编码", selection: $settings.recordingCodec) {
-                    Text("HEVC · 更小体积").tag("hevc")
-                    Text("H.264 · 广泛兼容").tag("h264")
+                    Text("HEVC（体积更小）").tag("hevc")
+                    Text("H.264（兼容更好）").tag("h264")
                 }.labelsHidden().frame(width: 224).accessibilityLabel("视频编码")
             }
             formRow("质量") {

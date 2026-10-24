@@ -50,7 +50,7 @@ final class ScrollControlBarController {
 
     /// Shows the HUD below (or above) the viewport, clamped to the viewport's display.
     func show(near viewport: CGRect) {
-        let size = CGSize(width: 520, height: 56)
+        let size = CGSize(width: 600, height: 56)
         let visible = NSScreen.screens.map(\.visibleFrame).max { a, b in
             let x = a.intersection(viewport), y = b.intersection(viewport)
             return (x.isNull ? 0 : x.width * x.height) < (y.isNull ? 0 : y.width * y.height)
@@ -112,12 +112,12 @@ private struct ScrollHUDView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(state.title).font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
                 Text(state.message).font(.system(size: 11)).foregroundStyle(messageColor)
-                    .lineLimit(1).truncationMode(.tail)
+                    .lineLimit(1).truncationMode(.tail).help(state.message)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
             VStack(alignment: .trailing, spacing: 2) {
-                Text(state.height > 0 ? "\(state.height.formatted()) px" : "—")
+                Text(verbatim: state.height > 0 ? "\(state.height) px" : "—")
                     .font(.system(size: 12, weight: .semibold, design: .rounded)).monospacedDigit()
                     .foregroundStyle(.white.opacity(0.92))
                 Text("\(state.frames) 段").font(.system(size: 10)).monospacedDigit().foregroundStyle(.white.opacity(0.5))
@@ -143,7 +143,7 @@ private struct ScrollHUDView: View {
                 Image(systemName: "xmark").font(.system(size: 13, weight: .semibold)).frame(width: 30, height: 30)
             }
             .buttonStyle(CaptureHUDButtonStyle())
-            .help("取消长截图 · esc").accessibilityLabel("取消长截图")
+            .help("取消长截图（Esc）").accessibilityLabel("取消长截图")
             Button(action: onFinish) {
                 HStack(spacing: 5) {
                     Image(systemName: "checkmark").font(.system(size: 12, weight: .bold))
@@ -153,7 +153,7 @@ private struct ScrollHUDView: View {
             }
             .buttonStyle(CaptureHUDButtonStyle(prominent: true))
             .disabled(!state.canFinish)
-            .help("结束并进入标注 · ↩").accessibilityLabel("完成长截图")
+            .help("完成并进入标注（↩）").accessibilityLabel("完成长截图")
         }
         .padding(.leading, 12).padding(.trailing, 10)
         .frame(height: 56)

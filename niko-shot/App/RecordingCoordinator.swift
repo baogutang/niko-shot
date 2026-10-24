@@ -37,6 +37,7 @@ final class RecordingCoordinator {
 
     init(engine: CaptureEngine, selection: SelectionSession, windows: WindowList, onOCR: @escaping (String) -> Void = { _ in }) {
         self.engine = engine; self.selection = selection; self.windows = windows; self.onOCR = onOCR
+        Task.detached(priority: .utility) { RecordingAutomationFiles.sweep(RecordingAutomationFiles.folder) }
     }
 
     /// Counts coordinator UI/tasks and the recording resources without starting capture or timers.
@@ -52,11 +53,13 @@ final class RecordingCoordinator {
     }
 
     /// Opens the native target/audio form and returns only after SCStream has actually started.
-    /// The returned file is written when the user stops; nil output keeps an app-owned file plus Save As.
+    /// The returned file is written when the user stops; without an output path it goes to the Desktop.
     func startAutomation(delay: Int, output: URL?, format: String, autoOCR: Bool, captureType: AutomationCaptureType? = nil) async throws -> URL {
         try Task.checkCancellation()
         guard !terminating, !isBusy, selection.state == .idle else { throw AppError.busy }
-        let plan = try RecordingAutomationPlan(delay: delay, output: output, format: format, autoOCR: autoOCR)
+        // Without a path the recording lands on the Desktop like a system recording; the scratch folder is swept weekly.
+        let fallback = Exporters.uniqueURL(in: AutomationCommand.defaultOutputDirectory, filename: outputName(extension: format.lowercased()))
+        let plan = try RecordingAutomationPlan(delay: delay, output: output, fallback: fallback, format: format, autoOCR: autoOCR)
         let token = UUID()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
@@ -158,7 +161,7 @@ final class RecordingCoordinator {
                 let options = RecordingOptions(fps: settings.recordingFPS, codec: settings.recordingCodec, quality: settings.recordingQuality,
                                                systemAudio: settings.systemAudio, microphone: settings.microphone,
                                                showsCursor: settings.showsCursor, camera: settings.recordingCamera)
-                let folder = AppPaths.root.appendingPathComponent("Recordings", isDirectory: true)
+                let folder = RecordingAutomationFiles.folder
                 try await RecordingAutomationFiles.prepare(folder)
                 try self.check(token)
                 let output = self.automation?.video ?? folder.appendingPathComponent("\(UUID().uuidString).mp4")
@@ -172,6 +175,10 @@ final class RecordingCoordinator {
                     guard let self, self.generation == token else { return }; self.toggleCamera(enabled)
                 }, format: self.requestedFormat)
                 self.controls?.show()
+                // Menu-bar Stop or an unplugged display keeps the footage and goes through the same save flow.
+                self.session.onInterrupted = { [weak self] in
+                    guard let self, self.generation == token else { return }; self.stop()
+                }
                 if let cameraSession = self.session.cameraSession { self.camera.show(session: cameraSession) }
                 if let plan = self.automation { self.completeStartup(.success(plan.destination)) }
             } catch { await self.fail(error, token: token) }
@@ -199,16 +206,16 @@ final class RecordingCoordinator {
                 try check(token, allowTermination: true)
                 controls?.close(); controls = nil; camera.close()
                 if let plan = automation {
-                    try await saveAutomation(video: video, plan: plan, token: token, showsSavePanel: !terminating)
+                    try await saveAutomation(video: video, plan: plan, token: token)
                     automation = nil; isBusy = false
                     return
                 }
                 guard !terminating else { isBusy = false; return }
-                CompletionNotifications.post(title: "录制完成", message: "视频已保存在应用资料中，可另存 MP4 或导出 GIF。", file: video)
+                CompletionNotifications.post(title: "录制完成", message: "请选择保存位置；没有保存的录屏 7 天后会自动清理。", file: video)
                 if requestedFormat == "gif" { showGIF(video: video); return }
                 let panel = NSSavePanel(); panel.allowedContentTypes = [.mpeg4Movie, .gif]
                 panel.nameFieldStringValue = outputName(extension: "mp4")
-                panel.title = "保存录屏 · MP4 或 GIF"
+                panel.title = "保存录屏"
                 let types = NSPopUpButton(frame: CGRect(x: 0, y: 0, width: 180, height: 28)); types.addItems(withTitles: ["MP4 视频", "GIF 动图"])
                 let formatTarget = RecordingFormatTarget(panel: panel, popup: types)
                 types.target = formatTarget; types.action = #selector(RecordingFormatTarget.changed)
@@ -220,7 +227,7 @@ final class RecordingCoordinator {
                 try check(token, allowTermination: true)
                 guard response == .OK, !terminating, let destination = panel.url else { isBusy = false; return }
                 if types.indexOfSelectedItem == 1 || destination.pathExtension.lowercased() == "gif" { showGIF(video: video, destination: destination); return }
-                try await copyVideo(video, to: destination)
+                try await RecordingAutomationFiles.move(video, to: destination)
                 try check(token, allowTermination: true)
                 isBusy = false
                 guard !terminating else { return }
@@ -229,7 +236,7 @@ final class RecordingCoordinator {
         }
     }
 
-    private func saveAutomation(video: URL, plan: RecordingAutomationPlan, token: UUID, showsSavePanel: Bool) async throws {
+    private func saveAutomation(video: URL, plan: RecordingAutomationPlan, token: UUID) async throws {
         let settings = AppSettings.shared
         var recognizedText: String?
         if plan.autoOCR {
@@ -251,24 +258,12 @@ final class RecordingCoordinator {
                     guard let self, self.generation == token, !self.terminating else { return }; self.gifProgress.fraction = fraction
                 }
             }
-        } else { try await copyVideo(video, to: plan.destination) }
+            RecordingAutomationFiles.discardOwned(video)
+        } else { try await RecordingAutomationFiles.move(video, to: plan.destination) }
         try check(token, allowTermination: true)
         if let recognizedText { onOCR(recognizedText) }
         guard !terminating else { return }
         CompletionNotifications.post(title: "\(plan.format.uppercased()) 已保存", message: plan.destination.lastPathComponent, file: plan.destination)
-        guard showsSavePanel, plan.output == nil else { return }
-        let panel = NSSavePanel(); panel.allowedContentTypes = plan.format == "gif" ? [.gif] : [.mpeg4Movie]
-        panel.nameFieldStringValue = outputName(extension: plan.format); panel.title = "另存录屏 · \(plan.format.uppercased())"
-        if let error = lastAutomationError { panel.message = error }
-        activeSavePanel = panel
-        defer { activeSavePanel = nil }
-        NSApp.activate(ignoringOtherApps: true)
-        let response = panel.runModal()
-        try check(token, allowTermination: true)
-        guard response == .OK, !terminating, let destination = panel.url else { return }
-        try await copyVideo(plan.destination, to: destination)
-        try check(token, allowTermination: true)
-        if !terminating { CompletionNotifications.post(title: "录屏已另存", message: destination.lastPathComponent, file: destination) }
     }
 
     private func showGIF(video: URL, destination: URL? = nil) {
@@ -314,16 +309,13 @@ final class RecordingCoordinator {
                         guard let self, self.generation == token, !self.terminating else { return }; self.gifProgress.fraction = fraction
                     }
                 }
+                RecordingAutomationFiles.discardOwned(video)
                 try check(token)
                 gifProgress.running = false; gifWindow?.close()
                 guard !terminating else { return }
                 CompletionNotifications.post(title: "GIF 已保存", message: destination.lastPathComponent, file: destination)
             } catch is CancellationError {} catch { if generation == token, !terminating { ErrorPresenter.show(error) } }
         }
-    }
-
-    private func copyVideo(_ source: URL, to destination: URL) async throws {
-        try await RecordingAutomationFiles.copy(source, to: destination)
     }
 
     private func outputName(extension suffix: String) -> String {
@@ -402,7 +394,7 @@ final class RecordingCoordinator {
         else if session.state == .recording || session.state == .paused {
             do {
                 let video = try await session.stop()
-                if let plan = automation { try await saveAutomation(video: video, plan: plan, token: generation, showsSavePanel: false) }
+                if let plan = automation { try await saveAutomation(video: video, plan: plan, token: generation) }
             } catch { lastAutomationError = error.localizedDescription; await session.cancel() }
         } else { await session.cancel() }
         completeStartup(.failure(CancellationError()))
@@ -419,15 +411,15 @@ struct RecordingAutomationPlan: Sendable {
     let video: URL
     let destination: URL
 
-    init(delay: Int, output: URL?, format: String, autoOCR: Bool) throws {
+    init(delay: Int, output: URL?, fallback: URL, format: String, autoOCR: Bool) throws {
         let format = format.lowercased()
         guard (0...10).contains(delay), ["mp4", "gif"].contains(format) else { throw AppError.file("录屏延时必须为 0–10 秒，格式必须为 MP4 或 GIF。") }
         guard output == nil || output?.isFileURL == true else { throw AppError.file("录屏输出必须是本机文件路径。") }
         self.delay = delay; self.output = output?.standardizedFileURL; self.format = format; self.autoOCR = autoOCR
         let id = UUID().uuidString
-        let folder = AppPaths.root.appendingPathComponent("Recordings", isDirectory: true)
+        let folder = RecordingAutomationFiles.folder
         video = folder.appendingPathComponent("\(id).mp4")
-        destination = self.output ?? folder.appendingPathComponent("\(id).\(format)")
+        destination = self.output ?? fallback
     }
 }
 
@@ -471,6 +463,54 @@ actor RecordingAutomationMedia {
 
 /// Copies completed media in bounded cancellable blocks before an atomic destination replacement.
 enum RecordingAutomationFiles {
+    /// App-owned scratch for finished recordings; user destinations are never under it.
+    static var folder: URL { AppPaths.root.appendingPathComponent("Recordings", isDirectory: true) }
+
+    /// Renames an app-owned recording into place: instant on one volume, and no orphan left in Recordings.
+    static func move(_ source: URL, to destination: URL) async throws {
+        try Task.checkCancellation()
+        guard source.isFileURL, destination.isFileURL else { throw AppError.file("录屏输出必须是本机文件路径。") }
+        guard source.standardizedFileURL != destination.standardizedFileURL else { return }
+        let worker = Task.detached(priority: .userInitiated) { () throws -> Bool in
+            var directory = ObjCBool(false)
+            if FileManager.default.fileExists(atPath: destination.path, isDirectory: &directory), directory.boolValue {
+                throw AppError.file("输出路径已经是一个目录，请选择文件路径。")
+            }
+            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            do {
+                if FileManager.default.fileExists(atPath: destination.path) { _ = try FileManager.default.replaceItemAt(destination, withItemAt: source) }
+                else { try FileManager.default.moveItem(at: source, to: destination) }
+                return true
+            } catch {
+                guard FileManager.default.fileExists(atPath: source.path) else { throw error }
+                return false
+            }
+        }
+        let moved = try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
+        guard !moved else { return }
+        // A rename cannot cross volumes: fall back to the staged copy, then drop the source.
+        try await copy(source, to: destination)
+        try? FileManager.default.removeItem(at: source)
+    }
+
+    /// Deletes a recording only when it is app-owned scratch, so a user-chosen MP4 is never touched.
+    static func discardOwned(_ video: URL, in owner: URL = folder) {
+        let owned = owner.standardizedFileURL.resolvingSymlinksInPath().path
+        guard video.isFileURL, video.deletingLastPathComponent().standardizedFileURL.resolvingSymlinksInPath().path == owned else { return }
+        try? FileManager.default.removeItem(at: video)
+    }
+
+    /// Unsaved recordings stay a week so a notification can still open them; then they are scratch.
+    static func sweep(_ folder: URL, olderThan age: TimeInterval = 7 * 86_400, now: Date = .now) {
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .contentModificationDateKey]
+        guard let items = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: Array(keys)) else { return }
+        for item in items {
+            guard let values = try? item.resourceValues(forKeys: keys), values.isRegularFile == true,
+                  let modified = values.contentModificationDate, now.timeIntervalSince(modified) > age else { continue }
+            try? FileManager.default.removeItem(at: item)
+        }
+    }
+
     static func prepare(_ folder: URL) async throws {
         let worker = Task.detached(priority: .userInitiated) {
             try Task.checkCancellation()

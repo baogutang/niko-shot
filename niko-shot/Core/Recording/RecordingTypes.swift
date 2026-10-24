@@ -37,6 +37,13 @@ public struct RecordingOptions: Sendable, Equatable {
         let calculated = pixels * Double(fps) * efficiency * (0.45 + quality * 1.1)
         return Int(min(120_000_000, max(600_000, calculated)))
     }
+
+    /// Even encoded dimensions. Hardware H.264 accepts larger settings, then fails on the first frame above 4096×2304.
+    public func encodedSize(width: Double, height: Double) -> (width: Int, height: Int) {
+        let factor: Double = codec == "h264" ? min(1.0, 4_096.0 / width, 2_304.0 / height) : 1.0
+        let evenWidth: Int = Int((width * factor).rounded(.up)) / 2 * 2, evenHeight: Int = Int((height * factor).rounded(.up)) / 2 * 2
+        return (max(2, evenWidth), max(2, evenHeight))
+    }
 }
 
 /// Represents the lifecycle displayed by the recording setup and floating controls.
@@ -63,7 +70,10 @@ public enum RecordingError: LocalizedError, Sendable {
 
 enum RecordingEvent: Sendable {
     case duration(Double)
+    /// The writer itself failed; nothing playable remains.
     case failure(String)
+    /// A source stopped (menu-bar Stop, unplugged display) while the writer is still healthy.
+    case interrupted(String)
 }
 
 struct RecordingResult: Sendable {

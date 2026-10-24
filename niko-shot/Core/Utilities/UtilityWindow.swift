@@ -9,6 +9,7 @@ final class UtilityWindow: NSWindow {
         let callback = onClose
         onClose = nil
         super.close()
+        contentViewController = nil
         contentView = nil
         callback?()
     }

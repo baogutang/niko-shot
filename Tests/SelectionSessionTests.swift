@@ -118,3 +118,49 @@ private actor SelectionImageGate {
     }
     func release() { completion?.resume(); completion = nil }
 }
+
+/// The 0.5.2 lag came from relayout work on every drag event; these pin the cheap path.
+@MainActor
+final class SelectionDragTests: XCTestCase {
+    private func makeSession() throws -> (SelectionSession, SelectionView, NSWindow) {
+        let context = try ImageUtilities.context(width: 800, height: 600)
+        let image = try XCTUnwrap(context.makeImage())
+        let session = SelectionSession()
+        let screen = ScreenGeometry(id: 7, frame: CGRect(x: -6000, y: -6000, width: 400, height: 300), scale: 2)
+        session.start(frames: [FrozenFrame(screen: screen, image: image)]) { _, _ in }
+        let window = try XCTUnwrap(session.windows.first)
+        return (session, try XCTUnwrap(window.contentView as? SelectionView), window)
+    }
+
+    private func event(_ type: NSEvent.EventType, _ point: CGPoint, in window: NSWindow) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+    }
+
+    func testToolbarStaysHiddenWhileDraggingAndAppearsOnMouseUp() throws {
+        let (session, view, window) = try makeSession()
+        defer { session.finish() }
+        view.mouseDown(with: try event(.leftMouseDown, CGPoint(x: 40, y: 40), in: window))
+        for step in 1...12 {
+            view.mouseDragged(with: try event(.leftMouseDragged, CGPoint(x: 40 + step * 15, y: 40 + step * 10), in: window))
+            XCTAssertTrue(view.isTrackingMouse)
+            XCTAssertFalse(session.isToolbarVisible, "No toolbar layout while the selection is still moving")
+            XCTAssertEqual(session.state, .selected)
+        }
+        view.mouseUp(with: try event(.leftMouseUp, CGPoint(x: 220, y: 160), in: window))
+        XCTAssertFalse(view.isTrackingMouse)
+        XCTAssertTrue(session.isToolbarVisible)
+    }
+
+    func testDimStripsTileTheScreenAroundTheSelection() throws {
+        let (session, view, _) = try makeSession()
+        defer { session.finish() }
+        view.selection = CGRect(x: 50, y: 60, width: 120, height: 80)
+        let selection = view.visibleSelection
+        let strips = view.dimLayers.map(\.frame).filter { !$0.isEmpty }
+        XCTAssertEqual(strips.count, 4)
+        let area = strips.reduce(0) { $0 + $1.width * $1.height } + selection.width * selection.height
+        XCTAssertEqual(area, view.bounds.width * view.bounds.height, accuracy: 0.5)
+        for strip in strips { XCTAssertFalse(strip.intersects(selection.insetBy(dx: 0.5, dy: 0.5))) }
+    }
+}

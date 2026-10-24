@@ -20,7 +20,7 @@ public struct ProviderSetupGuideView: View {
       VStack(alignment: .leading, spacing: 4) {
         Text(guide.title).font(.system(size: 20, weight: .semibold))
           .accessibilityAddTraits(.isHeader)
-        Text("官方资料核验 · \(guide.verifiedDate)").font(.system(size: 12)).foregroundStyle(
+        Text("官方资料核对于 \(guide.verifiedDate)").font(.system(size: 12)).foregroundStyle(
           .secondary
         )
         .accessibilityLabel("申请与接入指南，官方资料核验日期 \(guide.verifiedDate)")

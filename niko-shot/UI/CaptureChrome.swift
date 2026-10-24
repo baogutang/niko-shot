@@ -8,8 +8,8 @@ enum CaptureChrome {
     static let cornerRadius: CGFloat = 12
     static let buttonSize: CGFloat = 30
     static let buttonRadius: CGFloat = 7
-    /// Brand accent (朱砂 in light, 藤黄 in dark); the HUD stays dark over frozen content.
-    static var accent: NSColor { NikoAccent.nsColor }
+    /// Icon amber; the HUD is always dark glass, so the accent does not follow the system appearance.
+    static var accent: NSColor { NikoAccent.bright }
     static var accentColor: Color { Color(nsColor: accent) }
     static let surfaceTint = NSColor(calibratedWhite: 0.08, alpha: 1)
     static let border = NSColor.white.withAlphaComponent(0.13)
